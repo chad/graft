@@ -135,7 +135,11 @@ func (c Converger) Converge(ctx context.Context, cand Candidate) (Decision, erro
 	if err := copyTree(c.Root, scratch, skip); err != nil {
 		return d, err
 	}
-	if err := os.WriteFile(filepath.Join(scratch, filepath.FromSlash(cand.Path)), next, 0o644); err != nil {
+	st := filepath.Join(scratch, filepath.FromSlash(cand.Path))
+	if err := os.MkdirAll(filepath.Dir(st), 0o755); err != nil {
+		return d, err
+	}
+	if err := os.WriteFile(st, next, 0o644); err != nil {
 		return d, err
 	}
 
@@ -165,7 +169,7 @@ func (c Converger) Converge(ctx context.Context, cand Candidate) (Decision, erro
 	if !d.Result.Satisfied {
 		return d, nil
 	}
-	if err := c.apply(target, before, next, digest, skip); err != nil {
+	if err := c.apply(cand.Path, target, before, next, digest, skip); err != nil {
 		return d, err
 	}
 	d.Applied = true
@@ -233,29 +237,36 @@ func checkRendered(cand Candidate, next []byte, regionHash string) error {
 	return nil
 }
 
-// apply writes next to target if, under an exclusive lock on the target,
-// the target still holds before and the tree still has the digest the gates
-// ran against. The write is temp + fsync + rename, keeping the file mode.
-func (c Converger) apply(target string, before, next []byte, digest string, skip map[string]bool) error {
-	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-		return err
-	}
-	mode := fs.FileMode(0o644)
-	if fi, err := os.Lstat(target); err == nil {
-		if !fi.Mode().IsRegular() {
-			return fmt.Errorf("%w: target became %s", ErrBadPath, fi.Mode().Type())
-		}
-		mode = fi.Mode().Perm()
-	}
-	f, err := os.OpenFile(target, os.O_RDWR|os.O_CREATE, mode)
+// lockName is the per-tree lock file that serialises graft's own convergence
+// runs on a tree. It does not serialise editors: the real guard against a
+// concurrent edit is the content re-check (whole-tree digest, then the
+// target's bytes) made immediately before the rename.
+const lockName = ".graft-converge.lock"
+
+// apply writes next to target only if the tree still has the digest the gates
+// ran against and, read after that, the target still holds before. The write
+// is a fresh temp file in the target's directory (os.CreateTemp: never a
+// planted name), fsync, chmod, rename, then a directory fsync.
+func (c Converger) apply(rel, target string, before, next []byte, digest string, skip map[string]bool) error {
+	lf, err := os.OpenFile(filepath.Join(c.Root, lockName), os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	if err := lockFile(f); err != nil {
+	defer lf.Close()
+	if err := lockFile(lf); err != nil {
 		return err
 	}
-	defer unlockFile(f)
+	defer unlockFile(lf)
+
+	if _, err := c.target(rel); err != nil { // re-check: no symlink appeared in the path
+		return err
+	}
+	if d, err := treeDigest(c.Root, skip); err != nil {
+		return err
+	} else if d != digest {
+		return ErrChanged
+	}
+	mode := fs.FileMode(0o644)
 	now, err := readOptional(target)
 	if err != nil {
 		return err
@@ -263,25 +274,27 @@ func (c Converger) apply(target string, before, next []byte, digest string, skip
 	if string(now) != string(before) {
 		return ErrChanged
 	}
-	if d, err := treeDigest(c.Root, skip); err != nil {
-		return err
-	} else if d != digest {
-		return ErrChanged
+	if fi, err := os.Lstat(target); err == nil {
+		mode = fi.Mode().Perm()
 	}
-	tmp := target + ".graft-tmp"
-	t, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
+	dir := filepath.Dir(target)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	t, err := os.CreateTemp(dir, ".graft-*.tmp")
 	if err != nil {
 		return err
 	}
+	tmp := t.Name()
+	fail := func(err error) error { t.Close(); os.Remove(tmp); return err }
 	if _, err := t.Write(next); err != nil {
-		t.Close()
-		os.Remove(tmp)
-		return err
+		return fail(err)
+	}
+	if err := t.Chmod(mode); err != nil {
+		return fail(err)
 	}
 	if err := t.Sync(); err != nil {
-		t.Close()
-		os.Remove(tmp)
-		return err
+		return fail(err)
 	}
 	if err := t.Close(); err != nil {
 		os.Remove(tmp)
@@ -291,18 +304,19 @@ func (c Converger) apply(target string, before, next []byte, digest string, skip
 		os.Remove(tmp)
 		return err
 	}
-	dir, err := os.Open(filepath.Dir(target))
+	d, err := os.Open(dir)
 	if err != nil {
 		return err
 	}
-	defer dir.Close()
-	return dir.Sync()
+	defer d.Close()
+	return d.Sync()
 }
 
 // skip lists root-relative paths excluded from the digest and the scratch
-// copy: the evidence log and its head, when they live inside the tree.
+// copy: graft's lock file, and the evidence log and its head when they live
+// inside the tree.
 func (c Converger) skip() map[string]bool {
-	s := map[string]bool{}
+	s := map[string]bool{lockName: true}
 	if c.Log == nil {
 		return s
 	}
@@ -357,6 +371,12 @@ func refuseHandEdits(cand Candidate, data []byte) error {
 
 // treeDigest hashes every regular file's path and bytes and every symlink's
 // path and target under root (skipping .git and skip), in walk order.
+//
+// Cost: it reads the whole tree, twice per Converge (before the copy and
+// before the write). On trees with large generated directories (node_modules,
+// build output) that is slow, and files that churn on their own (caches,
+// logs) cause spurious ErrChanged. Narrowing the digest to declared inputs is
+// a follow-up.
 func treeDigest(root string, skip map[string]bool) (string, error) {
 	h := sha256.New()
 	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
@@ -371,7 +391,7 @@ func treeDigest(root string, skip map[string]bool) (string, error) {
 			}
 			return nil
 		}
-		if skip[rel] || strings.HasSuffix(rel, ".graft-tmp") {
+		if skip[rel] {
 			return nil
 		}
 		switch {

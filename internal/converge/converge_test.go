@@ -420,7 +420,7 @@ func TestTimeoutKillsChildren(t *testing.T) {
 	if err != nil || v != evidence.Inconclusive {
 		t.Fatalf("%s %v", v, err)
 	}
-	if el := time.Since(start); el > 3*time.Second {
+	if el := time.Since(start); el > 1500*time.Millisecond {
 		t.Fatalf("took %s: children outlived the timeout", el)
 	}
 }
@@ -453,4 +453,100 @@ func TestReadRegionsOnGraftItself(t *testing.T) {
 	if _, err := ReadRegions("../.."); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// Review on #6 round 2: a region in a new file, and in a new directory, applies.
+func TestNewFileAndNewDirectoryApply(t *testing.T) {
+	for _, p := range []string{"b.go", "pkg/deep/c.go"} {
+		t.Run(p, func(t *testing.T) {
+			c, root := setup(t, verdictGate{evidence.TestRun, evidence.Pass})
+			k := cand("func F() {}")
+			k.Path = p
+			d, err := c.Converge(context.Background(), k)
+			if err != nil || !d.Applied {
+				t.Fatalf("%+v %v", d, err)
+			}
+			b, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(p)))
+			if err != nil || !strings.Contains(string(b), "func F() {}") {
+				t.Fatalf("%q %v", b, err)
+			}
+		})
+	}
+}
+
+// A rejected candidate for a new file leaves nothing behind.
+func TestRejectedNewFileLeavesNothing(t *testing.T) {
+	c, root := setup(t, verdictGate{evidence.TestRun, evidence.Fail})
+	k := cand("func F() {}")
+	k.Path = "pkg/new.go"
+	if d, err := c.Converge(context.Background(), k); err != nil || d.Applied {
+		t.Fatalf("%+v %v", d, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "pkg")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("left a directory behind")
+	}
+}
+
+// Review on #6 round 2: a planted symlink at a predictable temp name is never followed.
+func TestPlantedTempSymlinkIsNotFollowed(t *testing.T) {
+	c, root := setup(t, verdictGate{evidence.TestRun, evidence.Pass})
+	outside := filepath.Join(t.TempDir(), "victim")
+	os.WriteFile(outside, []byte("keep"), 0o644)
+	for _, name := range []string{"app.go.graft-tmp", ".graft-0.tmp", "app.go.tmp"} {
+		os.Symlink(outside, filepath.Join(root, name))
+	}
+	if d, err := c.Converge(context.Background(), cand("func F() {}")); err != nil || !d.Applied {
+		t.Fatalf("%+v %v", d, err)
+	}
+	if b, _ := os.ReadFile(outside); string(b) != "keep" {
+		t.Fatalf("wrote through a planted symlink: %q", b)
+	}
+	entries, _ := os.ReadDir(root)
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".graft-") && strings.HasSuffix(e.Name(), ".tmp") && e.Type().IsRegular() {
+			t.Fatalf("temp file left behind: %s", e.Name())
+		}
+	}
+}
+
+func TestCheckRenderedRejectsMismatch(t *testing.T) {
+	k := cand("func F() {}")
+	next, err := render(k.Path, []byte("package app\n"), "//", Owner{Record: k.RecordID, Tier: "low"}, k.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := checkRendered(k, next, HashBody("func F() {}\n")); err != nil {
+		t.Fatalf("good render rejected: %v", err)
+	}
+	if err := checkRendered(k, next, HashBody("something else\n")); err == nil {
+		t.Fatal("a render that does not hash to its pin was accepted")
+	}
+	k2 := k
+	k2.RecordID = "prov-missing"
+	if err := checkRendered(k2, next, HashBody("func F() {}\n")); err == nil {
+		t.Fatal("a render with no region for the record was accepted")
+	}
+}
+
+// A symlink planted in the target's parent while gates run is refused at apply.
+func TestSymlinkAppearingDuringGatesIsRefused(t *testing.T) {
+	c, root := setup(t)
+	os.MkdirAll(filepath.Join(root, "pkg"), 0o755)
+	c.Gates = []Gate{swapDirGate{root, t.TempDir()}}
+	k := cand("func F() {}")
+	k.Path = "pkg/x.go"
+	_, err := c.Converge(context.Background(), k)
+	if !errors.Is(err, ErrBadPath) && !errors.Is(err, ErrChanged) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+type swapDirGate struct{ root, outside string }
+
+func (g swapDirGate) Name() string        { return "swap" }
+func (g swapDirGate) Kind() evidence.Kind { return evidence.TestRun }
+func (g swapDirGate) Run(context.Context, string) (evidence.Verdict, string, error) {
+	os.RemoveAll(filepath.Join(g.root, "pkg"))
+	os.Symlink(g.outside, filepath.Join(g.root, "pkg"))
+	return evidence.Pass, "", nil
 }
