@@ -7,30 +7,41 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 )
 
 var (
-	// ErrBrokenChain: the log or its head was altered (edited, reordered,
-	// truncated) or is unreadable.
+	// ErrBrokenChain: the log or its head is damaged (an edited, reordered or
+	// missing committed entry, or a head that does not match). See SPEC §7 for
+	// what this does and does not detect.
 	ErrBrokenChain = errors.New("evidence: hash chain broken")
 	// ErrTimeBackwards: an entry's At is earlier than the previous entry's.
 	ErrTimeBackwards = errors.New("evidence: At is earlier than the previous entry")
 )
 
-// head is the sidecar that pins the log's tail, so deleting the newest
-// entries is detected. It lives next to the log as <path>.head; commit it (or
-// anchor it elsewhere) to protect it in turn.
+// head is the sidecar <path>.head pinning the committed prefix of the log.
+// It is a LOWER BOUND: a writer fsyncs the entry, then advances the head, so
+// a crash in between leaves extra entries that chain from head.Last. Those
+// are accepted and the next writer rolls the head forward.
 type head struct {
 	V     int    `json:"v"`
 	Count int    `json:"count"`
 	Last  string `json:"last"`
 }
 
-// Log is an append-only JSONL evidence log. Appends are serialized across
-// processes with an exclusive file lock, and every Append re-reads the log
-// from disk under that lock, so memory never drifts from disk.
+// snapshot is a consistent read of log and head, taken under a lock.
+type snapshot struct {
+	entries  []Evidence
+	head     head
+	hasHead  bool
+	partial  int64 // byte offset of a trailing partial line; -1 if none
+	fileSize int64
+}
+
+// Log is an append-only JSONL evidence log. Writers hold an exclusive flock
+// on the log file; readers hold a shared one and read log and head together.
 type Log struct {
 	mu      sync.Mutex
 	path    string
@@ -38,13 +49,9 @@ type Log struct {
 	now     func() time.Time
 }
 
-// Open loads the log at path and verifies it. A broken chain or a head that
-// does not match is ErrBrokenChain. A missing log is an empty log.
+// Open loads and verifies the log at path. A missing log is an empty log.
 func Open(path string) (*Log, error) {
-	l, err := OpenUnverified(path)
-	if err != nil {
-		return nil, err
-	}
+	l := &Log{path: path, now: time.Now}
 	if err := l.Verify(); err != nil {
 		return nil, err
 	}
@@ -55,26 +62,58 @@ func Open(path string) (*Log, error) {
 // Nothing should evaluate policy on a log opened this way.
 func OpenUnverified(path string) (*Log, error) {
 	l := &Log{path: path, now: time.Now}
-	es, err := readEntries(path)
+	s, err := l.read(lockShared)
 	if err != nil {
 		return nil, err
 	}
-	l.entries = es
+	l.entries = s.entries
 	return l, nil
 }
 
-func readEntries(path string) ([]Evidence, error) {
-	b, err := os.ReadFile(path)
+// Verify re-reads log and head under a shared lock and checks them: every ID,
+// every Prev link, time order, and that the head is a committed prefix.
+func (l *Log) Verify() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	s, err := l.read(lockShared)
+	if err != nil {
+		return err
+	}
+	if err := check(s); err != nil {
+		return err
+	}
+	l.entries = s.entries
+	return nil
+}
+
+// read takes the given lock on the log file and reads log and head together.
+func (l *Log) read(how lockKind) (snapshot, error) {
+	f, err := os.Open(l.path)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
+		h, ok, herr := readHead(l.path)
+		return snapshot{head: h, hasHead: ok, partial: -1}, herr
 	}
 	if err != nil {
-		return nil, err
+		return snapshot{}, err
 	}
-	if len(b) > 0 && b[len(b)-1] != '\n' {
-		return nil, fmt.Errorf("%w: %s ends in a partial line", ErrBrokenChain, path)
+	defer f.Close()
+	if err := lockFile(f, how); err != nil {
+		return snapshot{}, err
 	}
-	var es []Evidence
+	defer unlockFile(f)
+	return readLocked(l.path, f)
+}
+
+func readLocked(path string, f *os.File) (snapshot, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return snapshot{}, err
+	}
+	s := snapshot{partial: -1, fileSize: int64(len(b))}
+	if i := bytes.LastIndexByte(b, '\n'); len(b) > 0 && i != len(b)-1 {
+		s.partial = int64(i + 1) // an unfinished final write
+		b = b[:i+1]
+	}
 	sc := bufio.NewScanner(bytes.NewReader(b))
 	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 	for n := 1; sc.Scan(); n++ {
@@ -83,11 +122,15 @@ func readEntries(path string) ([]Evidence, error) {
 		}
 		var e Evidence
 		if err := json.Unmarshal(sc.Bytes(), &e); err != nil {
-			return nil, fmt.Errorf("%w: %s line %d: %v", ErrBrokenChain, path, n, err)
+			return snapshot{}, fmt.Errorf("%w: %s line %d: %v", ErrBrokenChain, path, n, err)
 		}
-		es = append(es, e)
+		s.entries = append(s.entries, e)
 	}
-	return es, sc.Err()
+	if err := sc.Err(); err != nil {
+		return snapshot{}, err
+	}
+	s.head, s.hasHead, err = readHead(path)
+	return s, err
 }
 
 func readHead(path string) (head, bool, error) {
@@ -105,7 +148,45 @@ func readHead(path string) (head, bool, error) {
 	return h, true, nil
 }
 
-// writeHead replaces the head atomically and durably.
+// check verifies a snapshot. Entries past the head are accepted when they
+// chain correctly (a crash after the entry's fsync, before the head moved).
+// A trailing partial line is ignored by readers; the next writer truncates it.
+func check(s snapshot) error {
+	prev := ""
+	var prevAt time.Time
+	for i, e := range s.entries {
+		if e.V != FormatVersion {
+			return fmt.Errorf("%w: entry %d has format v%d, want v%d", ErrBrokenChain, i, e.V, FormatVersion)
+		}
+		if e.Prev != prev {
+			return fmt.Errorf("%w: entry %d prev %q, want %q", ErrBrokenChain, i, e.Prev, prev)
+		}
+		id, err := computeID(e)
+		if err != nil {
+			return err
+		}
+		if id != e.ID {
+			return fmt.Errorf("%w: entry %d content does not match its id", ErrBrokenChain, i)
+		}
+		if e.At.Before(prevAt) {
+			return fmt.Errorf("%w: entry %d: %v", ErrBrokenChain, i, ErrTimeBackwards)
+		}
+		prev, prevAt = e.ID, e.At
+	}
+	switch {
+	case !s.hasHead && len(s.entries) > 0:
+		return fmt.Errorf("%w: log has %d entries but no head", ErrBrokenChain, len(s.entries))
+	case s.hasHead && s.head.Count > len(s.entries):
+		return fmt.Errorf("%w: head commits %d entries, log has %d (truncated)", ErrBrokenChain, s.head.Count, len(s.entries))
+	case s.hasHead && s.head.Count > 0 && s.entries[s.head.Count-1].ID != s.head.Last:
+		return fmt.Errorf("%w: entry %d is not the committed head %.12s", ErrBrokenChain, s.head.Count-1, s.head.Last)
+	case s.hasHead && s.head.Count == 0 && s.head.Last != "":
+		return fmt.Errorf("%w: empty head names an entry", ErrBrokenChain)
+	}
+	return nil
+}
+
+// writeHead replaces the head atomically and durably (file, then directory).
 func writeHead(path string, h head) error {
 	b, _ := json.Marshal(h)
 	tmp := path + ".head.tmp"
@@ -124,36 +205,57 @@ func writeHead(path string, h head) error {
 	if err := f.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path+".head")
+	if err := os.Rename(tmp, path+".head"); err != nil {
+		return err
+	}
+	return syncDir(filepath.Dir(path))
 }
 
-// Append chains e onto the log and returns the stored entry. It locks the
-// file, re-reads and verifies the log from disk, rejects an At earlier than
-// the previous entry's, writes and fsyncs the entry, then advances the head.
+func syncDir(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	return d.Sync()
+}
+
+// Append chains e onto the log and returns the stored entry. Under an
+// exclusive lock it re-reads and verifies log and head, truncates a trailing
+// partial line, rolls the head forward over any committed-but-unheaded
+// entries, then writes, fsyncs, and advances the head.
 func (l *Log) Append(e Evidence) (Evidence, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if e.Kind == "" || e.Verdict == "" || e.Pin.RecordID == "" {
 		return Evidence{}, errors.New("evidence: kind, verdict and pin.record_id are required")
 	}
-	f, err := os.OpenFile(l.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(l.path, os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
 		return Evidence{}, err
 	}
 	defer f.Close()
-	if err := lockFile(f); err != nil {
+	if err := lockFile(f, lockExclusive); err != nil {
 		return Evidence{}, err
 	}
 	defer unlockFile(f)
 
-	current, err := readEntries(l.path)
+	s, err := readLocked(l.path, f)
 	if err != nil {
 		return Evidence{}, err
 	}
-	if err := verify(l.path, current); err != nil {
+	if !s.hasHead && len(s.entries) == 0 {
+		s.hasHead = true // a fresh log
+	}
+	if err := check(s); err != nil {
 		return Evidence{}, err
 	}
-	l.entries = current
+	if s.partial >= 0 {
+		if err := f.Truncate(s.partial); err != nil {
+			return Evidence{}, err
+		}
+	}
+	current := s.entries
 
 	if e.At.IsZero() {
 		e.At = l.now()
@@ -175,6 +277,9 @@ func (l *Log) Append(e Evidence) (Evidence, error) {
 	if err != nil {
 		return Evidence{}, err
 	}
+	if _, err := f.Seek(0, 2); err != nil {
+		return Evidence{}, err
+	}
 	if _, err := f.Write(append(b, '\n')); err != nil {
 		return Evidence{}, err
 	}
@@ -188,58 +293,14 @@ func (l *Log) Append(e Evidence) (Evidence, error) {
 	return e, nil
 }
 
-// All returns a copy of every loaded entry, oldest first.
+// All returns a copy of the entries as of the last Verify or Append.
 func (l *Log) All() []Evidence {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return append([]Evidence(nil), l.entries...)
 }
 
-// Verify recomputes every ID, checks every Prev link and the time order, and
-// checks the head: an edited, reordered or truncated log is ErrBrokenChain.
-func (l *Log) Verify() error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return verify(l.path, l.entries)
-}
-
-func verify(path string, es []Evidence) error {
-	prev := ""
-	var prevAt time.Time
-	for i, e := range es {
-		if e.V != FormatVersion {
-			return fmt.Errorf("%w: entry %d has format v%d, want v%d", ErrBrokenChain, i, e.V, FormatVersion)
-		}
-		if e.Prev != prev {
-			return fmt.Errorf("%w: entry %d prev %q, want %q", ErrBrokenChain, i, e.Prev, prev)
-		}
-		id, err := computeID(e)
-		if err != nil {
-			return err
-		}
-		if id != e.ID {
-			return fmt.Errorf("%w: entry %d content does not match its id", ErrBrokenChain, i)
-		}
-		if e.At.Before(prevAt) {
-			return fmt.Errorf("%w: entry %d: %v", ErrBrokenChain, i, ErrTimeBackwards)
-		}
-		prev, prevAt = e.ID, e.At
-	}
-	h, ok, err := readHead(path)
-	if err != nil {
-		return err
-	}
-	switch {
-	case !ok && len(es) > 0:
-		return fmt.Errorf("%w: log has %d entries but no head", ErrBrokenChain, len(es))
-	case ok && (h.Count != len(es) || h.Last != prev):
-		return fmt.Errorf("%w: head says %d entries ending %.12s, log has %d ending %.12s",
-			ErrBrokenChain, h.Count, h.Last, len(es), prev)
-	}
-	return nil
-}
-
-// Fresh returns the entries that still speak for cur, oldest first.
+// Fresh returns the loaded entries that still speak for cur, oldest first.
 func (l *Log) Fresh(cur Pin) []Evidence {
 	var out []Evidence
 	for _, e := range l.All() {

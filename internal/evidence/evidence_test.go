@@ -129,6 +129,7 @@ func TestOpenRejectsTampering(t *testing.T) {
 		"tail deleted": func(ls []string) []string { return ls[:len(ls)-1] },
 		"reordered":    func(ls []string) []string { ls[0], ls[1] = ls[1], ls[0]; return ls },
 		"emptied":      func([]string) []string { return nil },
+		"middle cut":   func(ls []string) []string { return append(ls[:1], ls[2:]...) },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -147,14 +148,46 @@ func TestOpenRejectsTampering(t *testing.T) {
 	}
 }
 
-func TestPartialLastLineIsBroken(t *testing.T) {
+// A crash mid-write leaves a partial last line: readers ignore it, the next
+// writer truncates it. It never bricks the log.
+func TestPartialLastLineIsRecovered(t *testing.T) {
 	l, p := newLog(t)
 	mustAppend(t, l, Evidence{Kind: TestRun, Verdict: Pass, Pin: base})
 	f, _ := os.OpenFile(p, os.O_APPEND|os.O_WRONLY, 0)
 	f.WriteString(`{"v":1,"id":"trunc`)
 	f.Close()
-	if _, err := Open(p); !errors.Is(err, ErrBrokenChain) {
-		t.Fatalf("Open = %v", err)
+	l2, err := Open(p)
+	if err != nil {
+		t.Fatalf("Open with a partial tail: %v", err)
+	}
+	if n := len(l2.All()); n != 1 {
+		t.Fatalf("%d entries", n)
+	}
+	mustAppend(t, l2, Evidence{Kind: TestRun, Verdict: Pass, Pin: base})
+	if l3, err := Open(p); err != nil || len(l3.All()) != 2 {
+		t.Fatalf("after repair: %v", err)
+	}
+}
+
+// A crash after the entry's fsync but before the head moved leaves the head
+// one behind. The head is a lower bound: Open accepts it, Append rolls it forward.
+func TestCrashBeforeHeadAdvanceIsRecovered(t *testing.T) {
+	l, p := newLog(t)
+	a := mustAppend(t, l, Evidence{Kind: TestRun, Verdict: Pass, Pin: base})
+	mustAppend(t, l, Evidence{Kind: TestRun, Verdict: Fail, Pin: base})
+	if err := writeHead(p, head{V: FormatVersion, Count: 1, Last: a.ID}); err != nil {
+		t.Fatal(err)
+	}
+	l2, err := Open(p)
+	if err != nil {
+		t.Fatalf("Open with a lagging head: %v", err)
+	}
+	if n := len(l2.All()); n != 2 {
+		t.Fatalf("uncommitted-but-chained entry dropped: %d", n)
+	}
+	mustAppend(t, l2, Evidence{Kind: TestRun, Verdict: Pass, Pin: base})
+	if h, _, _ := readHead(p); h.Count != 3 {
+		t.Fatalf("head not rolled forward: %+v", h)
 	}
 }
 
@@ -209,6 +242,47 @@ func TestTwoWritersOnOneFileKeepOneChain(t *testing.T) {
 	}
 	if n := len(l.All()); n != 50 {
 		t.Fatalf("%d entries, want 50", n)
+	}
+}
+
+// Readers take a shared lock and read log and head together: no false
+// ErrBrokenChain while a writer is mid-append.
+func TestReadersRacingAWriterNeverSeeABrokenChain(t *testing.T) {
+	w, p := newLog(t)
+	mustAppend(t, w, Evidence{Kind: TestRun, Verdict: Pass, Pin: base})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 100; i++ {
+			if _, err := w.Append(Evidence{Kind: TestRun, Verdict: Pass, Pin: base}); err != nil {
+				t.Error(err)
+				return
+			}
+		}
+	}()
+	for i := 0; i < 300; i++ {
+		if _, err := Open(p); err != nil {
+			t.Fatalf("Open %d raced a writer: %v", i, err)
+		}
+	}
+	<-done
+}
+
+// A handle opened before another writer appended evaluates the current log.
+func TestEvaluateSeesOtherWritersAppends(t *testing.T) {
+	a, p := newLog(t)
+	mustAppend(t, a, Evidence{Kind: TestRun, Verdict: Pass, Pin: base})
+	b, err := Open(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustAppend(t, a, Evidence{Kind: TestRun, Verdict: Fail, Pin: base})
+	r, err := (Policy{"low": {TestRun}}).Evaluate(b, "low", base)
+	if err != nil {
+		t.Fatalf("stale handle: %v", err)
+	}
+	if r.Satisfied {
+		t.Fatal("evaluated a stale copy: the later fail was not seen")
 	}
 }
 

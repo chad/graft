@@ -76,12 +76,24 @@ happens only in a convergence-layer region, owned and marked like any other.**
   The record version is recorded but not compared: a version bump that changes
   none of them (a status flip, a reworded reason) is no reason to re-verify.
   This matches §3, where `records.Stale` compares `gen_hash` only.
+- `spec_hash` is computed by the records layer over the specs associated with
+  the owning record (M1); evidence treats it as opaque. Evidence that ran no
+  specs leaves it empty.
 - The log is append-only and hash-chained, with a sidecar head pinning its
-  count and last id: an edited, reordered or truncated log is refused, and
-  policy is never evaluated on an unverified log.
+  committed prefix. The head is a lower bound: entries written after it that
+  chain correctly (a crash before the head moved) are accepted and the head is
+  rolled forward; a trailing partial line is ignored and truncated by the next
+  writer. Writers hold an exclusive file lock, readers a shared one. Policy is
+  never evaluated on an unverified log.
+- **What this detects: accidental damage** — an edited, reordered, or removed
+  committed entry, a head that does not match, a torn write. **What it does
+  not detect: a deliberate rewrite by anyone with write access** — restoring an
+  older log+head pair, deleting both, or editing and rehashing (the hashes are
+  unkeyed). Tamper-evidence requires anchoring the head outside the log
+  (a signed head, or the head committed to the record store); that is an open
+  question (§12), and graft MUST NOT describe the log as tamper-proof until then.
+- The evidence log requires a unix platform (flock).
 - An unknown risk tier is an error, never "requires nothing".
-- Kinds include: test run, eval result, human sign-off, static analysis,
-  conformance run.
 
 ## 8. Drafters: propose, never apply
 
@@ -131,3 +143,5 @@ Two directions, one rule:
 - Does A/B/C/D change classification survive as a *pre-regen blast-radius
   estimate* once `gen_hash` gives exact staleness?
 - One log or two: a journal of operations over provenance's content snapshots?
+- Anchoring the evidence head outside the log (signed by the owner's DID, or
+  committed alongside the records) to make deliberate rollback detectable.

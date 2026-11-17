@@ -29,6 +29,8 @@ func (p Policy) Evaluate(l *Log, tier string, cur Pin) (Result, error) {
 	if !ok {
 		return Result{}, fmt.Errorf("%w: %q", ErrUnknownTier, tier)
 	}
+	// Verify re-reads log and head from disk under a shared lock, so a handle
+	// opened before someone else appended still evaluates the current log.
 	if err := l.Verify(); err != nil {
 		return Result{}, err
 	}
