@@ -261,7 +261,7 @@ func (c Converger) apply(rel, target string, before, next []byte, digest string,
 	if err != nil {
 		return err
 	}
-	lf, err := os.OpenFile(lp, os.O_CREATE|os.O_RDWR, 0o600)
+	lf, err := os.OpenFile(lp, lockOpenFlags, 0o600)
 	if err != nil {
 		return err
 	}

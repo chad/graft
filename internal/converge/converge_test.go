@@ -575,3 +575,20 @@ func TestMkdirAllTrackedReportsOnlyWhatItMade(t *testing.T) {
 		t.Fatalf("%v %v", made, err)
 	}
 }
+
+func TestPlantedLockSymlinkIsRefused(t *testing.T) {
+	c, root := setup(t, verdictGate{evidence.TestRun, evidence.Pass})
+	lp, _ := lockPath(root)
+	victim := filepath.Join(t.TempDir(), "victim")
+	os.WriteFile(victim, []byte("keep"), 0o644)
+	if err := os.Symlink(victim, lp); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(lp)
+	if d, err := c.Converge(context.Background(), cand("func F() {}")); err == nil || d.Applied {
+		t.Fatalf("followed a planted lock symlink: %+v %v", d, err)
+	}
+	if b, _ := os.ReadFile(victim); string(b) != "keep" {
+		t.Fatal("victim modified")
+	}
+}

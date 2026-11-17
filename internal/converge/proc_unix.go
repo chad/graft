@@ -22,3 +22,7 @@ func killGroupOnCancel(cmd *exec.Cmd) {
 
 func lockFile(f *os.File) error   { return syscall.Flock(int(f.Fd()), syscall.LOCK_EX) }
 func unlockFile(f *os.File) error { return syscall.Flock(int(f.Fd()), syscall.LOCK_UN) }
+
+// lockOpenFlags: the lock lives in a shared temp dir, so never follow a
+// symlink planted at its name.
+const lockOpenFlags = os.O_CREATE | os.O_RDWR | syscall.O_NOFOLLOW
