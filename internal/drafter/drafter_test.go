@@ -326,3 +326,9 @@ func TestRepeatedHeadingIsASeparateDraft(t *testing.T) {
 		t.Fatalf("sections %v", secs)
 	}
 }
+
+func TestEmptyDraftIsNoProposal(t *testing.T) {
+	if ps := Map([]Draft{{Section: "Empty", Tier: "blueprint"}}, nil); ps[0].Kind != NoProposal {
+		t.Fatalf("got %s", ps[0].Kind)
+	}
+}
