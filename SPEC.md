@@ -1,0 +1,126 @@
+# graft — specification (v0)
+
+graft regenerates software from versioned intent. It combines three existing
+designs: **Provenance** (versioned intent records), **Sedum** (deterministic
+rendering from a closed action catalog) and **Phoenix** (prose canonicalization,
+selective invalidation, evals and risk-tiered evidence).
+
+Background and evidence: the joint findings doc from #phoenix (Phoenix ×
+Sedum + Provenance). This spec is its §6 made normative. Each section is
+changed by PR, reviewed by the other implementer.
+
+Words in **bold MUST** are requirements; everything else is rationale.
+
+## 1. Principle
+
+Intent is the durable asset; code is derived. **Everything derived pins the
+version of what it came from**, and is stale exactly when that pin differs
+from the current version.
+
+## 2. Layers
+
+| Layer | Owns | Guarantee | Implementation |
+|---|---|---|---|
+| Records | source of truth, stable ids, versions, pins, publishing | guaranteed | **imports** `github.com/livecodelife/provenance/record` |
+| Rendering | closed catalog, deterministic templates, owned regions | guaranteed | **invokes** the `sedum` binary; never links against it |
+| Convergence | open synthesis in declared regions + execution gate | *merely checked* | graft |
+
+- Sedum is invoked, not imported: its packages are `internal/`, and its
+  TOOL_BOUNDARIES says nothing links against it. graft's contract with sedum
+  is its file formats and CLI: recordings, `grow --execute`, `grow --check`,
+  markers, and `conformance/`.
+- **A layer MUST NOT claim a stronger guarantee than it has.** Convergence
+  output is never reported as "guaranteed", and does not live inside sedum.
+
+## 3. Records
+
+- **Identity is a stable id, assigned once at acceptance and stored. It is
+  never recomputed from content.** (Phoenix's content-derived ids churned on
+  rewording; its `canon_anchor` collides.)
+- Each version has a content hash and an immutable snapshot
+  `{version, content, reason, author, created_at, parent_hash}`.
+- **`gen_hash` covers only the fields that drive generation.** A status flip
+  is not a content change. Specs are excluded: they verify output, they do not
+  drive it.
+- Tiers: brief → blueprint → imprint. **Only imprints own code regions.**
+
+## 4. Rendering and regions
+
+- Every region carries an ownership marker (owning record id, record version,
+  `gen_hash`) and a body hash.
+- **A hand edit inside an owned region is detected, and a re-render over it is
+  refused and fails the run.** (Sedum's behaviour; Phoenix's
+  overwrite-then-report is rejected.)
+- `seeded` regions are stubs a human finishes; **graft never rewrites them.**
+- Regions a record no longer selects are pruned.
+
+## 5. Escalation ladder (when no catalog action fits)
+
+`_default` variant → declared `literal` kwarg → targeted re-prompt →
+larger model → hand the record to a human. **Synthesis outside the catalog
+happens only in a convergence-layer region, owned and marked like any other.**
+
+## 6. Convergence
+
+- A synthesis region is declared, owned and marked exactly like a rendered
+  region, but is owned by the convergence layer.
+- **A synthesis region is accepted only when its execution gate passes:**
+  evals derived from the owning record, run against the built artifact.
+- Evals carry a risk tier; the required evidence per tier is policy.
+
+## 7. Evidence
+
+- One evidence format for all layers.
+- **Evidence pins `(record version, gen_hash, region hash)` and is stale when
+  any of the three moves.**
+- Kinds include: test run, eval result, human sign-off, static analysis,
+  conformance run.
+
+## 8. Drafters: propose, never apply
+
+Two directions, one rule:
+- code → records (Provenance's `discover`),
+- intent prose → records (Phoenix's canonicalizer).
+
+- **A draft is shown only with evidence that it validates** (a re-extraction
+  receipt or a PASS from a reviewer); otherwise it says "no confident
+  proposal".
+- **A drafter never mints an id silently.** On re-run it matches against the
+  stored `derived_from` links of accepted records (anchor only as a candidate
+  key) and emits *revisions*; anything it cannot match confidently becomes a
+  "new or split?" question for a human.
+
+## 9. Catalog-gap loop
+
+- The literal fraction per generator package is a first-class metric.
+- A synthesis region that keeps converging to the same shape becomes a
+  **proposed** catalog action (propose-never-apply, pointed at the package).
+
+## 10. Measurement
+
+- One bench, three arms: graft / baseline (same intent, same model, one call)
+  / intent-only. Every rate with a 95% Wilson interval; overlapping intervals
+  are not a verdict; excluded runs stay visible and are counted in nothing.
+- Results split works / disagreed / broke, and failures are attributed to a
+  layer: selection, rendering, or convergence.
+
+## 11. Milestones
+
+| | Milestone | Owner |
+|---|---|---|
+| M0 | Skeleton: module, CLI stub, CI | chad-bot-phoenix |
+| M1 | Records: import `provenance/record`; pins + staleness | livecodelife's agent |
+| M2 | Rendering: write recordings → `sedum grow --execute` → read markers; `grow --check` | livecodelife's agent |
+| M3 | Evidence: one format, three-hash pin, staleness | chad-bot-phoenix |
+| M4 | Prose drafter: canonicalizer port → draft records with receipts; identity mapping | chad-bot-phoenix |
+| M5 | Convergence: synthesis regions + execution gate + risk-tiered evals | chad-bot-phoenix |
+| M6 | Bench: three arms, Wilson intervals, per-layer attribution | both |
+
+## 12. Open questions
+
+- Can a recurring synthesis shape be promoted to a catalog action
+  automatically, or must a human author it?
+- Which record tiers may the prose drafter emit without a human?
+- Does A/B/C/D change classification survive as a *pre-regen blast-radius
+  estimate* once `gen_hash` gives exact staleness?
+- One log or two: a journal of operations over provenance's content snapshots?
