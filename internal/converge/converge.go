@@ -237,18 +237,31 @@ func checkRendered(cand Candidate, next []byte, regionHash string) error {
 	return nil
 }
 
-// lockName is the per-tree lock file that serialises graft's own convergence
-// runs on a tree. It does not serialise editors: the real guard against a
-// concurrent edit is the content re-check (whole-tree digest, then the
-// target's bytes) made immediately before the rename.
-const lockName = ".graft-converge.lock"
+// lockPath is the per-tree lock file that serialises graft's own convergence
+// runs on a tree. It lives in the system temp dir, keyed by the tree's
+// absolute path, so it never appears in (or perturbs the digest of) the tree.
+// It does not serialise editors: the real guard against a concurrent edit is
+// the content re-check (whole-tree digest, then the target's bytes) made
+// immediately before the rename.
+func lockPath(root string) (string, error) {
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256([]byte(abs))
+	return filepath.Join(os.TempDir(), "graft-converge-"+hex.EncodeToString(sum[:8])+".lock"), nil
+}
 
 // apply writes next to target only if the tree still has the digest the gates
 // ran against and, read after that, the target still holds before. The write
 // is a fresh temp file in the target's directory (os.CreateTemp: never a
 // planted name), fsync, chmod, rename, then a directory fsync.
 func (c Converger) apply(rel, target string, before, next []byte, digest string, skip map[string]bool) error {
-	lf, err := os.OpenFile(filepath.Join(c.Root, lockName), os.O_CREATE|os.O_RDWR, 0o644)
+	lp, err := lockPath(c.Root)
+	if err != nil {
+		return err
+	}
+	lf, err := os.OpenFile(lp, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return err
 	}
@@ -278,15 +291,22 @@ func (c Converger) apply(rel, target string, before, next []byte, digest string,
 		mode = fi.Mode().Perm()
 	}
 	dir := filepath.Dir(target)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	t, err := os.CreateTemp(dir, ".graft-*.tmp")
+	created, err := mkdirAllTracked(c.Root, dir)
 	if err != nil {
 		return err
 	}
+	cleanup := func() { // remove directories this apply created, deepest first
+		for i := len(created) - 1; i >= 0; i-- {
+			os.Remove(created[i])
+		}
+	}
+	t, err := os.CreateTemp(dir, ".graft-*.tmp")
+	if err != nil {
+		cleanup()
+		return err
+	}
 	tmp := t.Name()
-	fail := func(err error) error { t.Close(); os.Remove(tmp); return err }
+	fail := func(err error) error { t.Close(); os.Remove(tmp); cleanup(); return err }
 	if _, err := t.Write(next); err != nil {
 		return fail(err)
 	}
@@ -298,10 +318,12 @@ func (c Converger) apply(rel, target string, before, next []byte, digest string,
 	}
 	if err := t.Close(); err != nil {
 		os.Remove(tmp)
+		cleanup()
 		return err
 	}
 	if err := os.Rename(tmp, target); err != nil {
 		os.Remove(tmp)
+		cleanup()
 		return err
 	}
 	d, err := os.Open(dir)
@@ -312,11 +334,31 @@ func (c Converger) apply(rel, target string, before, next []byte, digest string,
 	return d.Sync()
 }
 
+// mkdirAllTracked creates dir (inside root) and returns the directories it
+// created, outermost first, so a failed apply can remove exactly those.
+func mkdirAllTracked(root, dir string) ([]string, error) {
+	var missing []string
+	for d := dir; d != root && d != filepath.Dir(d); d = filepath.Dir(d) {
+		if _, err := os.Lstat(d); err == nil {
+			break
+		}
+		missing = append([]string{d}, missing...)
+	}
+	for i, d := range missing {
+		if err := os.Mkdir(d, 0o755); err != nil && !errors.Is(err, fs.ErrExist) {
+			for j := i - 1; j >= 0; j-- {
+				os.Remove(missing[j])
+			}
+			return nil, err
+		}
+	}
+	return missing, nil
+}
+
 // skip lists root-relative paths excluded from the digest and the scratch
-// copy: graft's lock file, and the evidence log and its head when they live
-// inside the tree.
+// copy: the evidence log and its head, when they live inside the tree.
 func (c Converger) skip() map[string]bool {
-	s := map[string]bool{lockName: true}
+	s := map[string]bool{}
 	if c.Log == nil {
 		return s
 	}

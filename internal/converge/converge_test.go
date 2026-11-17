@@ -550,3 +550,28 @@ func (g swapDirGate) Run(context.Context, string) (evidence.Verdict, string, err
 	os.Symlink(g.outside, filepath.Join(g.root, "pkg"))
 	return evidence.Pass, "", nil
 }
+
+// Nothing of graft's own is left in the tree after a run: no lock, no temp.
+func TestApplyLeavesNoArtifactsInTree(t *testing.T) {
+	c, root := setup(t, verdictGate{evidence.TestRun, evidence.Pass})
+	if d, err := c.Converge(context.Background(), cand("func F() {}")); err != nil || !d.Applied {
+		t.Fatalf("%+v %v", d, err)
+	}
+	entries, _ := os.ReadDir(root)
+	if len(entries) != 1 || entries[0].Name() != "app.go" {
+		var names []string
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Fatalf("tree has %v", names)
+	}
+}
+
+func TestMkdirAllTrackedReportsOnlyWhatItMade(t *testing.T) {
+	root := t.TempDir()
+	os.Mkdir(filepath.Join(root, "a"), 0o755)
+	made, err := mkdirAllTracked(root, filepath.Join(root, "a", "b", "c"))
+	if err != nil || len(made) != 2 || made[0] != filepath.Join(root, "a", "b") {
+		t.Fatalf("%v %v", made, err)
+	}
+}
