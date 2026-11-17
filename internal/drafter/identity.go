@@ -38,37 +38,42 @@ type Proposal struct {
 const reviseThreshold = 0.5
 
 // Map proposes, for each draft, a revision of an accepted record, a new record,
-// or a question. It never mints an id. It recomputes every receipt rather
-// than trusting the flag. Any record that more than one draft draws clauses
-// from is a split, whatever the overlap, and a human decides it.
+// or a question. It never mints an id and never trusts a draft's stored
+// fields: each draft is re-derived and its receipt recomputed. Any record that
+// more than one draft draws clauses from, valid or not, is a split, whatever
+// the overlap, and a human decides it. Output is deterministic.
 func Map(drafts []Draft, accepted []Accepted) []Proposal {
 	out := make([]Proposal, len(drafts))
 	claims := map[string][]int{}
 	for i, d := range drafts {
-		r := receipt(d)
-		if !r.Validated || r.Digest != d.Receipt.Digest {
-			reason := r.Reason
-			if r.Validated {
-				reason = "the draft does not match its receipt (edited after drafting)"
-			}
-			out[i] = Proposal{Kind: NoProposal, Draft: d, Reason: reason}
-			continue
-		}
+		d = rederive(d)
 		for _, a := range accepted {
 			if overlap(d.DerivedFrom, a.DerivedFrom) > 0 {
 				claims[a.ID] = append(claims[a.ID], i)
 			}
 		}
+		if !d.Receipt.Validated {
+			out[i] = Proposal{Kind: NoProposal, Draft: d, Reason: d.Receipt.Reason}
+			continue
+		}
 		out[i] = mapOne(d, accepted)
 	}
+	split := map[int][]string{}
 	for id, idx := range claims {
 		if len(idx) < 2 {
 			continue
 		}
 		for _, i := range idx {
-			out[i] = Proposal{Kind: Question, Candidates: []string{id}, Draft: out[i].Draft,
-				Reason: fmt.Sprintf("%d drafts draw clauses from %s: is it being split?", len(idx), id)}
+			split[i] = append(split[i], id)
 		}
+	}
+	for i, ids := range split {
+		if out[i].Kind == NoProposal {
+			continue // still not shown; it counted toward the split
+		}
+		slices.Sort(ids)
+		out[i] = Proposal{Kind: Question, Candidates: ids, Draft: out[i].Draft,
+			Reason: fmt.Sprintf("several drafts draw clauses from %v: is it being split?", ids)}
 	}
 	return out
 }

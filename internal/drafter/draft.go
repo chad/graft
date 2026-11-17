@@ -18,8 +18,9 @@ type Statement struct {
 	Ambiguous  bool // the rubric's top two types tied
 }
 
-// Receipt is the evidence that a draft validates (SPEC §8). It is bound to the
-// draft by Digest, and Map recomputes it rather than trusting the flag.
+// Receipt is the evidence that a draft validates (SPEC §8). Map never trusts
+// a draft's stored fields: it re-derives clause hashes, DerivedFrom and Anchor
+// from the statements' text and section, then recomputes the receipt.
 // A draft validates when:
 //   - re-extracting its rendering yields exactly its statements: the same
 //     clause hashes, no more, no fewer (lossless round trip);
@@ -30,7 +31,6 @@ type Statement struct {
 type Receipt struct {
 	Validated bool
 	Reason    string
-	Digest    string // hash of the rendered draft and its statement types
 }
 
 // Draft is a proposed record. It has no id: identity is assigned at acceptance.
@@ -86,15 +86,27 @@ func Drafts(markdown string) []Draft {
 		if len(d.Statements) == 0 {
 			continue // pure framing prose proposes nothing
 		}
-		for _, s := range d.Statements {
-			d.DerivedFrom = append(d.DerivedFrom, s.ClauseHash)
-		}
-		slices.Sort(d.DerivedFrom)
-		d.Anchor = anchor(d.Section)
-		d.Receipt = receipt(*d)
-		out = append(out, *d)
+		out = append(out, rederive(*d))
 	}
 	return out
+}
+
+// rederive recomputes everything a draft derives from its statements' text,
+// types and section: clause hashes, DerivedFrom, Anchor, and the receipt.
+// Map calls it on every draft, so no stored field is ever trusted.
+func rederive(d Draft) Draft {
+	st := make([]Statement, len(d.Statements))
+	copy(st, d.Statements)
+	d.Statements = st
+	d.DerivedFrom = nil
+	for i := range d.Statements {
+		d.Statements[i].ClauseHash = ClauseHash(d.Statements[i].Text)
+		d.DerivedFrom = append(d.DerivedFrom, d.Statements[i].ClauseHash)
+	}
+	slices.Sort(d.DerivedFrom)
+	d.Anchor = anchor(d.Section)
+	d.Receipt = receipt(d)
+	return d
 }
 
 func sectionKey(path []string) string {
@@ -125,19 +137,9 @@ func Render(d Draft) string {
 	return b.String()
 }
 
-// digest binds a receipt to the exact draft it speaks for.
-func digest(d Draft) string {
-	h := sha256.New()
-	h.Write([]byte(Render(d)))
-	for _, s := range d.Statements {
-		fmt.Fprintf(h, "\x00%s", s.Type)
-	}
-	return hex.EncodeToString(h.Sum(nil))
-}
-
 // receipt re-extracts the rendered draft with the same frozen classifier.
 func receipt(d Draft) Receipt {
-	r := Receipt{Digest: digest(d)}
+	r := Receipt{}
 	type got struct {
 		t    Type
 		tied bool

@@ -1,6 +1,7 @@
 package drafter
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -224,6 +225,59 @@ func TestDraftEditedAfterDraftingIsRejected(t *testing.T) {
 	ds[0].Statements[1].Type = Constraint // edited after the receipt was issued
 	if ps := Map(ds, nil); ps[0].Kind != NoProposal {
 		t.Fatalf("edited draft accepted: %s (%s)", ps[0].Kind, ps[0].Reason)
+	}
+}
+
+// Review on #2: a forged DerivedFrom must not buy a "revise at 100%".
+func TestForgedDerivedFromIsIgnored(t *testing.T) {
+	acc := acceptAll(Drafts(spec))
+	other := Drafts("# Library\n\n## Fines\n\n- Users can pay a fine\n")
+	other[0].DerivedFrom = acc[0].DerivedFrom // forged
+	other[0].Statements[0].ClauseHash = acc[0].DerivedFrom[0]
+	ps := Map(other, acc)
+	if ps[0].Kind != New {
+		t.Fatalf("forged derived_from got %s %s (%s)", ps[0].Kind, ps[0].RecordID, ps[0].Reason)
+	}
+}
+
+func TestSplitCandidatesAreDeterministic(t *testing.T) {
+	line := func(x string) string { return "- Users can borrow the " + x + " book\n" }
+	r1 := "# App\n\n## R1\n\n" + line("a") + line("b")
+	r2 := "# App\n\n## R2\n\n" + line("c") + line("d")
+	acc := []Accepted{
+		{ID: "prov-r1", DerivedFrom: Drafts(r1)[0].DerivedFrom},
+		{ID: "prov-r2", DerivedFrom: Drafts(r2)[0].DerivedFrom},
+	}
+	mixed := "# App\n\n## X\n\n" + line("a") + line("c") + "\n## Y\n\n" + line("b") + line("d")
+	want := ""
+	for i := 0; i < 200; i++ {
+		ps := Map(Drafts(mixed), acc)
+		got := fmt.Sprint(ps[0].Candidates, ps[1].Candidates)
+		if want == "" {
+			want = got
+			if want != "[prov-r1 prov-r2] [prov-r1 prov-r2]" {
+				t.Fatalf("candidates %s", want)
+			}
+		} else if got != want {
+			t.Fatalf("run %d: %s != %s", i, got, want)
+		}
+	}
+}
+
+// A draft that fails validation still counts toward a split: its sibling must
+// not become a silent revise because the other half of the split was ambiguous.
+func TestFailedDraftCountsTowardSplit(t *testing.T) {
+	line := func(x string) string { return "- Users can borrow the " + x + " book\n" }
+	orig := "# App\n\n## R\n\n" + line("a") + line("b") + line("c") + line("d")
+	acc := []Accepted{{ID: "prov-r", DerivedFrom: Drafts(orig)[0].DerivedFrom}}
+	next := "# App\n\n## R\n\n" + line("a") + line("b") + line("c") +
+		"\n## Other\n\n" + line("d") + "- " + ambiguousLine + "\n"
+	ps := Map(Drafts(next), acc)
+	if ps[1].Kind != NoProposal {
+		t.Fatalf("fixture: Other should fail validation, got %s", ps[1].Kind)
+	}
+	if ps[0].Kind != Question {
+		t.Fatalf("R: got %s (%s), want a split question", ps[0].Kind, ps[0].Reason)
 	}
 }
 
