@@ -71,8 +71,15 @@ happens only in a convergence-layer region, owned and marked like any other.**
 ## 7. Evidence
 
 - One evidence format for all layers.
-- **Evidence pins `(record version, gen_hash, region hash)` and is stale when
-  any of the three moves.**
+- **Evidence pins what it read: `gen_hash`, the region hash, and the hash of
+  the specs it ran (`spec_hash`, if any). It is stale when any of those moves.**
+  The record version is recorded but not compared: a version bump that changes
+  none of them (a status flip, a reworded reason) is no reason to re-verify.
+  This matches §3, where `records.Stale` compares `gen_hash` only.
+- The log is append-only and hash-chained, with a sidecar head pinning its
+  count and last id: an edited, reordered or truncated log is refused, and
+  policy is never evaluated on an unverified log.
+- An unknown risk tier is an error, never "requires nothing".
 - Kinds include: test run, eval result, human sign-off, static analysis,
   conformance run.
 

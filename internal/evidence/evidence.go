@@ -1,9 +1,13 @@
 // Package evidence is graft's single evidence format (SPEC.md §7).
 //
-// Every piece of evidence pins three things — the record version, its
-// gen_hash, and the hash of the region it speaks for — and is stale the moment
-// any of the three moves. Evidence lives in an append-only, hash-chained log,
-// so history cannot be rewritten without Verify noticing.
+// Evidence pins what it read: the record's gen_hash, the hash of the region it
+// speaks for, and the hash of the specs it ran (if any). It is stale the moment
+// any of those moves. The record version is recorded but not compared: a
+// version bump that changes none of them (a status flip, a reworded reason)
+// is no reason to re-verify. (SPEC §7; decided in PR #1 review.)
+//
+// Evidence lives in an append-only, hash-chained log with a sidecar head, so
+// neither an edited entry nor a deleted tail goes unnoticed by Verify.
 package evidence
 
 import (
@@ -34,46 +38,49 @@ const (
 	Inconclusive Verdict = "inconclusive"
 )
 
-// Pin is the three-hash pin: what the evidence was produced against.
-// It mirrors records.Pin plus the region hash, kept local so this package has
-// no dependency on the record or render layers.
+// FormatVersion is the evidence encoding version, covered by every ID.
+const FormatVersion = 1
+
+// Pin is what the evidence was produced against. Its field names mirror
+// records.Pin; it is kept local so this package depends on no other layer.
 type Pin struct {
-	RecordID      string `json:"record_id"`
-	RecordVersion int    `json:"record_version"`
-	GenHash       string `json:"gen_hash"`
-	RegionHash    string `json:"region_hash"`
+	RecordID   string `json:"record_id"`
+	Version    int    `json:"version"`             // recorded, not compared
+	GenHash    string `json:"gen_hash"`            // what drives generation
+	RegionHash string `json:"region_hash"`         // the bytes the evidence speaks for
+	SpecHash   string `json:"spec_hash,omitempty"` // the specs it ran; "" if none
 }
 
 // Evidence is one entry in the log.
 type Evidence struct {
+	V        int       `json:"v"`    // FormatVersion
 	ID       string    `json:"id"`   // hash of this entry, including Prev
 	Prev     string    `json:"prev"` // ID of the previous entry; "" for the first
 	Kind     Kind      `json:"kind"`
 	Verdict  Verdict   `json:"verdict"`
 	Pin      Pin       `json:"pin"`
-	RiskTier string    `json:"risk_tier"`
 	By       string    `json:"by"`               // who or what produced it (a DID, a tool name)
 	Detail   string    `json:"detail,omitempty"` // human-readable summary
 	Artifact string    `json:"artifact,omitempty"`
 	At       time.Time `json:"at"`
 }
 
-// Moved names which parts of the pin differ from cur: any of
-// "record_version", "gen_hash", "region_hash". Empty means fresh.
-// A different RecordID is reported as "record_id": the evidence is not about cur at all.
+// Moved names which compared parts of the pin differ from cur: any of
+// "gen_hash", "region_hash", "spec_hash". Empty means fresh. A different
+// RecordID is reported as "record_id": the evidence is not about cur at all.
 func (e Evidence) Moved(cur Pin) []string {
-	var m []string
 	if e.Pin.RecordID != cur.RecordID {
 		return []string{"record_id"}
 	}
-	if e.Pin.RecordVersion != cur.RecordVersion {
-		m = append(m, "record_version")
-	}
+	var m []string
 	if e.Pin.GenHash != cur.GenHash {
 		m = append(m, "gen_hash")
 	}
 	if e.Pin.RegionHash != cur.RegionHash {
 		m = append(m, "region_hash")
+	}
+	if e.Pin.SpecHash != cur.SpecHash {
+		m = append(m, "spec_hash")
 	}
 	return m
 }
