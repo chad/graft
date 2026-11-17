@@ -67,6 +67,11 @@ func draft(args []string, stdout, stderr io.Writer) int {
 	}
 	for _, p := range drafter.Map(drafter.Drafts(string(b)), nil) {
 		d := p.Draft
+		if p.Kind == drafter.NoProposal {
+			// Not shown unless it validates (SPEC §8): only the reason.
+			fmt.Fprintf(stdout, "## %s — no confident proposal: %s\n\n", d.Section, p.Reason)
+			continue
+		}
 		fmt.Fprintf(stdout, "## %s — %s (%s)\n", d.Section, p.Kind, p.Reason)
 		fmt.Fprintf(stdout, "receipt: %v — %s\n", d.Receipt.Validated, d.Receipt.Reason)
 		for _, st := range d.Statements {

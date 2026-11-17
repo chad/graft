@@ -187,3 +187,88 @@ func TestSplitIsAQuestion(t *testing.T) {
 		}
 	}
 }
+
+const ambiguousLine = "Two books must never share an ISBN; a repeat is a conflict"
+
+func TestAmbiguousStatementIsNoConfidentProposal(t *testing.T) {
+	if _, _, tied := classify(ambiguousLine, true); !tied {
+		t.Fatal("fixture is not ambiguous; pick another line")
+	}
+	ds := Drafts("# Books\n\n- Users can add a book\n- " + ambiguousLine + "\n")
+	if len(ds) != 1 || ds[0].Receipt.Validated {
+		t.Fatalf("receipt validated an ambiguous draft: %+v", ds)
+	}
+	if !strings.Contains(ds[0].Receipt.Reason, "line 4") {
+		t.Fatalf("reason does not name the line: %q", ds[0].Receipt.Reason)
+	}
+	ps := Map(ds, nil)
+	if ps[0].Kind != NoProposal {
+		t.Fatalf("got %s", ps[0].Kind)
+	}
+}
+
+// Map must recompute the receipt, not trust the exported flag.
+func TestMapRecomputesReceipt(t *testing.T) {
+	ds := Drafts("# Books\n\n- Users can add a book\n- " + ambiguousLine + "\n")
+	ds[0].Receipt.Validated = true // forged
+	if ps := Map(ds, nil); ps[0].Kind != NoProposal {
+		t.Fatalf("forged receipt accepted: %s", ps[0].Kind)
+	}
+}
+
+func TestDraftEditedAfterDraftingIsRejected(t *testing.T) {
+	ds := Drafts("# Books\n\n- Users can add a book\n- Users can list every book\n")
+	if !ds[0].Receipt.Validated {
+		t.Fatal(ds[0].Receipt.Reason)
+	}
+	ds[0].Statements[1].Type = Constraint // edited after the receipt was issued
+	if ps := Map(ds, nil); ps[0].Kind != NoProposal {
+		t.Fatalf("edited draft accepted: %s (%s)", ps[0].Kind, ps[0].Reason)
+	}
+}
+
+// Reviewer's case on #2: R={a,b,c,d}; X={a,e} at 50% of X but 25% of R; Y={b,c,d,f,g,h,i}.
+func TestPartialClaimsAreASplit(t *testing.T) {
+	line := func(x string) string { return "- Users can borrow the " + x + " book\n" }
+	var orig, xs strings.Builder
+	orig.WriteString("# App\n\n## R\n\n")
+	for _, c := range []string{"a", "b", "c", "d"} {
+		orig.WriteString(line(c))
+	}
+	xs.WriteString("# App\n\n## X\n\n" + line("a") + line("e") + "\n## Y\n\n")
+	for _, c := range []string{"b", "c", "d", "f", "g", "h", "i"} {
+		xs.WriteString(line(c))
+	}
+	r := Drafts(orig.String())
+	acc := []Accepted{{ID: "prov-r", DerivedFrom: r[0].DerivedFrom, Anchor: r[0].Anchor}}
+	ps := Map(Drafts(xs.String()), acc)
+	if len(ps) != 2 {
+		t.Fatalf("%d proposals", len(ps))
+	}
+	for _, p := range ps {
+		if p.Kind != Question || !strings.Contains(p.Reason, "split") {
+			t.Fatalf("%s: %s (%s), want a split question", p.Draft.Section, p.Kind, p.Reason)
+		}
+	}
+}
+
+func TestOneSidedOverlapIsAQuestion(t *testing.T) {
+	line := func(x string) string { return "- Users can borrow the " + x + " book\n" }
+	orig := "# App\n\n## R\n\n" + line("a") + line("b") + line("c") + line("d")
+	acc := []Accepted{{ID: "prov-r", DerivedFrom: Drafts(orig)[0].DerivedFrom}}
+	ps := Map(Drafts("# App\n\n## R\n\n"+line("a")+line("e")), acc) // 50% of draft, 25% of record
+	if ps[0].Kind != Question {
+		t.Fatalf("got %s (%s)", ps[0].Kind, ps[0].Reason)
+	}
+}
+
+func TestRepeatedHeadingIsASeparateDraft(t *testing.T) {
+	ds := Drafts("# A\n\n- Users can add a book\n\n# B\n\n- Users can add a loan\n\n# A\n\n- Users can add a member\n")
+	if len(ds) != 3 || ds[2].Section != "A (2)" {
+		var secs []string
+		for _, d := range ds {
+			secs = append(secs, d.Section)
+		}
+		t.Fatalf("sections %v", secs)
+	}
+}

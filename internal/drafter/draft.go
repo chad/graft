@@ -15,14 +15,22 @@ type Statement struct {
 	Confidence float64
 	ClauseHash string
 	Line       int
+	Ambiguous  bool // the rubric's top two types tied
 }
 
-// Receipt is the evidence that a draft validates (SPEC §8): re-extracting the
-// draft's own rendering reproduces it exactly. A draft without a valid receipt
-// is reported as "no confident proposal", never shown as a fix.
+// Receipt is the evidence that a draft validates (SPEC §8). It is bound to the
+// draft by Digest, and Map recomputes it rather than trusting the flag.
+// A draft validates when:
+//   - re-extracting its rendering yields exactly its statements: the same
+//     clause hashes, no more, no fewer (lossless round trip);
+//   - every statement re-extracts to the type it was drafted with; and
+//   - no statement is ambiguous: the rubric's top two types did not tie.
+//
+// A draft that fails is "no confident proposal" and is not shown as a fix.
 type Receipt struct {
 	Validated bool
 	Reason    string
+	Digest    string // hash of the rendered draft and its statement types
 }
 
 // Draft is a proposed record. It has no id: identity is assigned at acceptance.
@@ -39,19 +47,33 @@ type Draft struct {
 // Drafts groups a spec's clauses by section into draft blueprints.
 func Drafts(markdown string) []Draft {
 	var (
-		order []string
-		by    = map[string]*Draft{}
+		order   []string
+		by      = map[string]*Draft{}
+		seen    = map[string]int{}
+		lastSec string
+		lastKey string
 	)
 	for _, c := range Segment(markdown) {
-		key := sectionKey(c.Section)
+		sec := sectionKey(c.Section)
+		key := lastKey
+		if sec != lastSec {
+			// A heading path that recurs later in the spec is a different
+			// section with the same name, not a continuation of the first.
+			seen[sec]++
+			key = sec
+			if seen[sec] > 1 {
+				key = fmt.Sprintf("%s (%d)", sec, seen[sec])
+			}
+			lastSec, lastKey = sec, key
+		}
 		d, ok := by[key]
 		if !ok {
 			d = &Draft{Section: key, Tier: "blueprint"}
 			by[key] = d
 			order = append(order, key)
 		}
-		t, conf := Classify(c.Text, c.FromList)
-		st := Statement{Type: t, Text: c.Text, Confidence: conf, ClauseHash: c.Hash, Line: c.Line}
+		t, conf, tied := classify(c.Text, c.FromList)
+		st := Statement{Type: t, Text: c.Text, Confidence: conf, ClauseHash: c.Hash, Line: c.Line, Ambiguous: tied}
 		if t == Context {
 			d.Context = append(d.Context, st)
 		} else {
@@ -103,22 +125,55 @@ func Render(d Draft) string {
 	return b.String()
 }
 
-// receipt re-extracts the rendered draft with the same frozen classifier and
-// checks every statement comes back with the same hash and type.
-func receipt(d Draft) Receipt {
-	again := map[string]Type{}
-	for _, c := range Segment(Render(d)) {
-		t, _ := Classify(c.Text, c.FromList)
-		again[c.Hash] = t
-	}
+// digest binds a receipt to the exact draft it speaks for.
+func digest(d Draft) string {
+	h := sha256.New()
+	h.Write([]byte(Render(d)))
 	for _, s := range d.Statements {
-		t, ok := again[s.ClauseHash]
-		if !ok {
-			return Receipt{Reason: fmt.Sprintf("line %d does not survive re-extraction", s.Line)}
+		fmt.Fprintf(h, "\x00%s", s.Type)
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// receipt re-extracts the rendered draft with the same frozen classifier.
+func receipt(d Draft) Receipt {
+	r := Receipt{Digest: digest(d)}
+	type got struct {
+		t    Type
+		tied bool
+	}
+	again := map[string][]got{}
+	n := 0
+	for _, c := range Segment(Render(d)) {
+		t, _, tied := classify(c.Text, c.FromList)
+		again[c.Hash] = append(again[c.Hash], got{t, tied})
+		n++
+	}
+	if n != len(d.Statements) {
+		r.Reason = fmt.Sprintf("re-extraction yields %d statements, drafted %d: the rendering is not lossless", n, len(d.Statements))
+		return r
+	}
+	var ambiguous []string
+	for _, s := range d.Statements {
+		g := again[s.ClauseHash]
+		if len(g) == 0 {
+			r.Reason = fmt.Sprintf("line %d does not survive re-extraction", s.Line)
+			return r
 		}
-		if t != s.Type {
-			return Receipt{Reason: fmt.Sprintf("line %d re-extracts as %s, drafted as %s (its type depends on its paragraph, not its own words)", s.Line, t, s.Type)}
+		again[s.ClauseHash] = g[1:]
+		if g[0].t != s.Type {
+			r.Reason = fmt.Sprintf("line %d re-extracts as %s, drafted as %s", s.Line, g[0].t, s.Type)
+			return r
+		}
+		if s.Ambiguous || g[0].tied {
+			ambiguous = append(ambiguous, fmt.Sprintf("line %d", s.Line))
 		}
 	}
-	return Receipt{Validated: true, Reason: fmt.Sprintf("%d statements re-extract identically", len(d.Statements))}
+	if len(ambiguous) > 0 {
+		r.Reason = fmt.Sprintf("ambiguous type (two types tie) at %s: reword so one reading wins", strings.Join(ambiguous, ", "))
+		return r
+	}
+	r.Validated = true
+	r.Reason = fmt.Sprintf("%d statements re-extract identically, none ambiguous", len(d.Statements))
+	return r
 }

@@ -107,6 +107,13 @@ func words(s string) int { return len(strings.Fields(s)) }
 // Classify scores a statement's own text (never its heading) and returns its
 // type and confidence. fromList marks a statement the author enumerated.
 func Classify(text string, fromList bool) (Type, float64) {
+	t, c, _ := classify(text, fromList)
+	return t, c
+}
+
+// classify also reports whether the winning type tied with the runner-up:
+// the rubric could not tell two types apart, so the type is a coin flip.
+func classify(text string, fromList bool) (Type, float64, bool) {
 	text = strings.NewReplacer("‘", "'", "’", "'", "ʼ", "'", "‛", "'").Replace(text)
 	lower := strings.ToLower(text)
 	s := map[Type]int{}
@@ -161,14 +168,14 @@ func Classify(text string, fromList bool) (Type, float64) {
 	}
 	if winScore == 0 || win == Context {
 		if t, ok := rescue(text, fromList); ok {
-			return t, rescueConfidence
+			return t, rescueConfidence, false
 		}
 	}
 	if winScore == 0 {
-		return Context, minConfidence
+		return Context, minConfidence, false
 	}
 	c := float64(winScore-runner) / float64(max(winScore, 1))
-	return win, min(maxConfidence, max(minConfidence, c))
+	return win, min(maxConfidence, max(minConfidence, c)), winScore == runner
 }
 
 // rescue promotes declarative obligations the modal rubric has no words for.

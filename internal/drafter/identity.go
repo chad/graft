@@ -32,21 +32,34 @@ type Proposal struct {
 	Reason     string
 }
 
-// reviseThreshold: at least half of a draft's clauses must already belong to a
-// record for the draft to be treated as that record's next version.
+// reviseThreshold: a draft is a record's next version only when at least half
+// of the draft's clauses come from the record AND at least half of the
+// record's clauses survive into the draft. One-sided overlap is a question.
 const reviseThreshold = 0.5
 
 // Map proposes, for each draft, a revision of an accepted record, a new record,
-// or a question. It never mints an id, and never lets two drafts revise one
-// record (that is a split, which a human decides).
+// or a question. It never mints an id. It recomputes every receipt rather
+// than trusting the flag. Any record that more than one draft draws clauses
+// from is a split, whatever the overlap, and a human decides it.
 func Map(drafts []Draft, accepted []Accepted) []Proposal {
 	out := make([]Proposal, len(drafts))
 	claims := map[string][]int{}
 	for i, d := range drafts {
-		out[i] = mapOne(d, accepted)
-		if out[i].Kind == Revise {
-			claims[out[i].RecordID] = append(claims[out[i].RecordID], i)
+		r := receipt(d)
+		if !r.Validated || r.Digest != d.Receipt.Digest {
+			reason := r.Reason
+			if r.Validated {
+				reason = "the draft does not match its receipt (edited after drafting)"
+			}
+			out[i] = Proposal{Kind: NoProposal, Draft: d, Reason: reason}
+			continue
 		}
+		for _, a := range accepted {
+			if overlap(d.DerivedFrom, a.DerivedFrom) > 0 {
+				claims[a.ID] = append(claims[a.ID], i)
+			}
+		}
+		out[i] = mapOne(d, accepted)
 	}
 	for id, idx := range claims {
 		if len(idx) < 2 {
@@ -54,46 +67,49 @@ func Map(drafts []Draft, accepted []Accepted) []Proposal {
 		}
 		for _, i := range idx {
 			out[i] = Proposal{Kind: Question, Candidates: []string{id}, Draft: out[i].Draft,
-				Reason: fmt.Sprintf("%d drafts derive from %s: is it being split?", len(idx), id)}
+				Reason: fmt.Sprintf("%d drafts draw clauses from %s: is it being split?", len(idx), id)}
 		}
 	}
 	return out
 }
 
 func mapOne(d Draft, accepted []Accepted) Proposal {
-	if !d.Receipt.Validated {
-		return Proposal{Kind: NoProposal, Draft: d, Reason: d.Receipt.Reason}
+	type scored struct {
+		id                string
+		ofDraft, ofRecord float64
 	}
-	best, bestScore, tie := "", 0.0, false
+	var best []scored
 	var anchorMatches []string
 	for _, a := range accepted {
-		s := overlap(d.DerivedFrom, a.DerivedFrom)
+		s := scored{a.ID, overlap(d.DerivedFrom, a.DerivedFrom), overlap(a.DerivedFrom, d.DerivedFrom)}
 		switch {
-		case s > bestScore:
-			best, bestScore, tie = a.ID, s, false
-		case s == bestScore && s > 0:
-			tie = true
+		case s.ofDraft <= 0:
+		case len(best) == 0 || s.ofDraft > best[0].ofDraft:
+			best = []scored{s}
+		case s.ofDraft == best[0].ofDraft:
+			best = append(best, s)
 		}
 		if a.Anchor == d.Anchor {
 			anchorMatches = append(anchorMatches, a.ID)
 		}
 	}
 	switch {
-	case bestScore >= reviseThreshold && !tie:
-		return Proposal{Kind: Revise, RecordID: best, Draft: d,
-			Reason: fmt.Sprintf("%.0f%% of its clauses derive from %s", bestScore*100, best)}
-	case bestScore > 0:
-		cands := []string{best}
-		if tie {
-			cands = nil
-			for _, a := range accepted {
-				if overlap(d.DerivedFrom, a.DerivedFrom) == bestScore {
-					cands = append(cands, a.ID)
-				}
-			}
+	case len(best) > 1:
+		var ids []string
+		for _, b := range best {
+			ids = append(ids, b.id)
 		}
-		return Proposal{Kind: Question, Candidates: cands, Draft: d,
-			Reason: fmt.Sprintf("only %.0f%% overlap with an accepted record: a revision, or new?", bestScore*100)}
+		slices.Sort(ids)
+		return Proposal{Kind: Question, Candidates: ids, Draft: d,
+			Reason: fmt.Sprintf("ties at %.0f%% overlap between %v: which record is this?", best[0].ofDraft*100, ids)}
+	case len(best) == 1 && best[0].ofDraft >= reviseThreshold && best[0].ofRecord >= reviseThreshold:
+		b := best[0]
+		return Proposal{Kind: Revise, RecordID: b.id, Draft: d,
+			Reason: fmt.Sprintf("%.0f%% of its clauses derive from %s, and %.0f%% of %s survives", b.ofDraft*100, b.id, b.ofRecord*100, b.id)}
+	case len(best) == 1:
+		b := best[0]
+		return Proposal{Kind: Question, Candidates: []string{b.id}, Draft: d,
+			Reason: fmt.Sprintf("%.0f%% of its clauses derive from %s, but only %.0f%% of %s survives: a revision, or new?", b.ofDraft*100, b.id, b.ofRecord*100, b.id)}
 	case len(anchorMatches) > 0:
 		slices.Sort(anchorMatches)
 		return Proposal{Kind: Question, Candidates: anchorMatches, Draft: d,
@@ -102,16 +118,16 @@ func mapOne(d Draft, accepted []Accepted) Proposal {
 	return Proposal{Kind: New, Draft: d, Reason: "no accepted record derives from these clauses"}
 }
 
-// overlap is the fraction of the draft's clauses already in the record.
-func overlap(draft, record []string) float64 {
-	if len(draft) == 0 {
+// overlap is the fraction of a's hashes that are also in b.
+func overlap(a, b []string) float64 {
+	if len(a) == 0 {
 		return 0
 	}
 	n := 0
-	for _, h := range draft {
-		if slices.Contains(record, h) {
+	for _, h := range a {
+		if slices.Contains(b, h) {
 			n++
 		}
 	}
-	return float64(n) / float64(len(draft))
+	return float64(n) / float64(len(a))
 }

@@ -54,3 +54,15 @@ func TestDraftPrintsProposalsAndWritesNothing(t *testing.T) {
 		t.Fatalf("draft wrote files: %v", entries)
 	}
 }
+
+func TestDraftHidesStatementsOfUnvalidatedDrafts(t *testing.T) {
+	spec := t.TempDir() + "/spec.md"
+	os.WriteFile(spec, []byte("# Books\n\n- Users can add a book\n- Two books must never share an ISBN; a repeat is a conflict\n"), 0o644)
+	var out, errb bytes.Buffer
+	if code := run([]string{"draft", spec}, &out, &errb); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	if !strings.Contains(out.String(), "no confident proposal") || strings.Contains(out.String(), "Users can add a book") {
+		t.Fatalf("an unvalidated draft's statements were shown:\n%s", out.String())
+	}
+}
