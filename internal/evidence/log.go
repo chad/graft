@@ -90,10 +90,20 @@ func (l *Log) Verify() error {
 func (l *Log) read(how lockKind) (snapshot, error) {
 	f, err := os.Open(l.path)
 	if errors.Is(err, os.ErrNotExist) {
+		// No log file, so nothing to lock. A head without a log could only
+		// come from a writer that created the log after our open failed: in
+		// that case the log exists now, so read it properly under the lock.
 		h, ok, herr := readHead(l.path)
-		return snapshot{head: h, hasHead: ok, partial: -1}, herr
-	}
-	if err != nil {
+		if herr != nil || !ok || h.Count == 0 {
+			return snapshot{head: h, hasHead: ok, partial: -1}, herr
+		}
+		if f, err = os.Open(l.path); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return snapshot{}, fmt.Errorf("%w: head commits %d entries but there is no log", ErrBrokenChain, h.Count)
+			}
+			return snapshot{}, err
+		}
+	} else if err != nil {
 		return snapshot{}, err
 	}
 	defer f.Close()
@@ -173,9 +183,10 @@ func check(s snapshot) error {
 		}
 		prev, prevAt = e.ID, e.At
 	}
+	// A missing head is a head at zero: a crash after the first entry's fsync
+	// but before the first head write leaves exactly that, and the head is a
+	// lower bound. (Deleting the head deliberately is out of scope: §7.)
 	switch {
-	case !s.hasHead && len(s.entries) > 0:
-		return fmt.Errorf("%w: log has %d entries but no head", ErrBrokenChain, len(s.entries))
 	case s.hasHead && s.head.Count > len(s.entries):
 		return fmt.Errorf("%w: head commits %d entries, log has %d (truncated)", ErrBrokenChain, s.head.Count, len(s.entries))
 	case s.hasHead && s.head.Count > 0 && s.entries[s.head.Count-1].ID != s.head.Last:
@@ -243,9 +254,6 @@ func (l *Log) Append(e Evidence) (Evidence, error) {
 	s, err := readLocked(l.path, f)
 	if err != nil {
 		return Evidence{}, err
-	}
-	if !s.hasHead && len(s.entries) == 0 {
-		s.hasHead = true // a fresh log
 	}
 	if err := check(s); err != nil {
 		return Evidence{}, err

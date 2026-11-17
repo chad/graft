@@ -6,8 +6,10 @@
 // version bump that changes none of them (a status flip, a reworded reason)
 // is no reason to re-verify. (SPEC §7; decided in PR #1 review.)
 //
-// Evidence lives in an append-only, hash-chained log with a sidecar head, so
-// neither an edited entry nor a deleted tail goes unnoticed by Verify.
+// Evidence lives in an append-only, hash-chained log with a sidecar head
+// pinning its committed prefix. Verify detects ACCIDENTAL damage (an edited,
+// reordered or lost committed entry, a torn write); it does not detect a
+// deliberate rewrite by someone with write access. See SPEC §7.
 package evidence
 
 import (

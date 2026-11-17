@@ -245,6 +245,32 @@ func TestTwoWritersOnOneFileKeepOneChain(t *testing.T) {
 	}
 }
 
+// A crash after the very first entry's fsync, before any head was written.
+func TestCrashBeforeFirstHeadIsRecovered(t *testing.T) {
+	l, p := newLog(t)
+	mustAppend(t, l, Evidence{Kind: TestRun, Verdict: Pass, Pin: base})
+	if err := os.Remove(p + ".head"); err != nil {
+		t.Fatal(err)
+	}
+	l2, err := Open(p)
+	if err != nil {
+		t.Fatalf("Open with one entry and no head: %v", err)
+	}
+	mustAppend(t, l2, Evidence{Kind: TestRun, Verdict: Pass, Pin: base})
+	if h, ok, _ := readHead(p); !ok || h.Count != 2 {
+		t.Fatalf("head not rolled forward: %+v", h)
+	}
+}
+
+func TestHeadWithoutLogIsBroken(t *testing.T) {
+	l, p := newLog(t)
+	mustAppend(t, l, Evidence{Kind: TestRun, Verdict: Pass, Pin: base})
+	os.Remove(p)
+	if _, err := Open(p); !errors.Is(err, ErrBrokenChain) {
+		t.Fatalf("Open = %v", err)
+	}
+}
+
 // Readers take a shared lock and read log and head together: no false
 // ErrBrokenChain while a writer is mid-append.
 func TestReadersRacingAWriterNeverSeeABrokenChain(t *testing.T) {
