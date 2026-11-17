@@ -140,6 +140,10 @@ func Render(d Draft) string {
 // receipt re-extracts the rendered draft with the same frozen classifier.
 func receipt(d Draft) Receipt {
 	r := Receipt{}
+	if len(d.Statements) == 0 {
+		r.Reason = "the draft has no statements"
+		return r
+	}
 	type got struct {
 		t    Type
 		tied bool
