@@ -1,0 +1,19 @@
+id: prov-2026-aaaa0001
+version: 1
+content_hash: sha256:f6b491a6c32262a7cd1080c6089ad5abfdddf4f328f4c9bbda88eacedd4aa6c5
+parent_hash: ""
+reason: ""
+author: fixture@example.com
+created_at: "2026-01-02T03:04:05Z"
+spec_hashes: []
+content:
+  id: prov-2026-aaaa0001
+  title: Fixture record
+  type: imprint
+  created_at: "2026-01-02"
+  author: fixture@example.com
+  intent: Add the widget.
+  constraints:
+    - no network
+  affected_scope:
+    - pkg/a.go
