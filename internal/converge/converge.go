@@ -2,11 +2,14 @@ package converge
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/chad/graft/internal/evidence"
@@ -16,19 +19,28 @@ import (
 // SPEC §2 forbids the convergence layer from claiming a stronger guarantee.
 const Guarantee = "checked"
 
-// ErrHandEdited: the existing synthesis region was hand-edited since graft
-// wrote it, so graft refuses to overwrite it (the same rule as sedum regions).
-var ErrHandEdited = errors.New("converge: synthesis region was hand-edited; refusing to overwrite")
+var (
+	// ErrHandEdited: the existing synthesis region was hand-edited since graft
+	// wrote it, so graft refuses to overwrite it (the same rule as sedum regions).
+	ErrHandEdited = errors.New("converge: synthesis region was hand-edited; refusing to overwrite")
+	// ErrNoGates: nothing would be checked, so "checked" would be a false claim.
+	ErrNoGates = errors.New("converge: no gates configured; refusing to claim a candidate was checked")
+	// ErrUncovered: the tier requires an executable kind no gate in this run produces.
+	ErrUncovered = errors.New("converge: the tier requires an executable check no gate provides")
+	// ErrChanged: the tree changed while gates ran; their verdicts do not cover it.
+	ErrChanged = errors.New("converge: tree changed during convergence; not applied")
+	// ErrBadPath: the candidate path is absolute, escapes the root, or is a symlink.
+	ErrBadPath = errors.New("converge: candidate path must be a regular file inside the root")
+	// ErrMarkerInBody: the body contains a synthesis marker tag.
+	ErrMarkerInBody = errors.New("converge: candidate body contains a synthesis marker tag")
+)
 
-// ErrNoGates: nothing would be checked, so "checked" would be a false claim.
-var ErrNoGates = errors.New("converge: no gates configured; refusing to claim a candidate was checked")
-
-// ErrChanged: the target file changed while gates ran; the result no longer
-// speaks for what is on disk, so nothing is written.
-var ErrChanged = errors.New("converge: target file changed during convergence; not applied")
-
-// ErrBadPath: the candidate path is absolute, escapes the root, or is a symlink.
-var ErrBadPath = errors.New("converge: candidate path must be a regular file inside the root")
+// Executable kinds are produced by running something. Evidence of these
+// kinds must come from THIS run's gates: an earlier run checked an earlier
+// tree. Other kinds (a human sign-off) are taken from fresh evidence in the log.
+var executable = map[evidence.Kind]bool{
+	evidence.TestRun: true, evidence.Eval: true, evidence.StaticAnalysis: true, evidence.Conformance: true,
+}
 
 // Candidate is a proposed body for one record's synthesis region.
 type Candidate struct {
@@ -60,20 +72,33 @@ type Converger struct {
 }
 
 // Converge writes the candidate into a scratch copy of the tree, runs every
-// gate there, appends one evidence entry per gate pinned to the candidate
-// (gen_hash, the new body's hash, spec_hash), and evaluates the tier's policy.
-// Only when the policy is satisfied is the candidate written to Root.
-// It refuses, before running anything, if the existing region was hand-edited.
+// gate there, and appends one evidence entry per gate pinned to the candidate.
+// The candidate reaches Root only when every gate in THIS run passed, every
+// executable kind the tier requires came from this run, every other required
+// kind has fresh passing evidence, and the tree is unchanged since the copy.
 func (c Converger) Converge(ctx context.Context, cand Candidate) (Decision, error) {
 	d := Decision{Guarantee: Guarantee}
 	if cand.Comment == "" {
 		cand.Comment = "//"
 	}
-	if _, ok := c.Policy[cand.Tier]; !ok {
+	required, ok := c.Policy[cand.Tier]
+	if !ok {
 		return d, fmt.Errorf("%w: %q", evidence.ErrUnknownTier, cand.Tier)
 	}
 	if len(c.Gates) == 0 {
 		return d, ErrNoGates
+	}
+	gated := map[evidence.Kind]bool{}
+	for _, g := range c.Gates {
+		gated[g.Kind()] = true
+	}
+	for _, k := range required {
+		if executable[k] && !gated[k] {
+			return d, fmt.Errorf("%w: tier %q requires %s", ErrUncovered, cand.Tier, k)
+		}
+	}
+	if strings.Contains(cand.Body, beginTag) || strings.Contains(cand.Body, endTag) {
+		return d, ErrMarkerInBody
 	}
 	target, err := c.target(cand.Path)
 	if err != nil {
@@ -87,32 +112,42 @@ func (c Converger) Converge(ctx context.Context, cand Candidate) (Decision, erro
 		return d, err
 	}
 	owner := Owner{Record: cand.RecordID, Version: cand.Version, Gen: cand.GenHash, Tier: cand.Tier}
+	next, err := render(cand.Path, before, cand.Comment, owner, cand.Body)
+	if err != nil {
+		return d, err
+	}
+	pin := evidence.Pin{RecordID: cand.RecordID, Version: cand.Version, GenHash: cand.GenHash,
+		RegionHash: HashBody(normalizeBody(cand.Body)), SpecHash: cand.SpecHash}
+	if err := checkRendered(cand, next, pin.RegionHash); err != nil {
+		return d, err
+	}
 
+	skip := c.skip()
+	digest, err := treeDigest(c.Root, skip)
+	if err != nil {
+		return d, err
+	}
 	scratch, err := os.MkdirTemp("", "graft-converge-*")
 	if err != nil {
 		return d, err
 	}
 	defer os.RemoveAll(scratch)
-	if err := copyTree(c.Root, scratch); err != nil {
+	if err := copyTree(c.Root, scratch, skip); err != nil {
 		return d, err
 	}
-	if err := write(scratch, cand.Path, cand.Comment, owner, cand.Body); err != nil {
+	if err := os.WriteFile(filepath.Join(scratch, filepath.FromSlash(cand.Path)), next, 0o644); err != nil {
 		return d, err
 	}
-	body := cand.Body
-	if body != "" && body[len(body)-1] != '\n' {
-		body += "\n"
-	}
-	pin := evidence.Pin{RecordID: cand.RecordID, Version: cand.Version, GenHash: cand.GenHash,
-		RegionHash: HashBody(body), SpecHash: cand.SpecHash}
+
 	by := c.By
 	if by == "" {
 		by = "graft/converge"
 	}
+	verdicts := map[evidence.Kind]evidence.Verdict{}
 	for _, g := range c.Gates {
 		v, detail, err := g.Run(ctx, scratch)
 		if err != nil {
-			return d, err
+			return d, err // the gate could not run: no verdict, nothing applied
 		}
 		e, err := c.Log.Append(evidence.Evidence{Kind: g.Kind(), Verdict: v, Pin: pin, By: by,
 			Detail: fmt.Sprintf("%s: %s", g.Name(), detail)})
@@ -120,27 +155,164 @@ func (c Converger) Converge(ctx context.Context, cand Candidate) (Decision, erro
 			return d, err
 		}
 		d.Evidence = append(d.Evidence, e)
+		if prev, seen := verdicts[g.Kind()]; !seen || prev == evidence.Pass {
+			verdicts[g.Kind()] = v // any non-pass of a kind wins: no masking
+		}
 	}
-	if d.Result, err = c.Policy.Evaluate(c.Log, cand.Tier, pin); err != nil {
+	if d.Result, err = c.decide(required, verdicts, pin); err != nil {
 		return d, err
 	}
 	if !d.Result.Satisfied {
 		return d, nil
 	}
-	// The gates checked the tree as it was when copied. If the target changed
-	// since (a hand edit, another writer), that check does not cover it.
-	now, err := readOptional(target)
-	if err != nil {
-		return d, err
-	}
-	if string(now) != string(before) {
-		return d, ErrChanged
-	}
-	if err := write(c.Root, cand.Path, cand.Comment, owner, cand.Body); err != nil {
+	if err := c.apply(target, before, next, digest, skip); err != nil {
 		return d, err
 	}
 	d.Applied = true
 	return d, nil
+}
+
+// decide combines this run's verdicts with fresh log evidence for the
+// non-executable kinds. Every gate must pass, required or not.
+func (c Converger) decide(required []evidence.Kind, verdicts map[evidence.Kind]evidence.Verdict, pin evidence.Pin) (evidence.Result, error) {
+	if err := c.Log.Verify(); err != nil {
+		return evidence.Result{}, err
+	}
+	r := evidence.Result{Satisfied: true}
+	kinds := make([]evidence.Kind, 0, len(verdicts))
+	for k := range verdicts {
+		kinds = append(kinds, k)
+	}
+	sort.Slice(kinds, func(i, j int) bool { return kinds[i] < kinds[j] })
+	for _, k := range kinds {
+		if verdicts[k] != evidence.Pass {
+			r.Failing = append(r.Failing, k)
+			r.Satisfied = false
+		}
+	}
+	latest := map[evidence.Kind]evidence.Evidence{}
+	for _, e := range c.Log.Fresh(pin) {
+		latest[e.Kind] = e
+	}
+	for _, k := range required {
+		if executable[k] {
+			continue // decided by this run above
+		}
+		e, ok := latest[k]
+		switch {
+		case !ok:
+			r.Missing = append(r.Missing, k)
+			r.Satisfied = false
+		case e.Verdict != evidence.Pass:
+			r.Failing = append(r.Failing, k)
+			r.Satisfied = false
+		}
+	}
+	return r, nil
+}
+
+// checkRendered re-parses the rendered file: exactly one region for the
+// record, and its bytes hash to what the evidence will be pinned to.
+func checkRendered(cand Candidate, next []byte, regionHash string) error {
+	rs, err := parse(cand.Path, next)
+	if err != nil {
+		return err
+	}
+	n := 0
+	for _, r := range rs {
+		if r.Owner.Record == cand.RecordID {
+			n++
+			if r.Actual != regionHash || r.Edited() {
+				return fmt.Errorf("%w: rendered region does not hash to its pin", ErrMarkerInBody)
+			}
+		}
+	}
+	if n != 1 {
+		return fmt.Errorf("%w: rendered file has %d regions for %s", ErrDuplicateRegion, n, cand.RecordID)
+	}
+	return nil
+}
+
+// apply writes next to target if, under an exclusive lock on the target,
+// the target still holds before and the tree still has the digest the gates
+// ran against. The write is temp + fsync + rename, keeping the file mode.
+func (c Converger) apply(target string, before, next []byte, digest string, skip map[string]bool) error {
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return err
+	}
+	mode := fs.FileMode(0o644)
+	if fi, err := os.Lstat(target); err == nil {
+		if !fi.Mode().IsRegular() {
+			return fmt.Errorf("%w: target became %s", ErrBadPath, fi.Mode().Type())
+		}
+		mode = fi.Mode().Perm()
+	}
+	f, err := os.OpenFile(target, os.O_RDWR|os.O_CREATE, mode)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if err := lockFile(f); err != nil {
+		return err
+	}
+	defer unlockFile(f)
+	now, err := readOptional(target)
+	if err != nil {
+		return err
+	}
+	if string(now) != string(before) {
+		return ErrChanged
+	}
+	if d, err := treeDigest(c.Root, skip); err != nil {
+		return err
+	} else if d != digest {
+		return ErrChanged
+	}
+	tmp := target + ".graft-tmp"
+	t, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
+	if err != nil {
+		return err
+	}
+	if _, err := t.Write(next); err != nil {
+		t.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := t.Sync(); err != nil {
+		t.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := t.Close(); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, target); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	dir, err := os.Open(filepath.Dir(target))
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	return dir.Sync()
+}
+
+// skip lists root-relative paths excluded from the digest and the scratch
+// copy: the evidence log and its head, when they live inside the tree.
+func (c Converger) skip() map[string]bool {
+	s := map[string]bool{}
+	if c.Log == nil {
+		return s
+	}
+	rel, err := filepath.Rel(c.Root, c.Log.Path())
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return s
+	}
+	rel = filepath.ToSlash(rel)
+	s[rel], s[rel+".head"], s[rel+".head.tmp"] = true, true, true
+	return s
 }
 
 // target resolves a candidate path inside Root, refusing absolute paths,
@@ -154,7 +326,6 @@ func (c Converger) target(rel string) (string, error) {
 	if fi, err := os.Lstat(p); err == nil && !fi.Mode().IsRegular() {
 		return "", fmt.Errorf("%w: %q is not a regular file", ErrBadPath, rel)
 	}
-	// No parent directory may be a symlink either: it could lead outside Root.
 	for dir := filepath.Dir(clean); dir != "."; dir = filepath.Dir(dir) {
 		if fi, err := os.Lstat(filepath.Join(c.Root, dir)); err == nil && fi.Mode()&fs.ModeSymlink != 0 {
 			return "", fmt.Errorf("%w: %q passes through a symlink", ErrBadPath, rel)
@@ -184,11 +355,55 @@ func refuseHandEdits(cand Candidate, data []byte) error {
 	return nil
 }
 
-// copyTree copies src into dst, skipping .git. Symlinks are recreated as
-// symlinks (never followed), so the scratch tree has the same shape. The
-// scratch copy isolates the WORKING TREE from gates; it is not a sandbox: a
-// gate is a command you chose and runs with your permissions and environment.
-func copyTree(src, dst string) error {
+// treeDigest hashes every regular file's path and bytes and every symlink's
+// path and target under root (skipping .git and skip), in walk order.
+func treeDigest(root string, skip map[string]bool) (string, error) {
+	h := sha256.New()
+	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(root, p)
+		rel = filepath.ToSlash(rel)
+		if d.IsDir() {
+			if d.Name() == ".git" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if skip[rel] || strings.HasSuffix(rel, ".graft-tmp") {
+			return nil
+		}
+		switch {
+		case d.Type()&fs.ModeSymlink != 0:
+			to, err := os.Readlink(p)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(h, "L\x00%s\x00%s\x00", rel, to)
+		case d.Type().IsRegular():
+			b, err := os.ReadFile(p)
+			if err != nil {
+				return err
+			}
+			sum := sha256.Sum256(b)
+			fmt.Fprintf(h, "F\x00%s\x00%x\x00", rel, sum)
+		}
+		return nil
+	})
+	return hex.EncodeToString(h.Sum(nil)), err
+}
+
+// copyTree copies src into dst, skipping .git and skip. Symlinks are
+// recreated, never followed; an absolute link that points inside src is
+// rewritten to the same place inside dst, so a gate cannot reach the real
+// tree through it. The scratch copy isolates the WORKING TREE from gates; it
+// is not a sandbox: a gate runs with your permissions and environment.
+func copyTree(src, dst string, skip map[string]bool) error {
+	srcAbs, err := filepath.Abs(src)
+	if err != nil {
+		return err
+	}
 	return filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -200,10 +415,18 @@ func copyTree(src, dst string) error {
 			}
 			return os.MkdirAll(filepath.Join(dst, rel), 0o755)
 		}
+		if skip[filepath.ToSlash(rel)] {
+			return nil
+		}
 		if d.Type()&fs.ModeSymlink != 0 {
 			to, err := os.Readlink(p)
 			if err != nil {
 				return err
+			}
+			if filepath.IsAbs(to) {
+				if r, err := filepath.Rel(srcAbs, to); err == nil && r != ".." && !strings.HasPrefix(r, ".."+string(filepath.Separator)) {
+					to = filepath.Join(dst, r)
+				}
 			}
 			return os.Symlink(to, filepath.Join(dst, rel))
 		}

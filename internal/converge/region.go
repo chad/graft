@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	beginTag = "graft:synth:begin "
+	beginTag = "graft:synth:begin"
 	endTag   = "graft:synth:end"
 )
 
@@ -47,8 +47,14 @@ type Region struct {
 // Edited reports a hand edit inside the region since graft last wrote it.
 func (r Region) Edited() bool { return r.Actual != r.Owner.Body }
 
-// ErrUnterminated: a begin marker with no end marker. Never dropped silently.
-var ErrUnterminated = errors.New("converge: synthesis region has no end marker")
+var (
+	// ErrUnterminated: a begin marker with no matching end. Never dropped silently.
+	ErrUnterminated = errors.New("converge: synthesis region has no matching end marker")
+	// ErrBadMarker: a marker line that does not parse or is incomplete.
+	ErrBadMarker = errors.New("converge: bad synthesis marker")
+	// ErrDuplicateRegion: two regions in one file claim the same record.
+	ErrDuplicateRegion = errors.New("converge: two synthesis regions for one record in a file")
+)
 
 // HashBody is the hash a marker stores for a region body.
 func HashBody(body string) string {
@@ -57,29 +63,67 @@ func HashBody(body string) string {
 }
 
 func splitLines(b []byte) []string {
-	s := string(b)
-	if s == "" {
+	if len(b) == 0 {
 		return nil
 	}
-	return strings.SplitAfter(s, "\n")
+	return strings.SplitAfter(string(b), "\n")
+}
+
+// markerArg returns what follows tag on line when line IS a marker line: only
+// whitespace and comment punctuation may precede the tag, so a tag inside
+// code (a string literal, an identifier) is not a marker. Trailing block-
+// comment closers are stripped.
+func markerArg(line, tag string) (string, bool) {
+	at := strings.Index(line, tag)
+	if at < 0 {
+		return "", false
+	}
+	if strings.Trim(line[:at], " \t/#*;-<!") != "" {
+		return "", false
+	}
+	rest := strings.TrimSpace(line[at+len(tag):])
+	rest = strings.TrimSpace(strings.TrimSuffix(strings.TrimSuffix(rest, "*/"), "-->"))
+	return rest, true
+}
+
+type endArg struct {
+	Record string `json:"record"`
 }
 
 func parse(rel string, data []byte) ([]Region, error) {
 	lines := splitLines(data)
 	var out []Region
+	seen := map[string]int{}
 	for i := 0; i < len(lines); i++ {
-		at := strings.Index(lines[i], beginTag)
-		if at < 0 {
+		if arg, ok := markerArg(lines[i], endTag); ok {
+			return nil, fmt.Errorf("%w: %s line %d: end marker with no begin (%s)", ErrBadMarker, rel, i+1, arg)
+		}
+		arg, ok := markerArg(lines[i], beginTag)
+		if !ok {
 			continue
 		}
 		var o Owner
-		if err := json.Unmarshal([]byte(strings.TrimSpace(lines[i][at+len(beginTag):])), &o); err != nil {
-			return nil, fmt.Errorf("converge: %s line %d: bad marker: %w", rel, i+1, err)
+		if err := json.Unmarshal([]byte(arg), &o); err != nil {
+			return nil, fmt.Errorf("%w: %s line %d: %v", ErrBadMarker, rel, i+1, err)
 		}
+		if o.Record == "" || o.Body == "" || o.Tier == "" {
+			return nil, fmt.Errorf("%w: %s line %d: record, tier and body are required", ErrBadMarker, rel, i+1)
+		}
+		if prev, dup := seen[o.Record]; dup {
+			return nil, fmt.Errorf("%w: %s lines %d and %d both claim %s", ErrDuplicateRegion, rel, prev+1, i+1, o.Record)
+		}
+		seen[o.Record] = i
 		j := i + 1
-		for ; j < len(lines) && !strings.Contains(lines[j], endTag); j++ {
-			if strings.Contains(lines[j], beginTag) {
-				return nil, fmt.Errorf("%w: %s line %d (nested begin at line %d)", ErrUnterminated, rel, i+1, j+1)
+		for ; j < len(lines); j++ {
+			if _, nested := markerArg(lines[j], beginTag); nested {
+				return nil, fmt.Errorf("%w: %s line %d (a begin at line %d comes first)", ErrUnterminated, rel, i+1, j+1)
+			}
+			if earg, ok := markerArg(lines[j], endTag); ok {
+				var e endArg
+				if err := json.Unmarshal([]byte(earg), &e); err != nil || e.Record != o.Record {
+					return nil, fmt.Errorf("%w: %s line %d: end marker does not name %s", ErrBadMarker, rel, j+1, o.Record)
+				}
+				break
 			}
 		}
 		if j == len(lines) {
@@ -92,7 +136,7 @@ func parse(rel string, data []byte) ([]Region, error) {
 }
 
 // ReadRegions walks root and returns every synthesis region, sorted by path
-// then position. .git is skipped.
+// then position. .git is skipped; symlinks are not followed.
 func ReadRegions(root string) ([]Region, error) {
 	var out []Region
 	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
@@ -105,8 +149,11 @@ func ReadRegions(root string) ([]Region, error) {
 			}
 			return nil
 		}
+		if !d.Type().IsRegular() {
+			return nil
+		}
 		b, err := os.ReadFile(p)
-		if err != nil || !bytes.Contains(b, []byte(beginTag)) {
+		if err != nil || !bytes.Contains(b, []byte(beginTag)) && !bytes.Contains(b, []byte(endTag)) {
 			return err
 		}
 		rel, _ := filepath.Rel(root, p)
@@ -118,48 +165,42 @@ func ReadRegions(root string) ([]Region, error) {
 	return out, err
 }
 
-// write puts body into the region owned by o.Record in file path (relative to
-// root), creating the region at the end of the file, or the file, if needed.
-// The marker records the new body hash.
-func write(root, rel, comment string, o Owner, body string) error {
+func normalizeBody(body string) string {
 	if body != "" && !strings.HasSuffix(body, "\n") {
 		body += "\n"
 	}
+	return body
+}
+
+// render returns data with body placed in the region owned by o.Record,
+// creating the region at the end if there is none. The marker records the
+// body hash. It never reads the file: callers pass the bytes they checked.
+func render(rel string, data []byte, comment string, o Owner, body string) ([]byte, error) {
+	body = normalizeBody(body)
 	o.Body = HashBody(body)
 	mk, _ := json.Marshal(o)
-	begin := fmt.Sprintf("%s %s%s\n", comment, beginTag, mk)
-	end := fmt.Sprintf("%s %s\n", comment, endTag)
+	em, _ := json.Marshal(endArg{Record: o.Record})
+	begin := fmt.Sprintf("%s %s %s\n", comment, beginTag, mk)
+	end := fmt.Sprintf("%s %s %s\n", comment, endTag, em)
 
-	p := filepath.Join(root, filepath.FromSlash(rel))
-	data, err := os.ReadFile(p)
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return err
-	}
 	rs, err := parse(rel, data)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	lines := splitLines(data)
-	var next []string
-	replaced := false
 	for _, r := range rs {
 		if r.Owner.Record != o.Record {
 			continue
 		}
+		var next []string
 		next = append(next, lines[:r.begin]...)
 		next = append(next, begin, body, end)
 		next = append(next, lines[r.end+1:]...)
-		replaced = true
-		break
+		return []byte(strings.Join(next, "")), nil
 	}
-	if !replaced {
-		next = append(lines, begin, body, end)
-		if len(lines) > 0 && !strings.HasSuffix(lines[len(lines)-1], "\n") {
-			next = append(lines, "\n", begin, body, end)
-		}
+	out := string(data)
+	if out != "" && !strings.HasSuffix(out, "\n") {
+		out += "\n"
 	}
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-		return err
-	}
-	return os.WriteFile(p, []byte(strings.Join(next, "")), 0o644)
+	return []byte(out + begin + body + end), nil
 }

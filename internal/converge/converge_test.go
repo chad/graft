@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -161,7 +162,7 @@ func TestRegenerationReplacesOnlyItsOwnRegion(t *testing.T) {
 
 func TestUnterminatedRegionIsAnError(t *testing.T) {
 	root := t.TempDir()
-	os.WriteFile(filepath.Join(root, "x.go"), []byte("// "+beginTag+`{"record":"r"}`+"\nfunc F() {}\n"), 0o644)
+	os.WriteFile(filepath.Join(root, "x.go"), []byte("// "+beginTag+` {"record":"r","tier":"low","body":"x"}`+"\nfunc F() {}\n"), 0o644)
 	if _, err := ReadRegions(root); !errors.Is(err, ErrUnterminated) {
 		t.Fatalf("err = %v", err)
 	}
@@ -271,10 +272,185 @@ func TestScratchKeepsSymlinksAsSymlinks(t *testing.T) {
 	src, dst := t.TempDir(), t.TempDir()
 	os.WriteFile(filepath.Join(src, "a"), []byte("a"), 0o644)
 	os.Symlink("a", filepath.Join(src, "b"))
-	if err := copyTree(src, dst); err != nil {
+	if err := copyTree(src, dst, nil); err != nil {
 		t.Fatal(err)
 	}
 	if to, err := os.Readlink(filepath.Join(dst, "b")); err != nil || to != "a" {
 		t.Fatalf("symlink not preserved: %q %v", to, err)
+	}
+}
+
+type verdictGate struct {
+	kind evidence.Kind
+	v    evidence.Verdict
+}
+
+func (g verdictGate) Name() string        { return string(g.kind) + ":" + string(g.v) }
+func (g verdictGate) Kind() evidence.Kind { return g.kind }
+func (g verdictGate) Run(context.Context, string) (evidence.Verdict, string, error) {
+	return g.v, "", nil
+}
+
+// Review on #6 (1): a failing gate is not masked by a later passing gate of the same kind.
+func TestSameKindFailIsNotMasked(t *testing.T) {
+	c, root := setup(t, verdictGate{evidence.TestRun, evidence.Fail}, verdictGate{evidence.TestRun, evidence.Pass})
+	d, err := c.Converge(context.Background(), cand("func F() {}"))
+	if err != nil || d.Applied {
+		t.Fatalf("applied despite a failing gate: %+v %v", d, err)
+	}
+	if read(t, root) != "package app\n" {
+		t.Fatal("tree changed")
+	}
+}
+
+// Every gate must pass, even one whose kind the tier does not require.
+func TestAnyFailingGateBlocks(t *testing.T) {
+	c, _ := setup(t, verdictGate{evidence.TestRun, evidence.Pass}, verdictGate{evidence.StaticAnalysis, evidence.Fail})
+	if d, err := c.Converge(context.Background(), cand("func F() {}")); err != nil || d.Applied {
+		t.Fatalf("%+v %v", d, err)
+	}
+}
+
+// Review on #6 (2): an earlier run's executable evidence never stands in for this run.
+func TestEarlierRunEvidenceIsNotReused(t *testing.T) {
+	c, _ := setup(t, verdictGate{evidence.TestRun, evidence.Pass})
+	if d, err := c.Converge(context.Background(), cand("func F() {}")); err != nil || !d.Applied {
+		t.Fatalf("run 1: %+v %v", d, err)
+	}
+	c.Gates = []Gate{verdictGate{evidence.Eval, evidence.Fail}} // no TestRun this time
+	k := cand("func F() {}")
+	_, err := c.Converge(context.Background(), k)
+	if !errors.Is(err, ErrUncovered) {
+		t.Fatalf("err = %v, want ErrUncovered", err)
+	}
+}
+
+// Non-executable kinds (a human sign-off on exactly this pin) do come from the log.
+func TestHumanSignoffFromLogCounts(t *testing.T) {
+	c, root := setup(t, verdictGate{evidence.TestRun, evidence.Pass})
+	k := cand("func F() {}")
+	k.Tier = "high"
+	pin := evidence.Pin{RecordID: k.RecordID, Version: k.Version, GenHash: k.GenHash, SpecHash: k.SpecHash,
+		RegionHash: HashBody("func F() {}\n")}
+	if _, err := c.Log.Append(evidence.Evidence{Kind: evidence.HumanSignoff, Verdict: evidence.Pass, Pin: pin, By: "did:plc:x"}); err != nil {
+		t.Fatal(err)
+	}
+	if d, err := c.Converge(context.Background(), k); err != nil || !d.Applied {
+		t.Fatalf("%+v %v", d, err)
+	}
+	if !strings.Contains(read(t, root), "func F() {}") {
+		t.Fatal("not applied")
+	}
+}
+
+// Review on #6 (3): marker tags in a body are refused, even inside a string literal.
+func TestMarkerInBodyIsRefused(t *testing.T) {
+	c, root := setup(t, verdictGate{evidence.TestRun, evidence.Pass})
+	for _, body := range []string{`var s = "graft:synth:end"`, "// graft:synth:begin {}"} {
+		if _, err := c.Converge(context.Background(), cand(body)); !errors.Is(err, ErrMarkerInBody) {
+			t.Errorf("%q: err = %v", body, err)
+		}
+	}
+	if read(t, root) != "package app\n" {
+		t.Fatal("tree changed")
+	}
+}
+
+func TestGateRunErrorAppliesNothing(t *testing.T) {
+	c, root := setup(t)
+	c.Gates = []Gate{CommandGate{Label: "missing", Argv: []string{"no-such-binary-graft"}, As: evidence.TestRun}}
+	d, err := c.Converge(context.Background(), cand("func F() {}"))
+	if err == nil || d.Applied || read(t, root) != "package app\n" {
+		t.Fatalf("%+v %v", d, err)
+	}
+}
+
+func TestOtherFileChangingDuringGatesBlocks(t *testing.T) {
+	c, root := setup(t)
+	c.Gates = []Gate{otherFileGate{root}}
+	d, err := c.Converge(context.Background(), cand("func F() {}"))
+	if !errors.Is(err, ErrChanged) || d.Applied {
+		t.Fatalf("%+v %v", d, err)
+	}
+}
+
+type otherFileGate struct{ root string }
+
+func (g otherFileGate) Name() string        { return "other" }
+func (g otherFileGate) Kind() evidence.Kind { return evidence.TestRun }
+func (g otherFileGate) Run(context.Context, string) (evidence.Verdict, string, error) {
+	os.WriteFile(filepath.Join(g.root, "other.go"), []byte("package app\n"), 0o644)
+	return evidence.Pass, "", nil
+}
+
+func TestModeIsPreserved(t *testing.T) {
+	c, root := setup(t, verdictGate{evidence.TestRun, evidence.Pass})
+	os.Chmod(filepath.Join(root, "app.go"), 0o600)
+	if d, err := c.Converge(context.Background(), cand("func F() {}")); err != nil || !d.Applied {
+		t.Fatalf("%+v %v", d, err)
+	}
+	if fi, _ := os.Stat(filepath.Join(root, "app.go")); fi.Mode().Perm() != 0o600 {
+		t.Fatalf("mode %v", fi.Mode().Perm())
+	}
+}
+
+// Review on #6 (5): an absolute symlink into the real tree is rewritten into scratch.
+func TestAbsoluteSymlinkIntoRootIsRewritten(t *testing.T) {
+	src, dst := t.TempDir(), t.TempDir()
+	os.WriteFile(filepath.Join(src, "a"), []byte("a"), 0o644)
+	abs, _ := filepath.Abs(filepath.Join(src, "a"))
+	os.Symlink(abs, filepath.Join(src, "b"))
+	if err := copyTree(src, dst, nil); err != nil {
+		t.Fatal(err)
+	}
+	to, _ := os.Readlink(filepath.Join(dst, "b"))
+	if strings.HasPrefix(to, src) || to != filepath.Join(dst, "a") {
+		t.Fatalf("link points at %q", to)
+	}
+}
+
+// Review on #6 (6): a timeout kills the gate's children too.
+func TestTimeoutKillsChildren(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix")
+	}
+	start := time.Now()
+	v, _, err := CommandGate{Label: "sleepy", Argv: []string{"sh", "-c", "sleep 30 & sleep 30; wait"}, As: evidence.TestRun,
+		Timeout: 200 * time.Millisecond}.Run(context.Background(), t.TempDir())
+	if err != nil || v != evidence.Inconclusive {
+		t.Fatalf("%s %v", v, err)
+	}
+	if el := time.Since(start); el > 3*time.Second {
+		t.Fatalf("took %s: children outlived the timeout", el)
+	}
+}
+
+func TestMarkerParsingIsStrict(t *testing.T) {
+	ok := `{"record":"r","tier":"low","body":"` + HashBody("x\n") + `"}`
+	cases := map[string]struct {
+		src  string
+		want error
+	}{
+		"end without begin":  {"// graft:synth:end {\"record\":\"r\"}\n", ErrBadMarker},
+		"empty owner":        {"// graft:synth:begin {}\nx\n// graft:synth:end {\"record\":\"\"}\n", ErrBadMarker},
+		"end names another":  {"// graft:synth:begin " + ok + "\nx\n// graft:synth:end {\"record\":\"q\"}\n", ErrBadMarker},
+		"duplicate record":   {"// graft:synth:begin " + ok + "\nx\n// graft:synth:end {\"record\":\"r\"}\n// graft:synth:begin " + ok + "\nx\n// graft:synth:end {\"record\":\"r\"}\n", ErrDuplicateRegion},
+		"tag inside code":    {`const t = "graft:synth:begin {}"` + "\n", nil},
+		"block comment form": {"/* graft:synth:begin " + ok + " */\nx\n/* graft:synth:end {\"record\":\"r\"} */\n", nil},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := parse("f", []byte(c.src))
+			if c.want == nil && err != nil || c.want != nil && !errors.Is(err, c.want) {
+				t.Fatalf("err = %v, want %v", err, c.want)
+			}
+		})
+	}
+}
+
+// Graft's own source mentions the tags in code; that must not read as markers.
+func TestReadRegionsOnGraftItself(t *testing.T) {
+	if _, err := ReadRegions("../.."); err != nil {
+		t.Fatal(err)
 	}
 }

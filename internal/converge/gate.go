@@ -1,11 +1,11 @@
 package converge
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"os/exec"
+	"sync"
 	"time"
 
 	"github.com/chad/graft/internal/evidence"
@@ -21,6 +21,7 @@ type Gate interface {
 
 // CommandGate runs a command in the candidate tree: exit 0 passes, any other
 // exit fails, a timeout is inconclusive. argv is executed directly, no shell.
+// On timeout the whole process group is killed, not just the direct child.
 type CommandGate struct {
 	Label   string
 	Argv    []string
@@ -30,6 +31,9 @@ type CommandGate struct {
 
 func (g CommandGate) Name() string        { return g.Label }
 func (g CommandGate) Kind() evidence.Kind { return g.As }
+
+// maxOutput caps what a gate's output can cost in memory; the tail is kept.
+const maxOutput = 64 << 10
 
 func (g CommandGate) Run(ctx context.Context, dir string) (evidence.Verdict, string, error) {
 	if len(g.Argv) == 0 {
@@ -43,10 +47,15 @@ func (g CommandGate) Run(ctx context.Context, dir string) (evidence.Verdict, str
 	defer cancel()
 	cmd := exec.CommandContext(ctx, g.Argv[0], g.Argv[1:]...)
 	cmd.Dir = dir
-	var out bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &out, &out
+	out := &tailWriter{max: maxOutput}
+	cmd.Stdout, cmd.Stderr = out, out
+	killGroupOnCancel(cmd)
+	cmd.WaitDelay = 2 * time.Second
 	err := cmd.Run()
-	detail := tail(out.String(), 2000)
+	detail := out.String()
+	if len(detail) > 2000 {
+		detail = "…" + detail[len(detail)-2000:]
+	}
 	var exit *exec.ExitError
 	switch {
 	case ctx.Err() == context.DeadlineExceeded:
@@ -60,9 +69,25 @@ func (g CommandGate) Run(ctx context.Context, dir string) (evidence.Verdict, str
 	}
 }
 
-func tail(s string, n int) string {
-	if len(s) <= n {
-		return s
+// tailWriter keeps the last max bytes written.
+type tailWriter struct {
+	mu  sync.Mutex
+	max int
+	buf []byte
+}
+
+func (w *tailWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.buf = append(w.buf, p...)
+	if len(w.buf) > w.max {
+		w.buf = append([]byte(nil), w.buf[len(w.buf)-w.max:]...)
 	}
-	return "…" + s[len(s)-n:]
+	return len(p), nil
+}
+
+func (w *tailWriter) String() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return string(w.buf)
 }
