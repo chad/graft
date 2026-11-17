@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/chad/graft/internal/evidence"
 )
@@ -18,6 +19,16 @@ const Guarantee = "checked"
 // ErrHandEdited: the existing synthesis region was hand-edited since graft
 // wrote it, so graft refuses to overwrite it (the same rule as sedum regions).
 var ErrHandEdited = errors.New("converge: synthesis region was hand-edited; refusing to overwrite")
+
+// ErrNoGates: nothing would be checked, so "checked" would be a false claim.
+var ErrNoGates = errors.New("converge: no gates configured; refusing to claim a candidate was checked")
+
+// ErrChanged: the target file changed while gates ran; the result no longer
+// speaks for what is on disk, so nothing is written.
+var ErrChanged = errors.New("converge: target file changed during convergence; not applied")
+
+// ErrBadPath: the candidate path is absolute, escapes the root, or is a symlink.
+var ErrBadPath = errors.New("converge: candidate path must be a regular file inside the root")
 
 // Candidate is a proposed body for one record's synthesis region.
 type Candidate struct {
@@ -61,7 +72,18 @@ func (c Converger) Converge(ctx context.Context, cand Candidate) (Decision, erro
 	if _, ok := c.Policy[cand.Tier]; !ok {
 		return d, fmt.Errorf("%w: %q", evidence.ErrUnknownTier, cand.Tier)
 	}
-	if err := c.refuseHandEdits(cand); err != nil {
+	if len(c.Gates) == 0 {
+		return d, ErrNoGates
+	}
+	target, err := c.target(cand.Path)
+	if err != nil {
+		return d, err
+	}
+	before, err := readOptional(target)
+	if err != nil {
+		return d, err
+	}
+	if err := refuseHandEdits(cand, before); err != nil {
 		return d, err
 	}
 	owner := Owner{Record: cand.RecordID, Version: cand.Version, Gen: cand.GenHash, Tier: cand.Tier}
@@ -105,6 +127,15 @@ func (c Converger) Converge(ctx context.Context, cand Candidate) (Decision, erro
 	if !d.Result.Satisfied {
 		return d, nil
 	}
+	// The gates checked the tree as it was when copied. If the target changed
+	// since (a hand edit, another writer), that check does not cover it.
+	now, err := readOptional(target)
+	if err != nil {
+		return d, err
+	}
+	if string(now) != string(before) {
+		return d, ErrChanged
+	}
 	if err := write(c.Root, cand.Path, cand.Comment, owner, cand.Body); err != nil {
 		return d, err
 	}
@@ -112,15 +143,35 @@ func (c Converger) Converge(ctx context.Context, cand Candidate) (Decision, erro
 	return d, nil
 }
 
-func (c Converger) refuseHandEdits(cand Candidate) error {
-	p := filepath.Join(c.Root, filepath.FromSlash(cand.Path))
-	data, err := os.ReadFile(p)
+// target resolves a candidate path inside Root, refusing absolute paths,
+// escapes and symlinks.
+func (c Converger) target(rel string) (string, error) {
+	clean := filepath.Clean(filepath.FromSlash(rel))
+	if rel == "" || filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("%w: %q", ErrBadPath, rel)
+	}
+	p := filepath.Join(c.Root, clean)
+	if fi, err := os.Lstat(p); err == nil && !fi.Mode().IsRegular() {
+		return "", fmt.Errorf("%w: %q is not a regular file", ErrBadPath, rel)
+	}
+	// No parent directory may be a symlink either: it could lead outside Root.
+	for dir := filepath.Dir(clean); dir != "."; dir = filepath.Dir(dir) {
+		if fi, err := os.Lstat(filepath.Join(c.Root, dir)); err == nil && fi.Mode()&fs.ModeSymlink != 0 {
+			return "", fmt.Errorf("%w: %q passes through a symlink", ErrBadPath, rel)
+		}
+	}
+	return p, nil
+}
+
+func readOptional(p string) ([]byte, error) {
+	b, err := os.ReadFile(p)
 	if errors.Is(err, fs.ErrNotExist) {
-		return nil
+		return nil, nil
 	}
-	if err != nil {
-		return err
-	}
+	return b, err
+}
+
+func refuseHandEdits(cand Candidate, data []byte) error {
 	rs, err := parse(cand.Path, data)
 	if err != nil {
 		return err
@@ -133,7 +184,10 @@ func (c Converger) refuseHandEdits(cand Candidate) error {
 	return nil
 }
 
-// copyTree copies src into dst, skipping .git. Symlinks are not followed.
+// copyTree copies src into dst, skipping .git. Symlinks are recreated as
+// symlinks (never followed), so the scratch tree has the same shape. The
+// scratch copy isolates the WORKING TREE from gates; it is not a sandbox: a
+// gate is a command you chose and runs with your permissions and environment.
 func copyTree(src, dst string) error {
 	return filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -145,6 +199,13 @@ func copyTree(src, dst string) error {
 				return filepath.SkipDir
 			}
 			return os.MkdirAll(filepath.Join(dst, rel), 0o755)
+		}
+		if d.Type()&fs.ModeSymlink != 0 {
+			to, err := os.Readlink(p)
+			if err != nil {
+				return err
+			}
+			return os.Symlink(to, filepath.Join(dst, rel))
 		}
 		if !d.Type().IsRegular() {
 			return nil

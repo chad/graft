@@ -214,3 +214,67 @@ func TestRealGoGate(t *testing.T) {
 		t.Fatalf("valid code rejected: %+v %v", d, err)
 	}
 }
+
+func TestNoGatesIsRefused(t *testing.T) {
+	c, root := setup(t)
+	c.Policy["none"] = []evidence.Kind{}
+	k := cand("func F() {}")
+	k.Tier = "none"
+	if _, err := c.Converge(context.Background(), k); !errors.Is(err, ErrNoGates) {
+		t.Fatalf("err = %v", err)
+	}
+	if read(t, root) != "package app\n" {
+		t.Fatal("applied with nothing checked")
+	}
+}
+
+// changingGate edits the REAL tree while it runs, as a person or another writer might.
+type changingGate struct{ root string }
+
+func (g changingGate) Name() string        { return "changer" }
+func (g changingGate) Kind() evidence.Kind { return evidence.TestRun }
+func (g changingGate) Run(context.Context, string) (evidence.Verdict, string, error) {
+	os.WriteFile(filepath.Join(g.root, "app.go"), []byte("package app\n// edited meanwhile\n"), 0o644)
+	return evidence.Pass, "", nil
+}
+
+func TestChangeDuringConvergenceIsNotOverwritten(t *testing.T) {
+	c, root := setup(t)
+	c.Gates = []Gate{changingGate{root}}
+	d, err := c.Converge(context.Background(), cand("func F() {}"))
+	if !errors.Is(err, ErrChanged) || d.Applied {
+		t.Fatalf("err = %v, applied = %v", err, d.Applied)
+	}
+	if !strings.Contains(read(t, root), "edited meanwhile") {
+		t.Fatal("the concurrent edit was clobbered")
+	}
+}
+
+func TestCandidatePathMustStayInsideRoot(t *testing.T) {
+	c, root := setup(t, fakeGate{file: "app.go", want: "", kind: evidence.TestRun})
+	outside := t.TempDir()
+	os.Symlink(outside, filepath.Join(root, "link"))
+	os.Symlink(filepath.Join(outside, "f.go"), filepath.Join(root, "f.go"))
+	for _, p := range []string{"../escape.go", "/etc/x.go", "link/x.go", "f.go", ""} {
+		k := cand("func F() {}")
+		k.Path = p
+		if _, err := c.Converge(context.Background(), k); !errors.Is(err, ErrBadPath) {
+			t.Errorf("%q: err = %v", p, err)
+		}
+	}
+	if entries, _ := os.ReadDir(outside); len(entries) != 0 {
+		t.Fatalf("wrote outside the root: %v", entries)
+	}
+}
+
+func TestScratchKeepsSymlinksAsSymlinks(t *testing.T) {
+	src, dst := t.TempDir(), t.TempDir()
+	os.WriteFile(filepath.Join(src, "a"), []byte("a"), 0o644)
+	os.Symlink("a", filepath.Join(src, "b"))
+	if err := copyTree(src, dst); err != nil {
+		t.Fatal(err)
+	}
+	if to, err := os.Readlink(filepath.Join(dst, "b")); err != nil || to != "a" {
+		t.Fatalf("symlink not preserved: %q %v", to, err)
+	}
+}
