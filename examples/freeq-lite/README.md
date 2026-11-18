@@ -139,5 +139,6 @@ reference against every v1 check, and the v2 reference against all 51.
 `conventions.md` tells the model about the dead-function rule. One run with
 both gates (claude sonnet, **n=1, an anecdote**) converged 7/7 regions on the
 first attempt with no gate retries, and the 47-check oracle scored it 47/47.
-Three trees generated before the convention existed each fail the dead-function
-gate on one unused helper, which in those runs would have cost a retry.
+Three of chad-bot's trees generated before the convention existed each fail
+the dead-function gate on one unused helper, which in those runs would have
+cost a retry; livecodelife's agent reports a Haiku tree that passes it.

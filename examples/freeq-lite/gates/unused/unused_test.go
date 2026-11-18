@@ -91,6 +91,18 @@ func TestReviewCases(t *testing.T) {
 		"through sort.Interface": {map[string]string{
 			"a.go": "package main\n\nimport \"sort\"\n\ntype byLen []string\n\nfunc (b byLen) Len() int { return len(b) }\nfunc (b byLen) Less(i, j int) bool { return less(b[i], b[j]) }\nfunc (b byLen) Swap(i, j int) { b[i], b[j] = b[j], b[i] }\n\nfunc main() { sort.Sort(byLen{\"a\"}) }\n\nfunc less(a, b string) bool { return len(a) < len(b) }\n",
 		}, true},
+		"through the package's own interface": {map[string]string{
+			"a.go": "package main\n\ntype handler interface{ handle() }\n\ntype join struct{}\n\nfunc (join) handle() { helper() }\n\nfunc main() { var h handler = join{}; h.handle() }\n\nfunc helper() {}\n",
+		}, true},
+		"generic type method": {map[string]string{
+			"a.go": "package main\n\ntype box[T any] struct{ v T }\n\nfunc (b box[T]) get() T { helper(); return b.v }\n\nfunc main() { _ = box[int]{}.get() }\n\nfunc helper() {}\n",
+		}, true},
+		"exported method (reflection)": {map[string]string{
+			"a.go": "package main\n\nimport \"reflect\"\n\ntype T struct{}\n\nfunc (T) Run() { helper() }\n\nfunc main() { reflect.ValueOf(T{}).MethodByName(\"Run\").Call(nil) }\n\nfunc helper() {}\n",
+		}, true},
+		"var _ = f inside a function": {map[string]string{
+			"a.go": "package main\n\nfunc main() { var _ = helper }\n\nfunc helper() {}\n",
+		}, false},
 		"promoted method": {map[string]string{
 			"a.go": "package main\n\ntype base struct{}\n\nfunc (base) Hello() { helper() }\n\ntype outer struct{ base }\n\nfunc main() { outer{}.Hello() }\n\nfunc helper() {}\n",
 		}, true},

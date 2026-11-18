@@ -12,10 +12,10 @@
 //     initializer makes (they run at program start);
 //   - a variable is live only if live code reads it, so a function stored in
 //     a never-read global map is dead;
-//   - a method is live if live code selects it, or if its name is a method of
-//     a common interface (String, Error, Read, Write, Close, ServeHTTP, Len,
-//     Less, Swap, MarshalJSON, UnmarshalJSON), since calls through an
-//     interface are not visible statically;
+//   - a method is live if live code selects it (directly, or through any
+//     interface method of the same name), if it is exported, or if its name
+//     is a method of a common standard-library interface: calls through an
+//     interface or reflection are not visible statically;
 //   - `_ = f`, `_ = (f)` and `var _ = f` silence the compiler and are not uses.
 //
 // Run in the generated tree: go run <path>/unused.go
@@ -73,10 +73,24 @@ func main() {
 		fail("type-check failed")
 	}
 
-	// Identifiers that only silence the compiler: `_ = f` and `_ = (f)`.
+	// Identifiers that only silence the compiler: `_ = f`, `_ = (f)`, and
+	// `var _ = f` at package level or inside a function.
 	silenced := map[*ast.Ident]bool{}
 	for _, f := range files {
 		ast.Inspect(f, func(m ast.Node) bool {
+			if vs, ok := m.(*ast.ValueSpec); ok {
+				blank := true
+				for _, n := range vs.Names {
+					blank = blank && n.Name == "_"
+				}
+				if blank {
+					for _, v := range vs.Values {
+						if r, ok := unparen(v).(*ast.Ident); ok {
+							silenced[r] = true
+						}
+					}
+				}
+			}
 			if as, ok := m.(*ast.AssignStmt); ok && len(as.Lhs) == len(as.Rhs) {
 				for i, l := range as.Lhs {
 					if id, ok := l.(*ast.Ident); ok && id.Name == "_" {
@@ -89,13 +103,34 @@ func main() {
 			return true
 		})
 	}
+	// Methods of the package by name, for calls made through an interface:
+	// selecting I.M on an interface marks every package method named M.
+	methodsByName := map[string][]types.Object{}
+	for _, f := range files {
+		for _, d := range f.Decls {
+			if fd, ok := d.(*ast.FuncDecl); ok && fd.Recv != nil {
+				if o := info.Defs[fd.Name]; o != nil {
+					methodsByName[fd.Name.Name] = append(methodsByName[fd.Name.Name], o)
+				}
+			}
+		}
+	}
 	refs := func(n ast.Node) []types.Object {
 		var out []types.Object
 		ast.Inspect(n, func(m ast.Node) bool {
-			if id, ok := m.(*ast.Ident); ok && !silenced[id] {
-				if o := info.Uses[id]; o != nil && (isPkgLevel(o, pkg) || isMethodOf(o, pkg)) {
-					out = append(out, o)
+			id, ok := m.(*ast.Ident)
+			if !ok || silenced[id] {
+				return true
+			}
+			o := info.Uses[id]
+			if fn, ok := o.(*types.Func); ok {
+				o = fn.Origin() // a method of an instantiated generic type
+				if sig, _ := fn.Type().(*types.Signature); sig != nil && sig.Recv() != nil && types.IsInterface(sig.Recv().Type()) {
+					out = append(out, methodsByName[fn.Name()]...)
 				}
+			}
+			if o != nil && (isPkgLevel(o, pkg) || isMethodOf(o, pkg)) {
+				out = append(out, o)
 			}
 			return true
 		})
@@ -142,7 +177,9 @@ func main() {
 				case test || (x.Recv == nil && (x.Name.Name == "main" || x.Name.Name == "init")):
 					edges[start] = append(edges[start], obj)
 				case x.Recv != nil:
-					if interfaceMethods[x.Name.Name] {
+					// Exported methods, and names from common interfaces, may be
+					// called through an interface or reflection: treat as live.
+					if interfaceMethods[x.Name.Name] || ast.IsExported(x.Name.Name) {
 						edges[start] = append(edges[start], obj)
 					}
 				default:
