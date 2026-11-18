@@ -2,6 +2,8 @@ package bench
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -59,15 +61,14 @@ func TestCompareNeverGivesAVerdictOnOverlap(t *testing.T) {
 }
 
 func rec(arm Arm, commit string, res Resolution, outcomes ...Outcome) Record {
-	r := Record{Case: "todo", Arm: arm, Commit: commit, Fixture: "fx1", Resolution: res}
+	r := Record{Case: "todo", Arm: arm, Commit: commit, Fixture: "fx1", Model: "m1", Resolution: res}
 	for _, o := range outcomes {
 		s := Sample{Outcome: o, Checks: 10, Passed: 10}
 		if o != Works {
 			s.Passed = 3
-			s.Layer = LayerConvergence
 		}
 		if o == Unreachable {
-			s.Checks, s.Passed, s.Layer = 0, 0, ""
+			s.Checks, s.Passed = 0, 0
 		}
 		r.Samples = append(r.Samples, s)
 	}
@@ -76,17 +77,21 @@ func rec(arm Arm, commit string, res Resolution, outcomes ...Outcome) Record {
 
 func five(o Outcome) []Outcome { return []Outcome{o, o, o, o, o} }
 
+func with(r Record, f func(*Record)) Record { f(&r); return r }
+
 func TestCitable(t *testing.T) {
 	cases := map[string]struct {
 		r    Record
 		want bool
 	}{
-		"coarse full":   {rec(ArmGraft, "c1", Coarse, five(Works)...), true},
-		"smoke":         {rec(ArmGraft, "c1", Smoke, Works, Works), false},
-		"unstated":      {rec(ArmGraft, "c1", Unstated, five(Works)...), false},
-		"short":         {rec(ArmGraft, "c1", Coarse, Works, Works), false},
-		"dirty":         {func() Record { r := rec(ArmGraft, "c1", Coarse, five(Works)...); r.Dirty = true; return r }(), false},
-		"no resolution": {rec(ArmGraft, "c1", "", five(Works)...), false},
+		"coarse full":        {rec(ArmGraft, "c1", Coarse, five(Works)...), true},
+		"smoke":              {rec(ArmGraft, "c1", Smoke, Works, Works), false},
+		"unstated":           {rec(ArmGraft, "c1", Unstated, five(Works)...), false},
+		"short":              {rec(ArmGraft, "c1", Coarse, Works, Works), false},
+		"dirty":              {with(rec(ArmGraft, "c1", Coarse, five(Works)...), func(r *Record) { r.Dirty = true }), false},
+		"no resolution":      {rec(ArmGraft, "c1", "", five(Works)...), false},
+		"unknown resolution": {rec(ArmGraft, "c1", "huge", five(Works)...), false},
+		"all unreachable":    {rec(ArmGraft, "c1", Coarse, five(Unreachable)...), false},
 	}
 	for name, c := range cases {
 		if ok, why := c.r.Citable(); ok != c.want {
@@ -97,38 +102,104 @@ func TestCitable(t *testing.T) {
 
 func TestStoreAppendLoadAndRefusals(t *testing.T) {
 	s := Store{Dir: t.TempDir()}
-	if err := s.Append(rec(ArmGraft, "c1", Coarse, five(Works)...)); err != nil {
+	a, err := s.Append(rec(ArmGraft, "c1", Coarse, five(Works)...))
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Append(rec(ArmBaseline, "c1", Coarse, five(Works)...)); err != nil {
+	b, err := s.Append(rec(ArmBaseline, "c1", Coarse, five(Works)...))
+	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := s.Load("todo")
-	if err != nil || len(got) != 2 || got[0].Schema != Schema || got[0].At.IsZero() {
-		t.Fatalf("%v %+v", err, got)
+	if a.ID == "" || a.ID == b.ID {
+		t.Fatalf("ids %q %q", a.ID, b.ID)
 	}
-	bad := []Record{
+	got, bad, err := s.Load("todo")
+	if err != nil || len(bad) != 0 || len(got) != 2 || got[0].Schema != Schema || got[0].ID != a.ID {
+		t.Fatalf("%v %v %+v", err, bad, got)
+	}
+	for i, r := range []Record{
 		rec("oracle", "c1", Coarse, Works),
 		rec(ArmGraft, "c1", Coarse, "great"),
-		func() Record { r := rec(ArmGraft, "c1", Coarse, Works); r.Case = "../escape"; return r }(),
-		func() Record { r := rec(ArmGraft, "c1", Coarse, Works); r.Samples[0].Passed = 11; return r }(),
-	}
-	for i, r := range bad {
-		if err := s.Append(r); err == nil {
+		with(rec(ArmGraft, "c1", Coarse, Works), func(r *Record) { r.Case = "../escape" }),
+		with(rec(ArmGraft, "c1", Coarse, Works), func(r *Record) { r.Samples[0].Passed = 11 }),
+	} {
+		if _, err := s.Append(r); err == nil {
 			t.Errorf("bad record %d accepted", i)
 		}
 	}
 }
 
-func TestAggregateNeverPoolsAcrossCommitsOrFixtures(t *testing.T) {
+// Review on #8: a torn last line must not glue onto the next append and
+// poison the whole case.
+func TestTornLineDoesNotPoisonTheCase(t *testing.T) {
+	s := Store{Dir: t.TempDir()}
+	if _, err := s.Append(rec(ArmGraft, "c1", Coarse, five(Works)...)); err != nil {
+		t.Fatal(err)
+	}
+	f, _ := os.OpenFile(filepath.Join(s.Dir, "todo.jsonl"), os.O_APPEND|os.O_WRONLY, 0)
+	f.WriteString(`{"schema":2,"case":"todo","arm":"gra`)
+	f.Close()
+	if _, err := s.Append(rec(ArmBaseline, "c1", Coarse, five(Works)...)); err != nil {
+		t.Fatal(err)
+	}
+	got, bad, err := s.Load("todo")
+	if err != nil || len(got) != 2 || len(bad) != 1 || bad[0].Line != 2 {
+		t.Fatalf("records=%d corrupt=%+v err=%v", len(got), bad, err)
+	}
+	var b bytes.Buffer
+	Report(&b, "todo", got, nil, bad)
+	if !strings.Contains(b.String(), "Corrupt log lines, counted in nothing (1)") {
+		t.Fatal(b.String())
+	}
+}
+
+func TestAttribution(t *testing.T) {
+	s := Store{Dir: t.TempDir()}
+	r, _ := s.Append(rec(ArmGraft, "c1", Coarse, Works, Works, Disagreed, Broke, Broke))
+	ok := []Attribution{
+		{RecordID: r.ID, SampleIdx: 2, Layers: []Layer{LayerConvergence}, Reason: "gate passed, behaviour wrong", By: "x"},
+		{RecordID: r.ID, SampleIdx: 3, Layers: []Layer{LayerSelection, LayerRender}, Reason: "both", By: "x"},
+		{RecordID: r.ID, SampleIdx: 3, Layers: []Layer{LayerSelection}, Reason: "re-attributed", By: "x"}, // latest wins
+	}
+	for _, a := range ok {
+		if err := s.Attribute("todo", a); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i, a := range []Attribution{
+		{RecordID: r.ID, SampleIdx: 0, Layers: []Layer{LayerRender}},               // a working sample
+		{RecordID: r.ID, SampleIdx: 9, Layers: []Layer{LayerRender}},               // no such sample
+		{RecordID: "nope", SampleIdx: 2, Layers: []Layer{LayerRender}},             // no such record
+		{RecordID: r.ID, SampleIdx: 2, Layers: []Layer{"vibes"}},                   // unknown layer
+		{RecordID: r.ID, SampleIdx: 2},                                             // no layer
+		{RecordID: r.ID, SampleIdx: 2, Layers: []Layer{LayerUnknown, LayerRender}}, // unknown + named
+	} {
+		if err := s.Attribute("todo", a); err == nil {
+			t.Errorf("bad attribution %d accepted", i)
+		}
+	}
+	recs, _, _ := s.Load("todo")
+	attrs, _, _ := s.LoadAttributions("todo")
+	parts, _, err := Aggregate(recs, attrs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := parts[0]
+	if p.ByLayer[LayerConvergence] != 1 || p.ByLayer[LayerSelection] != 1 || p.ByLayer[LayerRender] != 0 || p.Unattributed != 1 {
+		t.Fatalf("%+v unattributed=%d", p.ByLayer, p.Unattributed)
+	}
+}
+
+func TestAggregateNeverPoolsAcrossCommitsFixturesOrModels(t *testing.T) {
 	recs := []Record{
 		rec(ArmGraft, "before-fix", Coarse, five(Broke)...),
 		rec(ArmGraft, "after-fix", Coarse, five(Works)...),
-		func() Record { r := rec(ArmGraft, "after-fix", Coarse, five(Works)...); r.Fixture = "fx2"; return r }(),
+		with(rec(ArmGraft, "after-fix", Coarse, five(Works)...), func(r *Record) { r.Fixture = "fx2" }),
+		with(rec(ArmGraft, "after-fix", Coarse, five(Works)...), func(r *Record) { r.Model = "m2" }),
 	}
-	parts, _, err := Aggregate(recs)
-	if err != nil || len(parts) != 3 {
-		t.Fatalf("%v: %d partitions, want 3", err, len(parts))
+	parts, _, err := Aggregate(recs, nil)
+	if err != nil || len(parts) != 4 {
+		t.Fatalf("%v: %d partitions, want 4", err, len(parts))
 	}
 	for _, p := range parts {
 		if p.Works.N != 5 {
@@ -137,24 +208,29 @@ func TestAggregateNeverPoolsAcrossCommitsOrFixtures(t *testing.T) {
 	}
 }
 
+// Review on #8: comparisons only within one fixture, commit and model.
+func TestNoComparisonAcrossCommitsOrModels(t *testing.T) {
+	recs := []Record{
+		rec(ArmGraft, "c1", Coarse, five(Works)...),
+		rec(ArmBaseline, "c2", Coarse, five(Broke)...),
+		with(rec(ArmIntent, "c1", Coarse, five(Broke)...), func(r *Record) { r.Model = "m2" }),
+	}
+	var b bytes.Buffer
+	if err := Report(&b, "todo", recs, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(b.String(), "distinguish") {
+		t.Fatalf("compared across commit or model:\n%s", b.String())
+	}
+}
+
 func TestUnreachableIsNotInTheDenominator(t *testing.T) {
-	parts, _, err := Aggregate([]Record{rec(ArmGraft, "c1", Coarse, Works, Works, Works, Works, Unreachable)})
+	parts, _, err := Aggregate([]Record{rec(ArmGraft, "c1", Coarse, Works, Works, Works, Works, Unreachable)}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if p := parts[0]; p.Works.K != 4 || p.Works.N != 4 || p.Outcomes[Unreachable] != 1 {
 		t.Fatalf("%+v", p)
-	}
-}
-
-func TestFailuresAreCountedByLayer(t *testing.T) {
-	r := rec(ArmGraft, "c1", Coarse, Works, Works, Disagreed, Broke, Broke)
-	r.Samples[3].Layer = LayerSelection
-	r.Samples[4].Layer = ""
-	parts, _, _ := Aggregate([]Record{r})
-	got := parts[0].ByLayer
-	if got[LayerConvergence] != 1 || got[LayerSelection] != 1 || got[LayerNone] != 1 {
-		t.Fatalf("%v", got)
 	}
 }
 
@@ -164,25 +240,37 @@ func TestReportShowsExcludedAndOnlyPermittedComparisons(t *testing.T) {
 		rec(ArmBaseline, "c1", Coarse, five(Works)...),
 		rec(ArmIntent, "c1", Coarse, five(Broke)...),
 		rec(ArmGraft, "c1", Smoke, Works, Works),
+		// a second cell with a disjoint comparison, so the "distinguish" sentence is checked too
+		with(rec(ArmGraft, "c2", Fine, make([]Outcome, 30)...), func(r *Record) {
+			for i := range r.Samples {
+				r.Samples[i] = Sample{Outcome: Works, Checks: 1, Passed: 1}
+			}
+		}),
+		with(rec(ArmIntent, "c2", Fine, make([]Outcome, 30)...), func(r *Record) {
+			for i := range r.Samples {
+				r.Samples[i] = Sample{Outcome: Broke}
+			}
+		}),
 	}
 	var b bytes.Buffer
-	if err := Report(&b, "todo", recs); err != nil {
+	if err := Report(&b, "todo", recs, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	out := b.String()
 	for _, want := range []string{
 		"4/5 [0.38, 0.96]",
 		"do NOT distinguish graft 4/5 [0.38, 0.96] from baseline 5/5 [0.57, 1.00]",
-		"do NOT distinguish graft 4/5 [0.38, 0.96] from intent 0/5 [0.00, 0.43]", // 0.38 <= 0.43: n=5 cannot tell these apart
+		"do NOT distinguish graft 4/5 [0.38, 0.96] from intent 0/5 [0.00, 0.43]", // 0.38 <= 0.43
+		"These runs distinguish graft 30/30 [0.89, 1.00] from intent 0/30 [0.00, 0.11] (intervals disjoint)",
 		"Shown, counted in nothing (1)",
 		"smoke run",
-		"convergence 1",
+		"unattributed 1",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("report lacks %q:\n%s", want, out)
 		}
 	}
-	for _, banned := range []string{"better", "worse", "%", "p="} {
+	for _, banned := range []string{"better", "worse", "%", "p=", "significant"} {
 		if strings.Contains(out, banned) {
 			t.Errorf("report contains %q:\n%s", banned, out)
 		}
