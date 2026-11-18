@@ -7,7 +7,10 @@
 // - a reference from inside the function itself (recursion);
 // - a string literal;
 // - `_ = f` or `void f`, which only silence a checker.
-// `main` and `init` count as used: main.ts calls them.
+// `main` and `init` count as used: main.ts calls them. So do the functions
+// running.ts exports: they are the core's API for the other modules, which may
+// not be written yet when running.ts is checked (and under --render the
+// skeleton fixes them).
 import { modules, line, finish, ts } from "./lib.mjs";
 
 const ALWAYS = new Set(["main", "init"]);
@@ -62,9 +65,15 @@ const isDeclName = (id) => {
   );
 };
 
+const exportedCore = (fn) =>
+  fn.m.mod === "running" &&
+  ts.isFunctionDeclaration(fn.node) &&
+  fn.node.parent === fn.m.sf &&
+  (ts.getCombinedModifierFlags(fn.node) & ts.ModifierFlags.Export) !== 0;
+
 const problems = [];
 for (const fn of fns) {
-  if (ALWAYS.has(fn.name)) continue;
+  if (ALWAYS.has(fn.name) || exportedCore(fn)) continue;
   if (!used(fn)) problems.push(`${fn.m.file}:${line(fn.m.sf, fn.node)}: ${fn.name} is never used; remove it (or use it)`);
 }
 finish(problems, "no dead functions");

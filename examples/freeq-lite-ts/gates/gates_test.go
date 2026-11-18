@@ -117,6 +117,15 @@ export function init(): void { aUsed(); }
 			t.Errorf("%s accepted: %s", name, out)
 		}
 	}
+	// running.ts's exported functions are the core's API and are not dead; its private ones are.
+	core := `export function Core_api(): void {}
+` + running
+	if out, pass := gate(t, "unused.mjs", map[string]string{"running.ts": core}); !pass {
+		t.Errorf("an exported core function was rejected: %s", out)
+	}
+	if out, pass := gate(t, "unused.mjs", map[string]string{"running.ts": "function hidden(): void {}\n" + running}); pass {
+		t.Errorf("a private dead function in running.ts was accepted: %s", out)
+	}
 	if out, _ := gate(t, "unused.mjs", map[string]string{"running.ts": running, "a.ts": `export function aDead(): void {}`}); !strings.Contains(out, "aDead") {
 		t.Errorf("the dead function is not named: %s", out)
 	}
