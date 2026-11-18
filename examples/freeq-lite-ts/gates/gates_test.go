@@ -130,3 +130,28 @@ export function init(): void { aUsed(); }
 		t.Errorf("the dead function is not named: %s", out)
 	}
 }
+
+// The recorded runs were generated before the final gates were settled; they
+// must still pass them.
+func TestRecordedTreesPass(t *testing.T) {
+	for _, mode := range []string{"plain", "render"} {
+		tree := filepath.Join("..", "runs", "sonnet-n1", mode, "tree")
+		ents, err := os.ReadDir(tree)
+		if err != nil {
+			t.Fatal(err)
+		}
+		files := map[string]string{}
+		for _, e := range ents {
+			b, err := os.ReadFile(filepath.Join(tree, e.Name()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			files[e.Name()] = string(b)
+		}
+		for _, g := range []string{"check.mjs", "registry.mjs", "unused.mjs"} {
+			if out, ok := gate(t, g, files); !ok {
+				t.Errorf("%s tree fails %s: %s", mode, g, out)
+			}
+		}
+	}
+}
