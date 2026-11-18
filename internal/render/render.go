@@ -238,8 +238,10 @@ func parseFile(rel string, data []byte) ([]Region, error) {
 	return out, nil
 }
 
-// ParseFile returns the sedum regions in one file's bytes, with the same
-// rules ReadMarkers applies; rel decides Markdown fence handling.
+// ParseFile returns the sedum regions in one file's bytes using the same
+// per-file marker rules as ReadMarkers (rel decides Markdown fence handling).
+// Unlike ReadMarkers it does not skip anything by path or content: files under
+// provenance/, and files ReadMarkers would treat as binary, are parsed too.
 func ParseFile(rel string, data []byte) ([]Region, error) { return parseFile(rel, data) }
 
 // ReadMarkers walks root and returns every sedum region, sorted by Path then position.

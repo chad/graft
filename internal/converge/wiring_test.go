@@ -77,31 +77,24 @@ func (f fakeStore) Current(id string) (records.Pin, error) {
 }
 func (f fakeStore) Snapshot(string, int) ([]byte, error) { return nil, records.ErrNotFound }
 
-// End to end over the real records fixture shipped with M1.
+// End to end over M1's real fixture: the candidate pin is exactly the store's.
 func TestNewCandidateOverRealFixture(t *testing.T) {
-	dirs, _ := filepath.Glob("../records/testdata/*")
-	if len(dirs) == 0 {
-		t.Skip("no records fixtures")
+	s, err := records.OpenDir("../records/testdata/base")
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, d := range dirs {
-		s, err := records.OpenDir(d)
-		if err != nil {
-			continue
-		}
-		ids, _ := filepath.Glob(filepath.Join(d, "provenance", "*.yml"))
-		for _, f := range ids {
-			id := strings.TrimSuffix(filepath.Base(f), ".yml")
-			k, err := NewCandidate(s, id, "app.go", "low", "", "func F() {}")
-			if err != nil {
-				t.Fatalf("%s/%s: %v", d, id, err)
-			}
-			if k.GenHash == "" || k.Version < 1 {
-				t.Fatalf("%s/%s: empty pin %+v", d, id, k)
-			}
-			return
-		}
+	const id = "prov-2026-aaaa0001"
+	want, err := s.Current(id)
+	if err != nil {
+		t.Fatal(err)
 	}
-	t.Skip("no usable fixture record")
+	k, err := NewCandidate(s, id, "app.go", "low", "", "func F() {}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if k.RecordID != id || k.Version != want.Version || k.GenHash != want.GenHash || !strings.HasPrefix(k.GenHash, "sha256:") {
+		t.Fatalf("candidate %+v, store %+v", k, want)
+	}
 }
 
 func TestSedumRegionBytesIncludingMarkersAndCRLFArePreserved(t *testing.T) {
@@ -114,5 +107,95 @@ func TestSedumRegionBytesIncludingMarkersAndCRLFArePreserved(t *testing.T) {
 	}
 	if !strings.Contains(read(t, root), sr) {
 		t.Fatal("sedum region bytes changed")
+	}
+}
+
+func TestLiteralPinIsNotTrusted(t *testing.T) {
+	ran := 0
+	c, root := setup(t, fakeGate{file: "app.go", want: "", kind: evidence.TestRun, ran: &ran})
+	k := cand("func F() {}")
+	k.Version, k.GenHash = 99, "forged"
+	if _, err := c.Converge(context.Background(), k); !errors.Is(err, ErrStalePin) {
+		t.Fatalf("err = %v", err)
+	}
+	if ran != 0 || read(t, root) != "package app\n" {
+		t.Fatal("ran or wrote with a forged pin")
+	}
+}
+
+func TestConvergerRequiresRecords(t *testing.T) {
+	c, _ := setup(t, verdictGate{evidence.TestRun, evidence.Pass})
+	c.Records = nil
+	if _, err := c.Converge(context.Background(), cand("func F() {}")); !errors.Is(err, ErrNoRecords) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+// movingStore bumps the record when its gate runs: the record moved mid-run.
+type movingGate struct{ s fakeStore }
+
+func (g movingGate) Name() string        { return "mover" }
+func (g movingGate) Kind() evidence.Kind { return evidence.TestRun }
+func (g movingGate) Run(context.Context, string) (evidence.Verdict, string, error) {
+	g.s["prov-1"] = records.Pin{RecordID: "prov-1", Version: 3, GenHash: "g3"}
+	return evidence.Pass, "", nil
+}
+
+func TestRecordMovingDuringGatesIsNotApplied(t *testing.T) {
+	c, root := setup(t)
+	c.Gates = []Gate{movingGate{c.Records.(fakeStore)}}
+	d, err := c.Converge(context.Background(), cand("func F() {}"))
+	if !errors.Is(err, ErrStalePin) || d.Applied {
+		t.Fatalf("%+v %v", d, err)
+	}
+	if read(t, root) != "package app\n" {
+		t.Fatal("applied against a moved record")
+	}
+}
+
+// Only the overlap check catches this: the candidate body equals the existing
+// one, so the rendered file is byte-identical and every sedum region with it.
+func TestOverlapRefusedEvenWhenNothingWouldChange(t *testing.T) {
+	c, root := setup(t, verdictGate{evidence.TestRun, evidence.Pass})
+	inner := "// " + beginTag + ` {"record":"prov-1","version":2,"gen":"g2","tier":"low","body":"` +
+		HashBody("func F() {}\n") + "\"}\nfunc F() {}\n// " + endTag + " {\"record\":\"prov-1\"}\n"
+	src := "package app\n\n" + sedumRegion("prov-sedum", inner)
+	os.WriteFile(filepath.Join(root, "app.go"), []byte(src), 0o644)
+	if _, err := c.Converge(context.Background(), cand("func F() {}")); !errors.Is(err, ErrSedumRegion) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestGuardSedumUnit(t *testing.T) {
+	k := cand("func F() {}")
+	before := []byte("package app\n\n" + sedumRegion("s1", "func A() {}\n"))
+	cases := map[string]string{
+		"region added":   string(before) + sedumRegion("s2", "func B() {}\n"),
+		"region removed": "package app\n",
+		"marker changed": strings.Replace(string(before), `"gen":"sha256:aaaa"`, `"gen":"sha256:bbbb"`, 1),
+		"body changed":   strings.Replace(string(before), "func A() {}", "func A() { _ = 1 }", 1),
+	}
+	for name, next := range cases {
+		t.Run(name, func(t *testing.T) {
+			if err := guardSedum(k, before, []byte(next)); !errors.Is(err, ErrSedumRegion) {
+				t.Fatalf("err = %v", err)
+			}
+		})
+	}
+	if err := guardSedum(k, before, append(append([]byte(nil), before...), "func F() {}\n"...)); err != nil {
+		t.Fatalf("an unrelated append was refused: %v", err)
+	}
+}
+
+func TestSedumMarkerInBodyIsRefused(t *testing.T) {
+	c, _ := setup(t, verdictGate{evidence.TestRun, evidence.Pass})
+	for _, body := range []string{"// sedum:setFunction {}\nx\n// /sedum:setFunction", "  # /sedum:x"} {
+		if _, err := c.Converge(context.Background(), cand(body)); !errors.Is(err, ErrMarkerInBody) {
+			t.Errorf("%q: err = %v", body, err)
+		}
+	}
+	// Prose that merely mentions sedum is fine.
+	if d, err := c.Converge(context.Background(), cand(`var s = "see sedum: docs"`)); err != nil || !d.Applied {
+		t.Fatalf("%+v %v", d, err)
 	}
 }
