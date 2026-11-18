@@ -16,7 +16,7 @@ func TestOracleScoresReferenceFully(t *testing.T) {
 	if out, err := exec.Command("go", "build", "-o", bin, "../reference").CombinedOutput(); err != nil {
 		t.Fatalf("build reference: %v\n%s", err, out)
 	}
-	for _, c := range checks {
+	for _, c := range append(append([]check{}, checks...), v2Checks...) {
 		t.Run(c.name, func(t *testing.T) {
 			addr, stop, err := start(bin)
 			if err != nil {

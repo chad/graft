@@ -74,3 +74,29 @@ Runs so far (claude sonnet, **one sample each: anecdotes, not measurements**):
 
 Measurement means the bench arms (graft / one-call baseline / intent-only) at
 n≥5 with Wilson intervals; that is the next step.
+
+## Evolving it: change one section, regenerate one region
+
+`spec-v2/` is the same spec plus a **Topics** section (`TOPIC` set/query,
+331/332/403/442). The oracle's `-v2` flag adds 4 checks for it (42 total; the
+reference scores 42/42, and a committed mutant covers topic cleanup).
+
+```sh
+graft run --config examples/freeq-lite/graft.json --spec examples/freeq-lite/spec/freeq-lite.md    --repo R --root A --accept
+graft run --config examples/freeq-lite/graft.json --spec examples/freeq-lite/spec-v2/freeq-lite.md --repo R --root A --accept
+```
+
+First run (claude sonnet, n=1, an anecdote):
+
+| | v1 → v2 with graft |
+|---|---|
+| drafts mapped | 7 unchanged records (no new versions), 1 new record (Topics) |
+| model calls in the v2 step | **1** (`topics.go`) |
+| existing files after the v2 step | **7 of 7 byte-identical** |
+| v2 oracle, v1 server | 38/42 (the 4 topic checks fail, as they should) |
+| v2 oracle, v2 server | **42/42** |
+
+A one-call baseline has to regenerate the whole program for the same change,
+and nothing guarantees the other 38 behaviours survive it. With graft the
+unchanged regions are not touched at all: their bytes, records and evidence
+stay exactly as they were.

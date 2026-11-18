@@ -48,6 +48,7 @@ type hub struct {
 	nicks    map[string]*client          // lower-cased nick
 	channels map[string]map[*client]bool // channel name (as created) keyed lower-case
 	display  map[string]string           // lower-case -> display name
+	topics   map[string]string           // lower-case -> topic (v2)
 }
 
 func (h *hub) send(c *client, line string) {
@@ -108,6 +109,7 @@ func (h *hub) leave(c *client, reason string) {
 		if len(h.channels[ch]) == 0 {
 			delete(h.channels, ch)
 			delete(h.display, ch)
+			delete(h.topics, ch)
 		}
 	}
 	c.channels = map[string]bool{}
@@ -255,6 +257,33 @@ func (h *hub) handle(c *client, line string) bool {
 		if len(h.channels[key]) == 0 {
 			delete(h.channels, key)
 			delete(h.display, key)
+			delete(h.topics, key)
+		}
+	case "TOPIC": // v2
+		if len(p) == 0 {
+			return true
+		}
+		key := strings.ToLower(p[0])
+		if _, ok := h.channels[key]; !ok {
+			h.reply(c, "403", p[0]+" :No such channel")
+			return true
+		}
+		if len(p) == 1 {
+			if t, ok := h.topics[key]; ok {
+				h.reply(c, "332", h.display[key]+" :"+t)
+			} else {
+				h.reply(c, "331", h.display[key]+" :No topic is set")
+			}
+			return true
+		}
+		if !c.channels[key] {
+			h.reply(c, "442", p[0]+" :You're not on that channel")
+			return true
+		}
+		h.topics[key] = p[1]
+		msg := ":" + c.prefix() + " TOPIC " + h.display[key] + " :" + p[1]
+		for m := range h.channels[key] {
+			h.send(m, msg)
 		}
 	case "NAMES":
 		if len(p) == 0 {
@@ -351,7 +380,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	h := &hub{nicks: map[string]*client{}, channels: map[string]map[*client]bool{}, display: map[string]string{}}
+	h := &hub{nicks: map[string]*client{}, channels: map[string]map[*client]bool{}, display: map[string]string{}, topics: map[string]string{}}
 	for {
 		conn, err := ln.Accept()
 		if err != nil {

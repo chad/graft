@@ -41,6 +41,7 @@ var mutants = []mutant{
 	{"empty_text_delivered", "if len(p) < 2 || p[1] == \"\" {", "if len(p) < 2 {", "privmsg_empty_text_412"},
 	{"451_only_for_join", "\tif !c.registered {\n\t\th.send(c, fmt.Sprintf(\":%s 451 * :You have not registered\", server))", "\tif !c.registered && cmd == \"JOIN\" {\n\t\th.send(c, fmt.Sprintf(\":%s 451 * :You have not registered\", server))", "unregistered_451_for_every_command"},
 	{"no_line_limit_to_peer", "if len(line) > 510 {", "if false {", "overlong_line_ignored"},
+	{"topic_kept_after_channel_forgotten", "delete(h.display, key)\n\t\t\tdelete(h.topics, key)", "delete(h.display, key)", "topic_forgotten_with_channel"},
 	{"delivered_nick_as_typed", "h.send(to, \":\"+c.prefix()+\" PRIVMSG \"+to.nick+\" :\"+text)", "h.send(to, \":\"+c.prefix()+\" PRIVMSG \"+target+\" :\"+text)", "privmsg_nick_ignoring_case"},
 }
 
@@ -67,9 +68,10 @@ func TestMutantsAreCaught(t *testing.T) {
 				t.Fatalf("mutant does not build: %v\n%s", err, out)
 			}
 			var target *check
-			for i := range checks {
-				if checks[i].name == m.mustFail {
-					target = &checks[i]
+			all := append(append([]check{}, checks...), v2Checks...)
+			for i := range all {
+				if all[i].name == m.mustFail {
+					target = &all[i]
 				}
 			}
 			if target == nil {
