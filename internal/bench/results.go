@@ -103,6 +103,8 @@ type Sample struct {
 	// shown; never aggregated into a rate.
 	ChangeCalls *int `json:"change_calls,omitempty"`
 	Preserved   *int `json:"preserved,omitempty"`
+	ChangeBytes *int `json:"change_bytes,omitempty"` // bytes of source the change (re)wrote
+
 }
 
 // Attribution says which layer(s) one failed sample's failure came from.

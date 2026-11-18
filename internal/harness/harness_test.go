@@ -167,7 +167,8 @@ func TestEvolveSampleGraftPreservesAndCounts(t *testing.T) {
 	c := cfg(t, answer{map[string]string{"core.go": good, "extra.go": "package main\n\nfunc Twice(x int) int { return 2 * x }\n"}}, fakeOracle)
 	c.Case.SpecV2 = c.Case.Spec + "\n## Extra\n\n- The program must define a function Twice that returns twice its argument\n"
 	s := EvolveSample(context.Background(), c, bench.ArmGraft)
-	if s.Outcome != bench.Works || s.ChangeCalls == nil || *s.ChangeCalls != 1 || s.Preserved == nil || *s.Preserved != 1 {
+	if s.Outcome != bench.Works || s.ChangeCalls == nil || *s.ChangeCalls != 1 || s.Preserved == nil || *s.Preserved != 1 ||
+		s.ChangeBytes == nil || *s.ChangeBytes == 0 {
 		t.Fatalf("%+v calls=%v preserved=%v", s, deref(s.ChangeCalls), deref(s.Preserved))
 	}
 }

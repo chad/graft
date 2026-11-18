@@ -316,7 +316,7 @@ func EvolveSample(ctx context.Context, cfg Config, arm bench.Arm) bench.Sample {
 	c := cfg
 	c.Model = cm
 	var reason string
-	var preserved *int
+	var preserved, changed *int
 	switch arm {
 	case bench.ArmGraft:
 		repo := filepath.Join(dir, "repo")
@@ -333,35 +333,48 @@ func EvolveSample(ctx context.Context, cfg Config, arm bench.Arm) bench.Sample {
 			break
 		}
 		after, _ := fileHashes(root)
-		n := 0
+		n, bytes := 0, 0
 		for f, h := range before {
 			if after[f] == h {
 				n++
 			}
 		}
-		preserved = &n
+		for f, h := range after {
+			if before[f] != h {
+				fi, _ := os.Stat(filepath.Join(root, f))
+				if fi != nil {
+					bytes += int(fi.Size())
+				}
+			}
+		}
+		preserved, changed = &n, &bytes
 	case bench.ArmBaseline:
 		if reason = c.oneCall(ctx, root, c.baselinePrompt()); reason != "" {
 			break
 		}
 		cur, _ := os.ReadFile(filepath.Join(root, "main.go"))
 		cm.calls = 0
-		reason = c.oneCall(ctx, root, c.evolvePrompt(string(cur)))
+		if reason = c.oneCall(ctx, root, c.evolvePrompt(string(cur))); reason == "" {
+			if fi, err := os.Stat(filepath.Join(root, "main.go")); err == nil {
+				b := int(fi.Size())
+				changed = &b
+			}
+		}
 	default:
 		return bench.Sample{Outcome: bench.Unreachable, Reason: "evolve cases run the graft and baseline arms"}
 	}
 	calls := cm.calls
 	if reason != "" {
-		return bench.Sample{Outcome: bench.Broke, Reason: reason, ChangeCalls: &calls, Preserved: preserved}
+		return bench.Sample{Outcome: bench.Broke, Reason: reason, ChangeCalls: &calls, Preserved: preserved, ChangeBytes: changed}
 	}
 	bin := filepath.Join(dir, "server")
 	build := exec.CommandContext(ctx, "go", "build", "-o", bin, ".")
 	build.Dir = root
 	if out, err := build.CombinedOutput(); err != nil {
-		return bench.Sample{Outcome: bench.Broke, Reason: "does not build: " + tail(string(out), 400), ChangeCalls: &calls, Preserved: preserved}
+		return bench.Sample{Outcome: bench.Broke, Reason: "does not build: " + tail(string(out), 400), ChangeCalls: &calls, Preserved: preserved, ChangeBytes: changed}
 	}
 	s := cfg.score(ctx, bin)
-	s.ChangeCalls, s.Preserved = &calls, preserved
+	s.ChangeCalls, s.Preserved, s.ChangeBytes = &calls, preserved, changed
 	return s
 }
 
@@ -427,6 +440,9 @@ func RunEvolve(ctx context.Context, cfg Config, store bench.Store, arms []bench.
 				}
 				if s.Preserved != nil {
 					extra += fmt.Sprintf(" preserved=%d", *s.Preserved)
+				}
+				if s.ChangeBytes != nil {
+					extra += fmt.Sprintf(" change_bytes=%d", *s.ChangeBytes)
 				}
 				fmt.Fprintf(cfg.Progress, "%s %d/%d: %s %d/%d%s %s\n", arm, i+1, n, s.Outcome, s.Passed, s.Checks, extra, firstLine(s.Reason))
 			}
