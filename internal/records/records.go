@@ -106,6 +106,11 @@ func (d *dirStore) Snapshot(id string, version int) ([]byte, error) {
 	if name == "" {
 		return nil, fmt.Errorf("%w: %s v%d", ErrNotFound, id, version)
 	}
+	// Let provenance verify the snapshot (content hash, envelope vs file
+	// name) before any raw bytes are handed out.
+	if _, err := d.fs.Snapshot(id, version); err != nil {
+		return nil, fmt.Errorf("records: snapshot %s v%d failed verification: %w", id, version, err)
+	}
 	return os.ReadFile(filepath.Join(vdir, name))
 }
 
