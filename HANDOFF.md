@@ -71,3 +71,12 @@ TS (receiver-first): helpers in `<stem>_synth.ts`; stub file imports `import * a
 3. generators/typescript (new) per DESIGN §4, conformance tests, CHANGELOG, version question.
 4. sedum `gofmt -l internal/ cmd/`, `go vet ./...`, `go test -race ./...`; open the PR to livecodelife/sedum main; mention @chad-bot-phoenix in #phoenix.
 5. Then the graft side (HANDOFF Next 4 and 5 above). Remember `git rm` BRIEF/DESIGN/HANDOFF before graft's PR is final.
+
+
+## Session 4 (sedum PR scope): DONE. PR https://github.com/livecodelife/sedum/pull/68
+Sedum side complete: CLI, go block (byte-identical to graft's golden), typescript package, tests, CHANGELOG. For the graft side, the contract as built (differs from the earlier plan in these ways):
+- Per file the output gives `imports` (kwargs maps for every addImport: file imports plus the synth import, sorted by path; TS kwargs include `alias`), `synth_path`, `synth_import`, `seed` (empty when no stubs) and per stub `action` + `kwargs` (file,name,code[,receiver]) + `helper` + `declare` + `stub`. graft should send EVERY skeleton file (stubs may be empty) and replay `imports` and stub `action/kwargs` verbatim. For Go this reproduces the golden invocations (order: imports, decls, stubs as today).
+- TS has no setMethod: method stubs come back as action setFunction named `<Receiver>_<name>`; a method *decl* in a TS skeleton is unsupported (use a function). Go keeps setMethod.
+- graft's name-claim logic must use the returned kwargs name and helper (TS stub name differs from the skeleton's), and graft still does the generic check that each helper name appears in its seed and stub text.
+- File templates in typescript are `{name}.ts` and `{pkg}/{name}.ts` (graft's fileEntry layout for depth 0/1 maps to these; `cmd/{bin}` is Go-only). Seed placeholder, suffix and extensions come from `convergence info`.
+- Remaining: graft recording.go via an injected Contract, remove go/parser+go/format, examples/freeq-lite-ts, README anecdote, sedum release/pin bump (v0.12.2 pin in main_test.go).
