@@ -511,7 +511,7 @@ func TestPlantedTempSymlinkIsNotFollowed(t *testing.T) {
 
 func TestCheckRenderedRejectsMismatch(t *testing.T) {
 	k := cand("func F() {}")
-	next, err := render(k.Path, []byte("package app\n"), "//", Owner{Record: k.RecordID, Tier: "low"}, k.Body)
+	next, err := renderRegion(k.Path, []byte("package app\n"), "//", Owner{Record: k.RecordID, Tier: "low"}, k.Body)
 	if err != nil {
 		t.Fatal(err)
 	}

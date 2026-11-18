@@ -29,6 +29,8 @@ type Region struct {
 	BodyHash string      // hash on the marker
 	Actual   string      // hash of the bytes currently between the markers
 	Seeded   bool        // seeded tier: a human finishes it, graft never rewrites it
+	Start    int         // 1-based line of the opening marker
+	End      int         // 1-based line of the closing marker
 }
 
 // Edited reports whether the region text no longer matches the marker's hash.
@@ -205,6 +207,7 @@ func parseFile(rel string, data []byte) ([]Region, error) {
 		if !ok {
 			continue
 		}
+		start := i + 1
 		var body strings.Builder
 		closed := false
 		for j := i + 1; j < len(lines); j++ {
@@ -227,11 +230,17 @@ func parseFile(rel string, data []byte) ([]Region, error) {
 			BodyHash: a.Body,
 			Actual:   hashBody(body.String()),
 			Seeded:   a.Tier == "seeded",
+			Start:    start,
+			End:      i + 1,
 		}
 		out = append(out, r)
 	}
 	return out, nil
 }
+
+// ParseFile returns the sedum regions in one file's bytes, with the same
+// rules ReadMarkers applies; rel decides Markdown fence handling.
+func ParseFile(rel string, data []byte) ([]Region, error) { return parseFile(rel, data) }
 
 // ReadMarkers walks root and returns every sedum region, sorted by Path then position.
 func ReadMarkers(root string) ([]Region, error) {

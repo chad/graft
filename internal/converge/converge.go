@@ -112,13 +112,16 @@ func (c Converger) Converge(ctx context.Context, cand Candidate) (Decision, erro
 		return d, err
 	}
 	owner := Owner{Record: cand.RecordID, Version: cand.Version, Gen: cand.GenHash, Tier: cand.Tier}
-	next, err := render(cand.Path, before, cand.Comment, owner, cand.Body)
+	next, err := renderRegion(cand.Path, before, cand.Comment, owner, cand.Body)
 	if err != nil {
 		return d, err
 	}
 	pin := evidence.Pin{RecordID: cand.RecordID, Version: cand.Version, GenHash: cand.GenHash,
 		RegionHash: HashBody(normalizeBody(cand.Body)), SpecHash: cand.SpecHash}
 	if err := checkRendered(cand, next, pin.RegionHash); err != nil {
+		return d, err
+	}
+	if err := guardSedum(cand, before, next); err != nil {
 		return d, err
 	}
 
