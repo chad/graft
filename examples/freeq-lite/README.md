@@ -126,6 +126,43 @@ The v1 reference is the v1 spec exactly: it implements Topics only with `-v2`,
 and answers `TOPIC` with 421 otherwise. The oracle's own test checks the v1
 reference against every v1 check, and the v2 reference against all 51.
 
+## Rendering the skeleton: `graft run --render`
+
+`--render` lets sedum lay out the skeleton (types, signatures, file structure)
+and asks the model only for the body helpers in each record's
+`<stem>_synth.go`. `skeleton.json` (v1) and `skeleton-v2.json` (v1 + `topics.go`)
+describe the layout; pass one with `--skeleton` or the `"skeleton"` key in
+`graft.json`. Needs `sedum` on PATH and `SEDUM_GENERATORS` pointing at its
+generators.
+
+```sh
+SEDUM_GENERATORS=~/sedum/generators graft run --render --config examples/freeq-lite/graft.json \
+  --skeleton examples/freeq-lite/skeleton.json --spec examples/freeq-lite/spec/freeq-lite.md --repo R --root A --accept
+```
+
+Real runs, **n=1 each, anecdotes** (oracle: 47 checks; model argv wrapped to
+sum `total_cost_usd`):
+
+| model | oracle | model calls / attempts | cost | model lines (`*_synth.go`) | sedum lines (other `.go`) |
+|---|---|---|---|---|---|
+| sonnet, run A | 47/47 | 7 / 7 (all attempt 1) | not recorded | 539 | 207 |
+| sonnet, run B | 46/47 (`unknown_command_421_as_sent` fails) | 7 / 7 (all attempt 1) | $1.08 | 554 | 207 |
+| haiku | 47/47 | 7 / 7 (all attempt 1) | $0.07 | 630 | 207 |
+
+Every region passed all gates on attempt 1 in all three runs. Two Sonnet runs
+of the same input differ by one oracle check, so single scores say little;
+and a run can pass every gate and still fail the oracle.
+
+The first Sonnet attempt failed on the Running region: the registry gate
+rejected `running_synth.go` for reading `handlers`. The gate now treats the
+declaring file's `_synth.go` as part of the declaring file, and
+`conventions.md` says the Running region may read `handlers`.
+
+v1 to v2 with `--render` (haiku, n=1, `--skeleton skeleton-v2.json`, spec-v2):
+only Topics (`topics_synth.go`) was generated (1 call, about $0.01); the other
+7 regions were re-verified as up to date, and the existing files were
+byte-identical. The v2 server scored 51/51 on `oracle -v2`.
+
 ## Gates beyond build and vet
 
 `graft.json` runs two structural gates written for this architecture:
