@@ -29,6 +29,8 @@ type Region struct {
 	BodyHash string      // hash on the marker
 	Actual   string      // hash of the bytes currently between the markers
 	Seeded   bool        // seeded tier: a human finishes it, graft never rewrites it
+	Start    int         // 1-based line of the opening marker
+	End      int         // 1-based line of the closing marker
 }
 
 // Edited reports whether the region text no longer matches the marker's hash.
@@ -205,6 +207,7 @@ func parseFile(rel string, data []byte) ([]Region, error) {
 		if !ok {
 			continue
 		}
+		start := i + 1
 		var body strings.Builder
 		closed := false
 		for j := i + 1; j < len(lines); j++ {
@@ -227,11 +230,33 @@ func parseFile(rel string, data []byte) ([]Region, error) {
 			BodyHash: a.Body,
 			Actual:   hashBody(body.String()),
 			Seeded:   a.Tier == "seeded",
+			Start:    start,
+			End:      i + 1,
 		}
 		out = append(out, r)
 	}
 	return out, nil
 }
+
+// IsMarkerLine reports whether line is a sedum open or close marker by the
+// same rules ParseFile uses (anchor markers included, since sedum reads them).
+func IsMarkerLine(line string) bool {
+	line = strings.TrimRight(line, "\r\n")
+	if _, ok := parseClose(line); ok {
+		return true
+	}
+	if _, ok := afterPrefix(line, "sedum:"); ok {
+		return true
+	}
+	_, ok := afterPrefix(line, " sedum:")
+	return ok
+}
+
+// ParseFile returns the sedum regions in one file's bytes using the same
+// per-file marker rules as ReadMarkers (rel decides Markdown fence handling).
+// Unlike ReadMarkers it does not skip anything by path or content: files under
+// provenance/, and files ReadMarkers would treat as binary, are parsed too.
+func ParseFile(rel string, data []byte) ([]Region, error) { return parseFile(rel, data) }
 
 // ReadMarkers walks root and returns every sedum region, sorted by Path then position.
 func ReadMarkers(root string) ([]Region, error) {

@@ -45,7 +45,10 @@ func setup(t *testing.T, gates ...Gate) (Converger, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return Converger{Root: root, Log: log, Gates: gates,
+	return Converger{Root: root, Log: log, Gates: gates, Records: fakeStore{
+		"prov-1": {RecordID: "prov-1", Version: 2, GenHash: "g2"},
+		"prov-2": {RecordID: "prov-2", Version: 2, GenHash: "g2"},
+	},
 		Policy: evidence.Policy{"low": {evidence.TestRun}, "high": {evidence.TestRun, evidence.HumanSignoff}}}, root
 }
 
@@ -511,7 +514,7 @@ func TestPlantedTempSymlinkIsNotFollowed(t *testing.T) {
 
 func TestCheckRenderedRejectsMismatch(t *testing.T) {
 	k := cand("func F() {}")
-	next, err := render(k.Path, []byte("package app\n"), "//", Owner{Record: k.RecordID, Tier: "low"}, k.Body)
+	next, err := renderRegion(k.Path, []byte("package app\n"), "//", Owner{Record: k.RecordID, Tier: "low"}, k.Body)
 	if err != nil {
 		t.Fatal(err)
 	}

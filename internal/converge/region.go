@@ -172,10 +172,10 @@ func normalizeBody(body string) string {
 	return body
 }
 
-// render returns data with body placed in the region owned by o.Record,
+// renderRegion returns data with body placed in the region owned by o.Record,
 // creating the region at the end if there is none. The marker records the
 // body hash. It never reads the file: callers pass the bytes they checked.
-func render(rel string, data []byte, comment string, o Owner, body string) ([]byte, error) {
+func renderRegion(rel string, data []byte, comment string, o Owner, body string) ([]byte, error) {
 	body = normalizeBody(body)
 	o.Body = HashBody(body)
 	mk, _ := json.Marshal(o)

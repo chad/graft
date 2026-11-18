@@ -326,3 +326,14 @@ func TestMarkdownFenceVariants(t *testing.T) {
 		t.Fatalf("region after closed fence: rs=%v err=%v", rs, err)
 	}
 }
+
+func TestRegionsCarryMarkerLines(t *testing.T) {
+	src := "package x\n\n" + region("owned", "r", "setFunction", "func A() {}\n", "")
+	rs, err := ParseFile("x.go", []byte(src))
+	if err != nil || len(rs) != 1 {
+		t.Fatalf("%v %v", rs, err)
+	}
+	if rs[0].Start != 3 || rs[0].End != 5 {
+		t.Fatalf("lines %d..%d, want 3..5", rs[0].Start, rs[0].End)
+	}
+}

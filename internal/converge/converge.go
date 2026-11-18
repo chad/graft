@@ -9,10 +9,13 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 
 	"github.com/chad/graft/internal/evidence"
+	"github.com/chad/graft/internal/records"
+	"github.com/chad/graft/internal/render"
 )
 
 // Guarantee is what a convergence decision may claim. It is always "checked":
@@ -31,8 +34,12 @@ var (
 	ErrChanged = errors.New("converge: tree changed during convergence; not applied")
 	// ErrBadPath: the candidate path is absolute, escapes the root, or is a symlink.
 	ErrBadPath = errors.New("converge: candidate path must be a regular file inside the root")
-	// ErrMarkerInBody: the body contains a synthesis marker tag.
-	ErrMarkerInBody = errors.New("converge: candidate body contains a synthesis marker tag")
+	// ErrMarkerInBody: the body contains a synthesis or sedum marker.
+	ErrMarkerInBody = errors.New("converge: candidate body contains a synthesis or sedum marker")
+	// ErrStalePin: the candidate's version/gen_hash is not the record's current one.
+	ErrStalePin = errors.New("converge: candidate pin is not the record's current version")
+	// ErrNoRecords: a Converger must read pins from the records layer.
+	ErrNoRecords = errors.New("converge: Converger.Records is required")
 )
 
 // Executable kinds are produced by running something. Evidence of these
@@ -64,11 +71,12 @@ type Decision struct {
 
 // Converger runs candidates through gates and the evidence policy.
 type Converger struct {
-	Root   string // the working tree
-	Log    *evidence.Log
-	Policy evidence.Policy
-	Gates  []Gate
-	By     string // recorded on evidence; "graft/converge" if empty
+	Root    string        // the working tree
+	Records records.Store // source of truth for every candidate's version and gen_hash
+	Log     *evidence.Log
+	Policy  evidence.Policy
+	Gates   []Gate
+	By      string // recorded on evidence; "graft/converge" if empty
 }
 
 // Converge writes the candidate into a scratch copy of the tree, runs every
@@ -88,6 +96,12 @@ func (c Converger) Converge(ctx context.Context, cand Candidate) (Decision, erro
 	if len(c.Gates) == 0 {
 		return d, ErrNoGates
 	}
+	if isNil(c.Records) {
+		return d, ErrNoRecords
+	}
+	if err := c.checkPin(cand); err != nil {
+		return d, err
+	}
 	gated := map[evidence.Kind]bool{}
 	for _, g := range c.Gates {
 		gated[g.Kind()] = true
@@ -97,7 +111,7 @@ func (c Converger) Converge(ctx context.Context, cand Candidate) (Decision, erro
 			return d, fmt.Errorf("%w: tier %q requires %s", ErrUncovered, cand.Tier, k)
 		}
 	}
-	if strings.Contains(cand.Body, beginTag) || strings.Contains(cand.Body, endTag) {
+	if strings.Contains(cand.Body, beginTag) || strings.Contains(cand.Body, endTag) || hasSedumMarker(cand.Body) {
 		return d, ErrMarkerInBody
 	}
 	target, err := c.target(cand.Path)
@@ -112,13 +126,16 @@ func (c Converger) Converge(ctx context.Context, cand Candidate) (Decision, erro
 		return d, err
 	}
 	owner := Owner{Record: cand.RecordID, Version: cand.Version, Gen: cand.GenHash, Tier: cand.Tier}
-	next, err := render(cand.Path, before, cand.Comment, owner, cand.Body)
+	next, err := renderRegion(cand.Path, before, cand.Comment, owner, cand.Body)
 	if err != nil {
 		return d, err
 	}
 	pin := evidence.Pin{RecordID: cand.RecordID, Version: cand.Version, GenHash: cand.GenHash,
 		RegionHash: HashBody(normalizeBody(cand.Body)), SpecHash: cand.SpecHash}
 	if err := checkRendered(cand, next, pin.RegionHash); err != nil {
+		return d, err
+	}
+	if err := guardSedum(cand, before, next); err != nil {
 		return d, err
 	}
 
@@ -169,11 +186,49 @@ func (c Converger) Converge(ctx context.Context, cand Candidate) (Decision, erro
 	if !d.Result.Satisfied {
 		return d, nil
 	}
-	if err := c.apply(cand.Path, target, before, next, digest, skip); err != nil {
+	if err := c.apply(cand, target, before, next, digest, skip); err != nil {
 		return d, err
 	}
 	d.Applied = true
 	return d, nil
+}
+
+// isNil also catches a typed nil (a nil *T stored in the interface).
+func isNil(s records.Store) bool {
+	if s == nil {
+		return true
+	}
+	v := reflect.ValueOf(s)
+	switch v.Kind() {
+	case reflect.Pointer, reflect.Map, reflect.Slice, reflect.Func, reflect.Interface, reflect.Chan:
+		return v.IsNil()
+	}
+	return false
+}
+
+// checkPin re-reads the record: the candidate's version and gen_hash must be
+// its current ones. Caller-supplied literals are never trusted.
+func (c Converger) checkPin(cand Candidate) error {
+	cur, err := c.Records.Current(cand.RecordID)
+	if err != nil {
+		return err
+	}
+	if cur.Version != cand.Version || cur.GenHash != cand.GenHash {
+		return fmt.Errorf("%w: %s is at v%d %s, candidate pins v%d %s",
+			ErrStalePin, cand.RecordID, cur.Version, cur.GenHash, cand.Version, cand.GenHash)
+	}
+	return nil
+}
+
+// hasSedumMarker reports whether any body line is a sedum marker, by the
+// render layer's own rules (one definition of what a marker is).
+func hasSedumMarker(body string) bool {
+	for _, l := range strings.Split(body, "\n") {
+		if render.IsMarkerLine(l) {
+			return true
+		}
+	}
+	return false
 }
 
 // decide combines this run's verdicts with fresh log evidence for the
@@ -256,7 +311,8 @@ func lockPath(root string) (string, error) {
 // ran against and, read after that, the target still holds before. The write
 // is a fresh temp file in the target's directory (os.CreateTemp: never a
 // planted name), fsync, chmod, rename, then a directory fsync.
-func (c Converger) apply(rel, target string, before, next []byte, digest string, skip map[string]bool) error {
+func (c Converger) apply(cand Candidate, target string, before, next []byte, digest string, skip map[string]bool) error {
+	rel := cand.Path
 	lp, err := lockPath(c.Root)
 	if err != nil {
 		return err
@@ -272,6 +328,14 @@ func (c Converger) apply(rel, target string, before, next []byte, digest string,
 	defer unlockFile(lf)
 
 	if _, err := c.target(rel); err != nil { // re-check: no symlink appeared in the path
+		return err
+	}
+	// The record must not have moved while gates ran. Residual window: record
+	// writers (provenance) do not take graft's lock, so a record can still
+	// change between this check and the rename below. The evidence written by
+	// this run stays pinned to the version it checked, and goes stale (§7) the
+	// moment gen_hash moves, so a late change is never silently covered.
+	if err := c.checkPin(cand); err != nil {
 		return err
 	}
 	if d, err := treeDigest(c.Root, skip); err != nil {
