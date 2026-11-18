@@ -68,6 +68,13 @@ func Run(ctx context.Context, cfg Config, acc []Accepted) ([]Outcome, error) {
 	for _, a := range acc {
 		o := Outcome{ID: a.ID, Section: a.Entry.Section, File: a.Entry.File}
 		feedback := ""
+		// A hand edit inside this record's region is refused before any model
+		// call: converge would refuse to overwrite it anyway.
+		for _, r := range regions {
+			if r.Path == a.Entry.File && r.Owner.Record == a.ID && r.Edited() {
+				return out, fmt.Errorf("%s: %w: %s was edited by hand; keep the edit by revising the record, or restore the region", a.Entry.Section, converge.ErrHandEdited, r.Path)
+			}
+		}
 		if body, ok := current(store, regions, a, cfg.Root); ok {
 			cand, err := converge.NewCandidate(store, a.ID, a.Entry.File, cfg.Tier, body)
 			if err != nil {

@@ -3,7 +3,7 @@
   "tier": "low",
   "attempts": 3,
   "conventions": "conventions.md",
-  "model": {"argv": ["claude", "-p", "--bare", "--tools", "", "--model", "sonnet"], "timeout_sec": 600},
+  "model": {"argv": ["claude", "-p", "--tools", "", "--strict-mcp-config", "--model", "sonnet"], "timeout_sec": 600},
   "policy": {"low": ["static_analysis"]},
   "gates": [
     {"label": "go build", "argv": ["go", "build", "./..."], "kind": "static_analysis", "timeout_sec": 300},

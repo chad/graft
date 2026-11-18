@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -185,5 +186,34 @@ func TestUpToDateIsReverifiedUnderCurrentGates(t *testing.T) {
 	}
 	if m.calls["core.go"] == 1 {
 		t.Fatal("a region failing re-verification was not regenerated")
+	}
+}
+
+func TestHandEditRefusedBeforeAnyModelCall(t *testing.T) {
+	cfg, root := setup(t)
+	acc, _ := Accept(cfg.Repo, drafter.Drafts(spec), "test", time.Now())
+	m := &scripted{calls: map[string]int{}, bodies: map[string][]string{
+		"core.go":  {"package main\n\nimport \"fmt\"\n\nfunc main() { fmt.Println(\"hello\") }\n"},
+		"extra.go": {"package main\n\nfunc Twice(x int) int { return x * 2 }\n"},
+	}}
+	cfg.Model = m
+	if _, err := Run(context.Background(), cfg, acc); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(root, "core.go")
+	b, _ := os.ReadFile(p)
+	edited := strings.Replace(string(b), `"hello"`, `"hello, edited"`, 1)
+	os.WriteFile(p, []byte(edited), 0o644)
+	// Make the record need regeneration too, so only the pre-check can stop the call.
+	calls := m.calls["core.go"]
+	_, err := Run(context.Background(), cfg, acc)
+	if !errors.Is(err, converge.ErrHandEdited) {
+		t.Fatalf("err = %v", err)
+	}
+	if m.calls["core.go"] != calls {
+		t.Fatal("a model call was made for a hand-edited region")
+	}
+	if got, _ := os.ReadFile(p); string(got) != edited {
+		t.Fatal("hand edit not preserved")
 	}
 }
