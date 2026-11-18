@@ -37,6 +37,12 @@ type Pin struct {
 	// hashes, in record order)). Specs verify output and do not drive it, so
 	// Stale ignores this; evidence pins it (SPEC §7).
 	SpecHash string
+	// Type is the record's type ("brief", "blueprint", "imprint"); Status its
+	// lifecycle status; AffectedScope its declared file scope. They do not
+	// drive generation; planning reads them to decide who may own code.
+	Type          string
+	Status        string
+	AffectedScope []string
 }
 
 // Store reads records from a provenance repo on disk
@@ -102,7 +108,8 @@ func (d *dirStore) currentGen(id string) (Pin, *record.Record, error) {
 	if v == 0 {
 		v = 1 // a v1 record reads as version 1
 	}
-	return Pin{RecordID: r.ID, Version: v, GenHash: r.GenHash()}, r, nil
+	return Pin{RecordID: r.ID, Version: v, GenHash: r.GenHash(), Type: string(r.Type),
+		Status: string(r.Status), AffectedScope: append([]string(nil), r.AffectedScope...)}, r, nil
 }
 
 // ErrSpecPath means an associated spec path is absolute or escapes the repo.
