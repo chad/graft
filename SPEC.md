@@ -158,6 +158,12 @@ Two directions, one rule:
 - Cross-region requirements: a new statement in one section can concern a
   command another section owns. The drafter should flag it so the owning
   record is revised, rather than letting the change be dropped or absorbed
-  into the new region (freeq-lite probe, #14).
+  into the new region (freeq-lite probe, #14). Token matching is not enough:
+  the probe statement ("when a user joins…") never names `JOIN`, while
+  Registration's 451 rule names four commands it rightly constrains. Candidate
+  design: a propose-never-apply cross-reference step that asks, per new or
+  revised statement, which existing record's behaviour it constrains; it
+  returns an answer with a receipt, and accepting it copies the statement into
+  the owner's draft, which revises that record and regenerates its region.
 - Anchoring the evidence head outside the log (signed by the owner's DID, or
   committed alongside the records) to make deliberate rollback detectable.

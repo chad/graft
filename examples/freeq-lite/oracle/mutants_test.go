@@ -16,6 +16,13 @@ type mutant struct {
 	mustFail       string
 }
 
+// mutantAlso holds further from/to replacements for mutants whose bug spans
+// two places.
+var mutantAlso = map[string][][2]string{
+	"display_name_survives_quit":       {{"h.display[key] = ch", "if _, ok := h.display[key]; !ok {\n\t\t\t\th.display[key] = ch\n\t\t\t}"}},
+	"display_name_survives_forgetting": {{"h.display[key] = ch", "if _, ok := h.display[key]; !ok {\n\t\t\t\th.display[key] = ch\n\t\t\t}"}},
+}
+
 var mutants = []mutant{
 	// The six from the PR description.
 	{"unsorted_names", "sort.Strings(ns)", "_ = sort.Strings", "names_sorted_alphabetically"},
@@ -42,6 +49,14 @@ var mutants = []mutant{
 	{"451_only_for_join", "\tif !c.registered {\n\t\th.send(c, fmt.Sprintf(\":%s 451 * :You have not registered\", server))", "\tif !c.registered && cmd == \"JOIN\" {\n\t\th.send(c, fmt.Sprintf(\":%s 451 * :You have not registered\", server))", "unregistered_451_for_every_command"},
 	{"no_line_limit_to_peer", "if len(line) > 510 {", "if false {", "overlong_line_ignored"},
 	{"topic_kept_after_channel_forgotten", "delete(h.display, key)\n\t\t\tdelete(h.topics, key)", "delete(h.display, key)", "topic_forgotten_with_channel"},
+	{"channel_case_sensitive", "key := strings.ToLower(ch)\n\t\tif c.channels[key] {", "key := ch\n\t\tif c.channels[key] {", "channel_names_ignore_case"},
+	{"part_case_sensitive", "key := strings.ToLower(p[0])\n\t\tif !c.channels[key] {\n\t\t\th.reply(c, \"442\"", "key := p[0]\n\t\tif !c.channels[key] {\n\t\t\th.reply(c, \"442\"", "channel_names_ignore_case"},
+	{"privmsg_channel_case_sensitive", "key := strings.ToLower(target)", "key := target", "channel_names_ignore_case"},
+	{"names_case_sensitive", "h.sendNames(c, strings.ToLower(p[0]))", "h.sendNames(c, p[0])", "channel_names_ignore_case"},
+	{"display_name_survives_forgetting", "delete(h.channels, key)\n\t\t\tdelete(h.display, key)", "delete(h.channels, key)", "forgotten_channel_takes_new_name"},
+	{"display_name_survives_quit", "delete(h.channels, ch)\n\t\t\tdelete(h.display, ch)", "delete(h.channels, ch)", "forgotten_channel_takes_new_name"},
+	{"part_reason_only_to_parter", "msg := \":\" + c.prefix() + \" PART \" + h.display[key]\n\t\tif len(p) > 1 {\n\t\t\tmsg += \" :\" + p[1]\n\t\t}\n\t\tfor m := range h.channels[key] {\n\t\t\th.send(m, msg)\n\t\t}", "msg := \":\" + c.prefix() + \" PART \" + h.display[key]\n\t\tfor m := range h.channels[key] {\n\t\t\tif m == c && len(p) > 1 {\n\t\t\t\th.send(m, msg+\" :\"+p[1])\n\t\t\t\tcontinue\n\t\t\t}\n\t\t\th.send(m, msg)\n\t\t}", "part_reason_reaches_members"},
+	{"quit_keeps_channel_membership", "for ch := range c.channels {\n\t\tdelete(h.channels[ch], c)", "for ch := range c.channels {\n\t\tif reason == \"Connection closed\" {\n\t\t\tdelete(h.channels[ch], c)\n\t\t}", "quit_removes_from_channels"},
 	{"delivered_nick_as_typed", "h.send(to, \":\"+c.prefix()+\" PRIVMSG \"+to.nick+\" :\"+text)", "h.send(to, \":\"+c.prefix()+\" PRIVMSG \"+target+\" :\"+text)", "privmsg_nick_ignoring_case"},
 }
 
@@ -55,12 +70,20 @@ func TestMutantsAreCaught(t *testing.T) {
 	}
 	for _, m := range mutants {
 		t.Run(m.name, func(t *testing.T) {
-			if !strings.Contains(string(src), m.from) {
-				t.Fatalf("mutation anchor not found in the reference: %q", m.from)
+			mutated := string(src)
+			for _, r := range append([][2]string{{m.from, m.to}}, mutantAlso[m.name]...) {
+				if !strings.Contains(mutated, r[0]) {
+					t.Fatalf("mutation anchor not found in the reference: %q", r[0])
+				}
+				mutated = strings.Replace(mutated, r[0], r[1], 1)
 			}
 			dir := t.TempDir()
-			os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module mutant\n\ngo 1.22\n"), 0o644)
-			os.WriteFile(filepath.Join(dir, "main.go"), []byte(strings.Replace(string(src), m.from, m.to, 1)), 0o644)
+			if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module mutant\n\ngo 1.22\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte(mutated), 0o644); err != nil {
+				t.Fatal(err)
+			}
 			bin := filepath.Join(dir, "server")
 			cmd := exec.Command("go", "build", "-o", bin, ".")
 			cmd.Dir = dir
