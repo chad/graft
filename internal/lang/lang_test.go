@@ -25,13 +25,3 @@ func TestPartialProfileIsRefused(t *testing.T) {
 		t.Fatal("bootstrap escaping the tree")
 	}
 }
-
-func TestRunArgv(t *testing.T) {
-	if got := Go.RunArgv("/b/server", "127.0.0.1:1"); !reflect.DeepEqual(got, []string{"/b/server", "-addr", "127.0.0.1:1"}) {
-		t.Fatal(got)
-	}
-	p := Profile{Run: []string{"node", "main.js", "--listen={addr}"}}
-	if got := p.RunArgv("", "h:2"); !reflect.DeepEqual(got, []string{"node", "main.js", "--listen=h:2"}) {
-		t.Fatal(got)
-	}
-}

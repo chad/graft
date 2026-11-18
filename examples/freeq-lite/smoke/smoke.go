@@ -32,6 +32,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -414,10 +415,14 @@ func main() {
 	srv := exec.Command(full[0], full[1:]...)
 	var srvErr strings.Builder
 	srv.Stderr = &srvErr
+	// An interpreter's children may hold stderr open after the server is
+	// killed: kill the whole process group, and never wait on the pipe forever.
+	srv.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	srv.WaitDelay = 2 * time.Second
 	if err := srv.Start(); err != nil {
 		nothingPassed(len(run), *asJSON, "the server does not start: "+err.Error())
 	}
-	defer func() { srv.Process.Kill(); srv.Wait() }()
+	defer func() { killGroup(srv); srv.Wait() }()
 	up := false
 	for i := 0; i < 50 && !up; i++ {
 		if c, err := net.Dial("tcp", addr); err == nil {
@@ -428,7 +433,7 @@ func main() {
 		}
 	}
 	if !up {
-		srv.Process.Kill()
+		killGroup(srv)
 		srv.Wait()
 		nothingPassed(len(run), *asJSON, "the server never listened on -addr:\n"+tailOf(srvErr.String(), 1500))
 	}
@@ -451,9 +456,17 @@ func main() {
 			// output, and a ranker reads the summary from it.
 			fmt.Printf("smoke: %d/%d checks passed\n", len(run)-len(failed), len(run))
 		}
-		srv.Process.Kill()
+		killGroup(srv)
 		srv.Wait()
 		os.Exit(1)
+	}
+}
+
+// killGroup kills the server and every process it started.
+func killGroup(c *exec.Cmd) {
+	if c.Process != nil {
+		syscall.Kill(-c.Process.Pid, syscall.SIGKILL)
+		c.Process.Kill()
 	}
 }
 

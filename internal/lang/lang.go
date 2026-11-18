@@ -81,18 +81,5 @@ func ExpandArgv(argv []string, vars map[string]string) []string {
 	return out
 }
 
-// RunArgv is the command that starts the program listening on addr: Run with
-// placeholders expanded, plus "-addr addr" unless Run already places {addr}.
-func (p Profile) RunArgv(out, addr string) []string {
-	vars := map[string]string{"out": out, "addr": addr}
-	argv := ExpandArgv(p.Run, vars)
-	for _, a := range p.Run {
-		if strings.Contains(a, "{addr}") {
-			return argv
-		}
-	}
-	return append(argv, "-addr", addr)
-}
-
 // IsSource reports whether a path is a source file of this language.
 func (p Profile) IsSource(name string) bool { return strings.HasSuffix(name, p.Ext) }

@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The smoke suite must pass on the reference (v1 and v2), or it is wrong.
@@ -110,5 +111,41 @@ while True:
 	out, _ = cmd.Output()
 	if !strings.HasPrefix(string(out), "smoke: 0/1 checks passed") || !strings.HasSuffix(strings.TrimRight(string(out), "\n"), "smoke: 0/1 checks passed") {
 		t.Fatalf("%q", out)
+	}
+}
+
+// A server whose child process keeps stderr open must not hang the suite.
+func TestChildHoldingStderrDoesNotHang(t *testing.T) {
+	if testing.Short() {
+		t.Skip("short")
+	}
+	py, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skip("needs python3")
+	}
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "running.py"), []byte(`import socket, subprocess, sys, threading
+subprocess.Popen(["sleep", "60"])
+addr = sys.argv[sys.argv.index("-addr") + 1]
+host, port = addr.rsplit(":", 1)
+s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind((host, int(port))); s.listen()
+def serve(c):
+    while c.recv(4096):
+        pass
+while True:
+    c, _ = s.accept()
+    threading.Thread(target=serve, args=(c,), daemon=True).start()
+`), 0o644)
+	self, _ := filepath.Abs("smoke.go")
+	start := time.Now()
+	cmd := exec.Command("go", "run", self, "-ext", ".py", "-cmd", `["`+py+`","running.py"]`)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "smoke: 1/1 checks passed") {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if d := time.Since(start); d > 20*time.Second {
+		t.Fatalf("took %v: the child held the suite", d)
 	}
 }

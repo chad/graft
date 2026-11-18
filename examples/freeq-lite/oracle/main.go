@@ -13,6 +13,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -22,6 +23,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -1111,10 +1113,14 @@ func start(argv []string, dir string, extra ...string) (string, func(), error) {
 	full := append(serverArgv(argv, addr), extra...)
 	cmd := exec.Command(full[0], full[1:]...)
 	cmd.Dir = dir
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.WaitDelay = 2 * time.Second
 	if err := cmd.Start(); err != nil {
 		return "", nil, err
 	}
-	stop := func() { cmd.Process.Kill(); cmd.Wait() }
+	stop := func() { syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); cmd.Process.Kill(); cmd.Wait() }
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		if c, err := net.Dial("tcp", addr); err == nil {
@@ -1124,7 +1130,14 @@ func start(argv []string, dir string, extra ...string) (string, func(), error) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	stop()
-	return "", nil, fmt.Errorf("server did not listen on %s", addr)
+	err = fmt.Errorf("server did not listen on %s", addr)
+	if s := strings.TrimSpace(stderr.String()); s != "" {
+		if len(s) > 1500 {
+			s = "..." + s[len(s)-1500:]
+		}
+		err = fmt.Errorf("%w; its stderr:\n%s", err, s)
+	}
+	return "", nil, err
 }
 
 type result struct {

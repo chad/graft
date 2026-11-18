@@ -1,37 +1,69 @@
 """Gate: no dead functions (run in the tree's root).
 
-A top-level function in any module, or a method of a class in running.py, must be
-referenced somewhere in the tree other than its own definition. That covers
-HANDLERS["X"] = fn, a call, or an attribute use like client.send. Names
-the runtime calls itself (main, dunders, threading.Thread run) count as used.
+Every function counts, including methods of running.py's classes and nested
+defs. Each must be referenced somewhere outside its own body: a call, an
+attribute use like client.send, HANDLERS["X"] = fn, or an import. These do NOT
+count as a use:
+- a reference from inside the function itself (recursion);
+- a string literal;
+- an assignment to "_" (`_ = f` only silences a checker).
+Names the runtime calls itself (main, dunders, threading.Thread's run) count as used.
 """
 import ast
 import glob
 import sys
 
 ALWAYS = {"main", "run"}
-defs = []  # (file, line, name)
-used = set()
-for f in sorted(glob.glob("*.py")):
-    tree = ast.parse(open(f).read(), f)
-    for node in tree.body:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            defs.append((f, node.lineno, node.name))
-        if isinstance(node, ast.ClassDef):
-            for m in node.body:
-                if isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    defs.append((f, m.lineno, m.name))
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
-            used.add(node.id)
-        elif isinstance(node, ast.Attribute):
-            used.add(node.attr)
-        elif isinstance(node, ast.alias):
-            used.add(node.name)
-        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
-            used.add(node.value)  # getattr(obj, "name") and similar
-dead = [(f, l, n) for f, l, n in defs
-        if n not in used and n not in ALWAYS and not (n.startswith("__") and n.endswith("__"))]
+
+
+def walk_outside(node, skip):
+    """Yield every node under node, without descending into the node skip."""
+    for child in ast.iter_child_nodes(node):
+        if child is skip:
+            continue
+        yield child
+        yield from walk_outside(child, skip)
+
+
+trees = {f: ast.parse(open(f).read(), f) for f in sorted(glob.glob("*.py"))}
+
+
+def is_underscore_sink(tree):
+    """ids of Name nodes that are only the value of an assignment to `_`."""
+    sink = set()
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Assign) and all(isinstance(t, ast.Name) and t.id == "_" for t in n.targets):
+            for v in ast.walk(n.value):
+                sink.add(id(v))
+    return sink
+
+
+sinks = {f: is_underscore_sink(t) for f, t in trees.items()}
+
+
+def used_outside(name, fn):
+    for f, tree in trees.items():
+        for n in walk_outside(tree, fn):
+            if id(n) in sinks[f]:
+                continue
+            if isinstance(n, ast.Name) and n.id == name and isinstance(n.ctx, ast.Load):
+                return True
+            if isinstance(n, ast.Attribute) and n.attr == name:
+                return True
+            if isinstance(n, ast.alias) and (n.asname or n.name) == name:
+                return True
+    return False
+
+
+dead = []
+for f, tree in trees.items():
+    for n in ast.walk(tree):
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            name = n.name
+            if name in ALWAYS or (name.startswith("__") and name.endswith("__")):
+                continue
+            if not used_outside(name, n):
+                dead.append((f, n.lineno, name))
 if dead:
     for f, l, n in dead:
         print("%s:%d: %s is never used; remove it (or use it)" % (f, l, n))
