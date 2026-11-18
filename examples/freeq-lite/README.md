@@ -61,9 +61,12 @@ never the oracle or the reference. A region lands only if `go build` and
 `go vet` pass; evidence for each is pinned to the record's gen_hash and the
 region's hash. Re-running with an unchanged spec regenerates nothing.
 
-First run (claude sonnet, one sample, so **an anecdote, not a measurement**): 7/7
-regions converged on the first attempt, 617 lines, and the held-out oracle
-scored it **31/32**. The one failure (`privmsg_nick_ignoring_case`) is a spec
-ambiguity: "sends `PRIVMSG <nick>` … nick matching ignores case" does not say
-whether `<nick>` is as the sender typed it or as the recipient registered it;
-the oracle chose the latter. Measurement means the bench arms at n=5 or more.
+Runs so far (claude sonnet, **one sample each: anecdotes, not measurements**):
+
+| spec / oracle | regions converged | lines | oracle |
+|---|---|---|---|
+| first wording, 32-check oracle | 7/7, all first attempt | 617 | 31/32 (the PRIVMSG-nick ambiguity) |
+| clarified spec, 38-check oracle | 7/7, all first attempt | 608 | **38/38** |
+
+Measurement means the bench arms (graft / one-call baseline / intent-only) at
+n≥5 with Wilson intervals; that is the next step.
