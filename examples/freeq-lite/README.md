@@ -223,3 +223,49 @@ names.
 One run with the smoke gate (claude sonnet, n=1, an anecdote): 7/7 regions
 converged on the first attempt, and the held-out oracle scored it 47/47
 (with the overlap above).
+
+## Cost: Haiku best-of-N vs Sonnet
+
+`graft run --samples N` draws N candidates per region in one round and keeps
+the one that ranks best (gates first, then the smoke-check count). The
+question measured here: can Haiku with `--samples 3` (arm B) match Sonnet with
+`--samples 1` (arm A) at lower cost? Each run generates freeq-lite v1 from
+the spec into a fresh tree; the oracle (held out, never shown to the model) is
+run on the result. Cost is the sum of `total_cost_usd` over every model call.
+Smoke checks are a gate and a hint, never a score.
+
+**Post-smoke (current main, visible smoke gate on), n=3 per arm:**
+
+| run | oracle /47 | calls | region attempts | cost USD | wall |
+|---|---|---|---|---|---|
+| A-1 Sonnet x1 | 47 | 7 | 7 | 1.041 | 118s |
+| A-2 Sonnet x1 | 47 | 7 | 7 | 1.002 | 92s |
+| A-3 Sonnet x1 | 47 | 7 | 7 | 0.991 | 137s |
+| B-1 Haiku x3 | 40 (run failed) | 24 | 9 | 0.212 | 403s |
+| B-2 Haiku x3 | 47 | 21 | 7 | 0.186 | 285s |
+| B-3 Haiku x3 | 47 | 21 | 7 | 0.189 | 223s |
+
+B-1: the Leaving region did not converge in 3 attempts, so graft exited with
+an error; the oracle was run on the partial tree and failed 7 checks, all
+quit/disconnect behaviour. Oracle scores from these runs overlap the smoke
+suite on about 11 behaviours (see above).
+
+**Pre-smoke (binaries built before #21: no smoke gate), n=3 per arm:**
+
+| run | oracle /47 | calls | cost USD | wall |
+|---|---|---|---|---|
+| A-1 Sonnet x1 | 46 | 7 | 0.855 | 98s |
+| A-2 Sonnet x1 | 47 | 9 | 1.149 | 176s |
+| A-3 Sonnet x1 | 47 | 7 | 0.869 | 93s |
+| B-1 Haiku x3 | 4 | 21 | 0.171 | 226s |
+| B-2 Haiku x3 | 46 | 21 | 0.168 | 206s |
+| B-3 Haiku x3 | 47 | 21 | 0.174 | 226s |
+
+**What this does and does not show.** Haiku x3 cost about $0.19 per run
+against about $1.00 for Sonnet x1, roughly a fifth, and in 4 of 6 Haiku runs
+(2 of 3 post-smoke) reached 47/47. But n=3 cannot separate close arms, and
+Haiku's variance is large: one pre-smoke run scored 4/47 and one post-smoke
+run failed to converge. Sonnet scored 46 or 47 in all six runs. Best-of-3
+lowers Haiku's cost per attempt-round but does not remove the occasional bad
+region, and it is slower (about 2-4x wall). Read this as "Haiku x3 is a
+plausible cheap option that sometimes fails", not as a ranking.
