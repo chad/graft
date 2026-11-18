@@ -7,6 +7,7 @@
   "policy": {"low": ["static_analysis"]},
   "gates": [
     {"label": "go build", "argv": ["go", "build", "./..."], "kind": "static_analysis", "timeout_sec": 300},
-    {"label": "go vet", "argv": ["go", "vet", "./..."], "kind": "static_analysis", "timeout_sec": 300}
+    {"label": "go vet", "argv": ["go", "vet", "./..."], "kind": "static_analysis", "timeout_sec": 300},
+    {"label": "registry ownership", "argv": ["go", "run", "./gates/registry.go"], "kind": "static_analysis", "timeout_sec": 300}
   ]
 }

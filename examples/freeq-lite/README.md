@@ -74,3 +74,54 @@ Runs so far (claude sonnet, **one sample each: anecdotes, not measurements**):
 
 Measurement means the bench arms (graft / one-call baseline / intent-only) at
 n≥5 with Wilson intervals; that is the next step.
+
+## Evolving it: change one section, regenerate one region
+
+`spec-v2/` is the same spec plus a **Topics** section (`TOPIC` set/query,
+331/332/403/442). The oracle's `-v2` flag adds 4 checks for it (47 total today;
+the reference scores 47/47, and a committed mutant covers topic cleanup).
+
+```sh
+graft run --config examples/freeq-lite/graft.json --spec examples/freeq-lite/spec/freeq-lite.md    --repo R --root A --accept
+graft run --config examples/freeq-lite/graft.json --spec examples/freeq-lite/spec-v2/freeq-lite.md --repo R --root A --accept
+```
+
+First run (claude sonnet, n=1, an anecdote; scored by the oracle as it was then, 38 + 4 checks):
+
+| | v1 → v2 with graft |
+|---|---|
+| drafts mapped | 7 unchanged records (no new versions), 1 new record (Topics) |
+| model calls in the v2 step | **1** (`topics.go`) |
+| existing files after the v2 step | **7 of 7 byte-identical** |
+| v2 oracle, v1 server | 38/42 (the 4 topic checks fail, as they should) |
+| v2 oracle, v2 server | **42/42** |
+
+**What this does and does not show.** Topics is an *additive* change: a new
+section whose behaviour lives in a new file. For such a change the seven
+untouched files are byte-identical **by construction**, since their records did
+not change, so graft never rewrites them. It is guaranteed, not earned. Their
+evidence is not simply trusted either: every run re-verifies each up-to-date
+region under the current gates (#12).
+
+**A change that spans regions is not handled yet.** livecodelife's agent
+probed this by adding one line to Topics: "a joiner receives 332 before 353".
+That behaviour belongs to JOIN, which `channels.go` owns. With only build and
+vet as gates, the model wrapped `handlers["JOIN"]` from `topics.go` and
+re-implemented JOIN, against the conventions, and nothing flagged it. The
+config now has a third gate, `gates/registry.go`, which refuses any file that
+registers a command another file owns. Re-running the probe:
+
+1. Attempt 1 wrapped JOIN again, and the registry gate refused it, naming
+   `channels.go`.
+2. Attempt 2 then converged by **leaving the JOIN rule out**.
+
+So absorption is now blocked, but a cross-region requirement can still be
+dropped silently. Catching that needs either the drafter to notice that a
+statement concerns another section's command, so a human can move it into
+Channels (whose record would then be revised and regenerated), or per-record
+behavioural evals (SPEC §6). Both are open. Until then, graft's change claims
+cover changes whose behaviour stays inside the edited sections.
+
+The v1 reference is the v1 spec exactly: it implements Topics only with `-v2`,
+and answers `TOPIC` with 421 otherwise. The oracle's own test checks the v1
+reference against every v1 check, and the v2 reference against all 47.

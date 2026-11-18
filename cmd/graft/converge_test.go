@@ -205,3 +205,19 @@ func TestConvergeUsageDocumentsExitCodes(t *testing.T) {
 		}
 	}
 }
+
+func TestGateArgsRelativeToConfig(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "graft.json")
+	os.MkdirAll(filepath.Join(dir, "gates"), 0o755)
+	os.WriteFile(filepath.Join(dir, "gates", "x.go"), []byte("package main\n"), 0o644)
+	os.WriteFile(cfg, []byte(`{"policy":{"low":["static_analysis"]},"gates":[{"label":"g","argv":["go","run","./gates/x.go","./...","./missing.go","--flag=./not-a-path"],"kind":"static_analysis"}]}`), 0o644)
+	c, _, err := loadConvergeConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	argv := c.Gates[0].Argv
+	if argv[2] != filepath.Join(dir, "gates", "x.go") || argv[3] != "./..." || argv[4] != "./missing.go" || argv[5] != "--flag=./not-a-path" {
+		t.Fatalf("%v", argv)
+	}
+}

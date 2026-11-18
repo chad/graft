@@ -830,15 +830,98 @@ var checks = []check{
 	}},
 }
 
+// v2Checks are the Topics revision of the spec (spec-v2/), run with -v2.
+var v2Checks = []check{
+	{"topic_set_broadcast_and_query", func(a string) error {
+		ch := uniq("#topic")
+		na, nb := uniq("una"), uniq("vik")
+		ka, err := register(a, na)
+		if err != nil {
+			return err
+		}
+		defer ka.close()
+		kb, err := register(a, nb)
+		if err != nil {
+			return err
+		}
+		defer kb.close()
+		ka.send("JOIN " + ch)
+		kb.send("JOIN " + ch)
+		time.Sleep(300 * time.Millisecond)
+		for len(ka.lines) > 0 {
+			<-ka.lines
+		}
+		for len(kb.lines) > 0 {
+			<-kb.lines
+		}
+		kb.send("TOPIC " + ch)
+		if err := kb.expect(":freeq-lite 331 " + nb + " " + ch + " :No topic is set"); err != nil {
+			return err
+		}
+		ka.send("TOPIC " + ch + " :welcome all")
+		msg := ":" + pfx(na) + " TOPIC " + ch + " :welcome all"
+		if err := first(ka.expect(msg), kb.expect(msg)); err != nil {
+			return err
+		}
+		kb.send("TOPIC " + ch)
+		return kb.expect(":freeq-lite 332 " + nb + " " + ch + " :welcome all")
+	}},
+	{"topic_non_member_442", func(a string) error {
+		ch := uniq("#closed")
+		na, nb := uniq("wyn"), uniq("xan")
+		ka, err := register(a, na)
+		if err != nil {
+			return err
+		}
+		defer ka.close()
+		ka.send("JOIN " + ch)
+		kb, err := register(a, nb)
+		if err != nil {
+			return err
+		}
+		defer kb.close()
+		time.Sleep(200 * time.Millisecond)
+		kb.send("TOPIC " + ch + " :mine now")
+		return kb.expect(":freeq-lite 442 " + nb + " " + ch + " :You're not on that channel")
+	}},
+	{"topic_unknown_channel_403", func(a string) error {
+		n := uniq("yul")
+		k, err := register(a, n)
+		if err != nil {
+			return err
+		}
+		defer k.close()
+		ch := uniq("#nowhere")
+		k.send("TOPIC " + ch)
+		return k.expect(":freeq-lite 403 " + n + " " + ch + " :No such channel")
+	}},
+	{"topic_forgotten_with_channel", func(a string) error {
+		ch := uniq("#fleeting")
+		n := uniq("zia")
+		k, err := register(a, n)
+		if err != nil {
+			return err
+		}
+		defer k.close()
+		k.send("JOIN "+ch, "TOPIC "+ch+" :brief", "PART "+ch, "JOIN "+ch)
+		time.Sleep(300 * time.Millisecond)
+		for len(k.lines) > 0 {
+			<-k.lines
+		}
+		k.send("TOPIC " + ch)
+		return k.expect(":freeq-lite 331 " + n + " " + ch + " :No topic is set")
+	}},
+}
+
 // start launches bin on a free port and waits until it accepts connections.
-func start(bin string) (string, func(), error) {
+func start(bin string, extra ...string) (string, func(), error) {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return "", nil, err
 	}
 	addr := l.Addr().String()
 	l.Close()
-	cmd := exec.Command(bin, "-addr", addr)
+	cmd := exec.Command(bin, append([]string{"-addr", addr}, extra...)...)
 	if err := cmd.Start(); err != nil {
 		return "", nil, err
 	}
@@ -866,13 +949,18 @@ func main() {
 	bin := flag.String("bin", "", "server binary to start once per check")
 	addr := flag.String("addr", "", "address of an already-running server")
 	only := flag.String("run", "", "run only checks whose name contains this")
+	withV2 := flag.Bool("v2", false, "include the checks for the Topics spec revision")
 	flag.Parse()
 	if (*bin == "") == (*addr == "") {
 		fmt.Fprintln(os.Stderr, "oracle: exactly one of -bin or -addr")
 		os.Exit(2)
 	}
 	r := result{Failed: []string{}, Errors: map[string]string{}}
-	for _, c := range checks {
+	all := checks
+	if *withV2 {
+		all = append(append([]check{}, checks...), v2Checks...)
+	}
+	for _, c := range all {
 		if *only != "" && !strings.Contains(c.name, *only) {
 			continue
 		}
