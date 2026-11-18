@@ -262,3 +262,17 @@ func TestMissingSpecIsAnErrorNotEmpty(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestSpecPathEscapeIsRefused(t *testing.T) {
+	for _, bad := range []string{"../outside.md", "/etc/passwd", "specs/../../outside.md"} {
+		dir := copyFixture(t, "with-specs")
+		os.WriteFile(filepath.Join(filepath.Dir(dir), "outside.md"), []byte("x"), 0o644)
+		f := filepath.Join(dir, "provenance", fixtureID+".yml")
+		b, _ := os.ReadFile(f)
+		os.WriteFile(f, []byte(strings.Replace(string(b), "path: specs/widget.md", "path: "+bad, 1)), 0o644)
+		s, _ := OpenDir(dir)
+		if _, err := s.Current(fixtureID); !errors.Is(err, ErrSpecPath) {
+			t.Errorf("%s: err = %v", bad, err)
+		}
+	}
+}

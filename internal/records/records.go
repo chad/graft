@@ -85,11 +85,34 @@ func (d *dirStore) Current(id string) (Pin, error) {
 	if v == 0 {
 		v = 1 // a v1 record reads as version 1
 	}
-	sh, err := specHash(r, d.fs.Specs())
+	sh, err := specHash(r, confined(d.fs.Specs()))
 	if err != nil {
 		return Pin{}, fmt.Errorf("%s: %w", id, err)
 	}
 	return Pin{RecordID: r.ID, Version: v, GenHash: r.GenHash(), SpecHash: sh}, nil
+}
+
+// ErrSpecPath means an associated spec path is absolute or escapes the repo.
+var ErrSpecPath = errors.New("records: associated spec path is outside the repository")
+
+// confined wraps provenance's resolver so a spec path cannot be absolute or
+// climb out of the repository: a record must not be able to make graft read,
+// and pin evidence to, an arbitrary file. Such a path resolves as missing.
+func confined(resolve record.SpecResolver) record.SpecResolver {
+	return func(p string) (string, bool) {
+		if !specPathOK(p) {
+			return "", false
+		}
+		return resolve(p)
+	}
+}
+
+func specPathOK(p string) bool {
+	if p == "" || strings.HasPrefix(p, "/") || filepath.IsAbs(p) || strings.Contains(p, "\\") {
+		return false
+	}
+	c := filepath.ToSlash(filepath.Clean(filepath.FromSlash(p)))
+	return c != ".." && !strings.HasPrefix(c, "../")
 }
 
 // specHash aggregates provenance's per-spec hashes (record.SpecHashes, which
@@ -97,6 +120,11 @@ func (d *dirStore) Current(id string) (Pin, error) {
 func specHash(r *record.Record, resolve record.SpecResolver) (string, error) {
 	if len(r.AssociatedSpecs) == 0 {
 		return "", nil
+	}
+	for _, sp := range r.AssociatedSpecs {
+		if sp.Path != "" && !record.IsRecordFilePath(sp.Path) && !specPathOK(sp.Path) {
+			return "", fmt.Errorf("%w: %q", ErrSpecPath, sp.Path)
+		}
 	}
 	hashes, missing := r.SpecHashes(resolve)
 	if len(missing) > 0 {
