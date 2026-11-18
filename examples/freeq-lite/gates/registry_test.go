@@ -88,3 +88,26 @@ func TestDeclarerSynthMayReadRegistry(t *testing.T) {
 		t.Fatal("other synth file passed:\n" + out)
 	}
 }
+
+// Review on #19: the declarer's _synth.go may read the registry, not own it.
+func TestDeclarerSynthReadOnly(t *testing.T) {
+	for name, src := range map[string]string{
+		"alias":    "package main\n\nfunc f() { m := handlers; old := m[\"JOIN\"]; m[\"JOIN\"] = func() { old() } }\n",
+		"clear":    "package main\n\nfunc f() { clear(handlers) }\n",
+		"write":    "package main\n\nfunc f() { handlers[\"JOIN\"] = func() {} }\n",
+		"paren":    "package main\n\nfunc f() { (handlers)[\"JOIN\"] = func() {} }\n",
+		"delete":   "package main\n\nfunc f() { delete(handlers, \"JOIN\") }\n",
+		"passed":   "package main\n\nfunc g(map[string]func()) {}\nfunc f() { g(handlers) }\n",
+		"reassign": "package main\n\nfunc f() { handlers = nil }\n",
+		"addr":     "package main\n\nfunc f() { p := &handlers; _ = p }\n",
+	} {
+		files := map[string]string{"running.go": core, "channels.go": "package main\n\nfunc init() { handlers[\"JOIN\"] = func() {} }\n", "running_synth.go": src}
+		if out, ok := runGate(t, files); ok {
+			t.Errorf("%s passed:\n%s", name, out)
+		}
+	}
+	ok := "package main\n\nfunc f(c string) int { n := 0; for k := range handlers { _ = k; n++ }; if h, found := handlers[c]; found { h() }; return n }\n"
+	if out, pass := runGate(t, map[string]string{"running.go": core, "running_synth.go": ok}); !pass {
+		t.Fatalf("read-only use refused:\n%s", out)
+	}
+}

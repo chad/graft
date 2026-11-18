@@ -56,7 +56,64 @@ func main() {
 		// the name is a direct registration: handlers["CMD"] = <handler>.
 		// Aliases, parenthesised forms, passing the map anywhere (reflect,
 		// helpers) and reassigning the whole map are all refused.
-		if f != declarer && f != strings.TrimSuffix(declarer, ".go")+"_synth.go" {
+		// The declarer's own _synth.go (model-written in render mode) gets read
+		// access only: handlers[k] reads and `range handlers`. No aliasing, no
+		// writes, no clear, no passing the map anywhere.
+		if f == strings.TrimSuffix(declarer, ".go")+"_synth.go" && f != declarer {
+			writes := map[ast.Expr]bool{}
+			markWrite := func(e ast.Expr) {
+				for {
+					if pe, ok := e.(*ast.ParenExpr); ok {
+						e = pe.X
+						continue
+					}
+					break
+				}
+				writes[e] = true
+			}
+			allowed := map[*ast.Ident]bool{}
+			ast.Inspect(af, func(n ast.Node) bool {
+				switch x := n.(type) {
+				case *ast.AssignStmt:
+					for _, l := range x.Lhs {
+						markWrite(l)
+					}
+				case *ast.IncDecStmt:
+					markWrite(x.X)
+				case *ast.UnaryExpr:
+					if x.Op == token.AND {
+						markWrite(x.X)
+					}
+				case *ast.RangeStmt:
+					if x.Key != nil {
+						markWrite(x.Key)
+					}
+					if x.Value != nil {
+						markWrite(x.Value)
+					}
+				}
+				return true
+			})
+			ast.Inspect(af, func(n ast.Node) bool {
+				switch x := n.(type) {
+				case *ast.IndexExpr:
+					if id, ok := x.X.(*ast.Ident); ok && id.Name == "handlers" && !writes[x] {
+						allowed[id] = true
+					}
+				case *ast.RangeStmt:
+					if id, ok := x.X.(*ast.Ident); ok && id.Name == "handlers" {
+						allowed[id] = true
+					}
+				}
+				return true
+			})
+			ast.Inspect(af, func(n ast.Node) bool {
+				if id, ok := n.(*ast.Ident); ok && id.Name == "handlers" && !allowed[id] && id.Obj == nil {
+					problems = append(problems, fmt.Sprintf("%s:%d: %s may only read handlers (index or range); it must not alias, write, clear or pass it", f, fset.Position(id.Pos()).Line, f))
+				}
+				return true
+			})
+		} else if f != declarer {
 			allowed := map[*ast.Ident]bool{}
 			ast.Inspect(af, func(n ast.Node) bool {
 				if as, ok := n.(*ast.AssignStmt); ok && as.Tok == token.ASSIGN {
