@@ -105,20 +105,22 @@ func TestConvergeCLIRefusals(t *testing.T) {
 func TestConvergeCLIConfigIsStrict(t *testing.T) {
 	root, _, logp := convergeSetup(t, "true")
 	for name, cfgText := range map[string]string{
-		"trailing object": `{"policy":{"low":["test_run"]},"gates":[{"label":"g","argv":["true"],"kind":"test_run"}]}{"policy":{}}`,
-		"unknown kind":    `{"policy":{"low":["test_rnu"]},"gates":[{"label":"g","argv":["true"],"kind":"test_run"}]}`,
-		"gate kind":       `{"policy":{"low":["test_run"]},"gates":[{"label":"g","argv":["true"],"kind":"vibes"}]}`,
-		"empty argv0":     `{"policy":{"low":["test_run"]},"gates":[{"label":"g","argv":[""],"kind":"test_run"}]}`,
-		"negative":        `{"policy":{"low":["test_run"]},"gates":[{"label":"g","argv":["true"],"kind":"test_run","timeout_sec":-1}]}`,
-		"duplicate key":   `{"policy":{"low":["eval"]},"policy":{"low":["test_run"]},"gates":[{"label":"g","argv":["true"],"kind":"test_run"}]}`,
-		"duplicate tier":  `{"policy":{"low":["eval"],"low":["test_run"]},"gates":[{"label":"g","argv":["true"],"kind":"test_run"}]}`,
-		"upper-case key":  `{"POLICY":{"low":["test_run"]},"gates":[{"label":"g","argv":["true"],"kind":"test_run"}]}`,
-		"upper gate key":  `{"policy":{"low":["test_run"]},"gates":[{"LABEL":"g","argv":["true"],"kind":"test_run"}]}`,
-		"null tier":       `{"policy":{"low":null},"gates":[{"label":"g","argv":["true"],"kind":"test_run"}]}`,
-		"null gates":      `{"policy":{"low":["test_run"]},"gates":null}`,
-		"trailing junk":   `{"policy":{"low":["test_run"]},"gates":[{"label":"g","argv":["true"],"kind":"test_run"}]} xyz`,
-		"signoff gate":    `{"policy":{"low":["human_signoff"]},"gates":[{"label":"me","argv":["true"],"kind":"human_signoff"}]}`,
-		"empty policy":    `{"policy":{},"gates":[{"label":"g","argv":["true"],"kind":"test_run"}]}`,
+		"trailing object":  `{"policy":{"low":["test_run"]},"gates":[{"label":"g","argv":["true"],"kind":"test_run"}]}{"policy":{}}`,
+		"unknown kind":     `{"policy":{"low":["test_rnu"]},"gates":[{"label":"g","argv":["true"],"kind":"test_run"}]}`,
+		"gate kind":        `{"policy":{"low":["test_run"]},"gates":[{"label":"g","argv":["true"],"kind":"vibes"}]}`,
+		"empty argv0":      `{"policy":{"low":["test_run"]},"gates":[{"label":"g","argv":[""],"kind":"test_run"}]}`,
+		"negative":         `{"policy":{"low":["test_run"]},"gates":[{"label":"g","argv":["true"],"kind":"test_run","timeout_sec":-1}]}`,
+		"duplicate key":    `{"policy":{"low":["eval"]},"policy":{"low":["test_run"]},"gates":[{"label":"g","argv":["true"],"kind":"test_run"}]}`,
+		"duplicate tier":   `{"policy":{"low":["eval"],"low":["test_run"]},"gates":[{"label":"g","argv":["true"],"kind":"test_run"}]}`,
+		"upper-case key":   `{"POLICY":{"low":["test_run"]},"gates":[{"label":"g","argv":["true"],"kind":"test_run"}]}`,
+		"upper gate key":   `{"policy":{"low":["test_run"]},"gates":[{"LABEL":"g","argv":["true"],"kind":"test_run"}]}`,
+		"null tier":        `{"policy":{"low":null},"gates":[{"label":"g","argv":["true"],"kind":"test_run"}]}`,
+		"null gates":       `{"policy":{"low":["test_run"]},"gates":null}`,
+		"trailing junk":    `{"policy":{"low":["test_run"]},"gates":[{"label":"g","argv":["true"],"kind":"test_run"}]} xyz`,
+		"signoff gate":     `{"policy":{"low":["human_signoff"]},"gates":[{"label":"me","argv":["true"],"kind":"human_signoff"}]}`,
+		"stray bracket":    `{"policy":{"low":["test_run"]},"gates":[{"label":"g","argv":["true"],"kind":"test_run"}]}]`,
+		"timeout overflow": `{"policy":{"low":["test_run"]},"gates":[{"label":"g","argv":["true"],"kind":"test_run","timeout_sec":9300000000}]}`,
+		"empty policy":     `{"policy":{},"gates":[{"label":"g","argv":["true"],"kind":"test_run"}]}`,
 	} {
 		cfg := filepath.Join(t.TempDir(), "graft.json")
 		os.WriteFile(cfg, []byte(cfgText), 0o644)
@@ -181,5 +183,25 @@ func TestConvergeCLIRefusalCreatesNoLogDir(t *testing.T) {
 	runWith("x", []string{"converge", "--config", cfg, "--records", fixtureRecords, "--log", logp, "--root", root, "--record", "prov-nope", "--path", "app.go", "--tier", "low", "-"})
 	if _, err := os.Stat(filepath.Dir(logp)); !os.IsNotExist(err) {
 		t.Fatal("log dir created on a refusal")
+	}
+}
+
+// Review on #9: exit 3 is decided by whether checking began, not by whether
+// evidence was written. A first (and only) gate that cannot start is exit 3.
+func TestConvergeCLIFirstGateCannotStartIsExit3(t *testing.T) {
+	root, _, logp := convergeSetup(t, "true")
+	cfg := filepath.Join(t.TempDir(), "graft.json")
+	os.WriteFile(cfg, []byte(`{"policy":{"low":["test_run"]},"gates":[{"label":"missing","argv":["no-such-binary-graft"],"kind":"test_run"}]}`), 0o644)
+	if code, _, errs := runWith("func F() {}\n", convergeArgs(root, cfg, logp, "-")); code != 3 {
+		t.Fatalf("exit %d: %s", code, errs)
+	}
+}
+
+func TestConvergeUsageDocumentsExitCodes(t *testing.T) {
+	_, _, errs := runWith("", []string{"converge"})
+	for _, want := range []string{"exit codes:", "0  applied", "1  checked, NOT applied", "2  refused before checking", "3  failed after checking began"} {
+		if !strings.Contains(errs, want) {
+			t.Errorf("usage lacks %q:\n%s", want, errs)
+		}
 	}
 }

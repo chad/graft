@@ -70,14 +70,34 @@ func loadConvergeConfig(path string) (convergeConfig, []converge.Gate, error) {
 		if !converge.Executable(g.Kind) {
 			return c, nil, fmt.Errorf("%s: gate %q claims kind %q; a command gate can only produce an executable kind (test_run, eval, static_analysis, conformance)", path, g.Label, g.Kind)
 		}
-		if g.TimeoutSec < 0 {
-			return c, nil, fmt.Errorf("%s: gate %q has a negative timeout", path, g.Label)
+		if g.TimeoutSec < 0 || g.TimeoutSec > maxTimeoutSec {
+			return c, nil, fmt.Errorf("%s: gate %q timeout_sec must be 0..%d", path, g.Label, maxTimeoutSec)
 		}
 		gates = append(gates, converge.CommandGate{Label: g.Label, Argv: g.Argv, As: g.Kind,
 			Timeout: time.Duration(g.TimeoutSec) * time.Second})
 	}
 	return c, gates, nil
 }
+
+// maxTimeoutSec bounds a gate's timeout (24h) well below time.Duration overflow.
+const maxTimeoutSec = 24 * 60 * 60
+
+// convergeUsage documents the flags and, above all, the exit codes.
+const convergeUsage = `usage: graft converge --record ID --path FILE --tier T [flags] BODY|-
+
+Checks a synthesized body through the configured gates and the tier's policy,
+and writes it into the record's synthesis region only if the tier is satisfied.
+The record's version and gen_hash come from --records; they cannot be set here.
+
+exit codes:
+  0  applied (guarantee: checked)
+  1  checked, NOT applied: a gate failed or the tier is unsatisfied
+  2  refused before checking began: usage, config, unknown record or tier,
+     stale pin, bad path, hand-edited region, sedum overlap, marker in body
+  3  failed after checking began: a gate could not start, the run was
+     cancelled, or the tree or record changed during the gates;
+     any evidence recorded so far is kept
+`
 
 // knownKind: any evidence kind a policy may require.
 func knownKind(k evidence.Kind) bool {
@@ -98,11 +118,13 @@ func knownKind(k evidence.Kind) bool {
 // during the gates, log I/O); evidence recorded so far is kept.
 //
 // Gates run with graft's environment and permissions: the scratch copy keeps
-// them off the working tree, it is not a sandbox. --tier and --spec-hash are
-// caller-supplied until the records layer exposes them (SPEC §12).
+// them off the working tree, it is not a sandbox. --tier is caller-supplied
+// because records carry no risk tier (SPEC §12); --spec-hash is caller-supplied
+// until records.Pin passes through provenance's spec hashes.
 func convergeCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("converge", flag.ContinueOnError)
 	fs.SetOutput(stderr)
+	fs.Usage = func() { fmt.Fprint(stderr, convergeUsage); fs.PrintDefaults() }
 	cfgPath := fs.String("config", "graft.json", "policy and gates")
 	recDir := fs.String("records", ".", "provenance repo root (records layer)")
 	logPath := fs.String("log", ".graft/evidence.jsonl", "evidence log (relative to the current directory, not --root)")
@@ -117,7 +139,7 @@ func convergeCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 2
 	}
 	if *id == "" || *path == "" || *tier == "" || fs.NArg() != 1 {
-		fmt.Fprintln(stderr, "usage: graft converge --record ID --path FILE --tier T [flags] BODY|-")
+		fmt.Fprint(stderr, convergeUsage)
 		return 2
 	}
 	var body []byte
@@ -167,9 +189,10 @@ func convergeCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	defer stop()
 	d, err := c.Converge(ctx, cand)
 	if err != nil {
-		if len(d.Evidence) > 0 {
-			// Checking had begun (evidence was recorded) when it failed: not
-			// a refusal, not a decision.
+		if d.Checked {
+			// Checking had begun when it failed (a gate could not start, the
+			// run was cancelled, the tree or record changed): not a refusal,
+			// not a decision. Evidence written so far is kept.
 			fmt.Fprintf(stderr, "graft: failed after checking began (%d evidence entries recorded): %v\n", len(d.Evidence), err)
 			return 3
 		}

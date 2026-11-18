@@ -75,6 +75,10 @@ type Decision struct {
 	Guarantee string // always Guarantee
 	Result    evidence.Result
 	Evidence  []evidence.Evidence // what this run appended
+	// Checked is set when the first gate starts. A failure with Checked
+	// false was a refusal before checking; with Checked true, checking had
+	// begun (even if it was cancelled before any evidence was written).
+	Checked bool
 }
 
 // Converger runs candidates through gates and the evidence policy.
@@ -176,6 +180,7 @@ func (c Converger) Converge(ctx context.Context, cand Candidate) (Decision, erro
 		by = "graft/converge"
 	}
 	verdicts := map[evidence.Kind]evidence.Verdict{}
+	d.Checked = true
 	for _, g := range c.Gates {
 		v, detail, err := g.Run(ctx, scratch)
 		if err != nil {

@@ -606,7 +606,7 @@ func TestCancelKillsGateAndCleansScratch(t *testing.T) {
 	time.AfterFunc(300*time.Millisecond, cancel)
 	start := time.Now()
 	d, err := c.Converge(ctx, cand("func F() {}"))
-	if err == nil || d.Applied || len(d.Evidence) != 0 {
+	if err == nil || d.Applied || len(d.Evidence) != 0 || !d.Checked {
 		t.Fatalf("%+v %v", d, err)
 	}
 	if el := time.Since(start); el > 3*time.Second {
@@ -627,8 +627,9 @@ func TestNonExecutableGateKindIsRefused(t *testing.T) {
 	c, _ := setup(t, verdictGate{evidence.HumanSignoff, evidence.Pass})
 	k := cand("func F() {}")
 	k.Tier = "high"
-	if _, err := c.Converge(context.Background(), k); !errors.Is(err, ErrGateKind) {
-		t.Fatalf("err = %v", err)
+	d, err := c.Converge(context.Background(), k)
+	if !errors.Is(err, ErrGateKind) || d.Checked {
+		t.Fatalf("err = %v checked=%v (a refusal must not count as checking)", err, d.Checked)
 	}
 }
 
