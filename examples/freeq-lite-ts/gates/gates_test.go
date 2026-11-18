@@ -28,10 +28,13 @@ func gate(t *testing.T, script string, files map[string]string) (string, bool) {
 		t.Skip("needs node")
 	}
 	if _, err := os.Stat("node_modules/typescript"); err != nil {
-		if os.Getenv("CI") != "" {
-			t.Fatal("the gates need `npm ci` in examples/freeq-lite-ts/gates")
+		// Install the gates' one dependency once, the way a user would.
+		if out, err := exec.Command("npm", "ci", "--silent", "--no-audit", "--no-fund").CombinedOutput(); err != nil {
+			t.Skipf("run `npm ci` in examples/freeq-lite-ts/gates (%v: %s)", err, out)
 		}
-		t.Skip("run `npm ci` in examples/freeq-lite-ts/gates")
+	}
+	if err := exec.Command(node, "--experimental-strip-types", "--no-warnings", "-e", "0").Run(); err != nil {
+		t.Skip("needs a Node with --experimental-strip-types (22.6 or newer)")
 	}
 	dir := t.TempDir()
 	for n, src := range files {

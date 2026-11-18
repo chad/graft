@@ -21,6 +21,9 @@ func TestTypeScriptPlanRendersAndLoads(t *testing.T) {
 	if err != nil {
 		t.Skip("needs node")
 	}
+	if err := exec.Command(node, "--experimental-strip-types", "--no-warnings", "-e", "0").Run(); err != nil {
+		t.Skip("needs a Node with --experimental-strip-types (22.6 or newer)")
+	}
 	bin, err := exec.LookPath("sedum")
 	if err != nil {
 		t.Skip("needs sedum")
