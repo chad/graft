@@ -1,34 +1,33 @@
 # HANDOFF: M7 records → sedum recordings (branch m7-recordings)
 
 ## Goal
-Deterministic `Plan(records) → sedum recording` in `internal/recording`, laying out the Go skeleton with sedum's `go` generator. Handler bodies are convergence regions owned by record id/version/gen_hash. `Write(w, Recording)` emits sedum's on-disk JSON. No model calls.
+Deterministic `Plan(records) → sedum recording` in `internal/recording`, laying out the Go skeleton with sedum's `go` generator. No model calls. `Write(w, Recording)` emits sedum's on-disk JSON. Brief: BRIEF-M7-recordings.md (uncommitted, in the project folder).
 
 ## Definition of done
-The 6 tests in BRIEF-M7-recordings.md (not committed; in the project folder): Plan determinism, grows with real sedum + `go build` + gofmt, `GrowCheck` clean, regions owned by records (`render.ReadMarkers`), handler bodies are convergence regions, freeq-lite's 7 blueprints plan and the oracle connects. Plus gofmt / vet / `go test -race ./...` clean, CI green, PR to main, tell chad-bot-phoenix in #phoenix and the orchestrator.
+The 6 tests from the brief, plus gofmt / vet / `go test -race ./...` clean, a sedum install step in CI (not there yet), a PR to chad/graft main, a mention of chad-bot-phoenix in #phoenix, and `complete` on freeq handoff 01M7PDF8ET1Y9ZSJYX0FR7ZBJH.
 
-## Done
-Nothing is committed beyond main (44acf2e). This session was research only.
+## Done (this WIP commit)
+- `internal/recording/recording.go`: `Plan(Input{Pins, Skeleton}) (Planned{Recording, Regions}, error)`, `Write`, `LoadSkeleton`. Deterministic: records are sorted by id, imports are sorted, and map keys are sorted by the JSON encoder.
+- **Design decision taken (option A from the old handoff; nobody ruled on it, so revisit if the orchestrator or chad-bot disagrees):** sedum renders fixed decls (type/var/const/func) from the skeleton. Each open-bodied function is a *stub* that only delegates to `<file stem><Name>Body`, and `Planned.Regions` lists those helper signatures per file/record. Converge must declare them in its synth region. Converge is untouched.
+- `internal/recording/testdata/freeqlite.skeleton.json`: a 7-file freeq-lite skeleton (running.go owns Server/Client/Message/handlers/main plus stubs; six other files each hold an `init()` stub). I could not get the 7 drafted blueprints (they were never committed on any branch), so the test uses 7 synthetic real provenance records that it writes itself.
+- `internal/recording/recording_test.go`: the 6 brief tests plus a bad-input test. The tests copy sedum's generators from `$SEDUM_GENERATORS` or `~/sedum/generators` (the release binary does not carry them; they skip locally if absent, and fail under `CI`).
+- Found with real sedum: a fixed `func` decl is action `setFunction` (fixed).
 
-## What I learned (saves a re-read)
-- Sedum recording JSON (README "Recorded Executions"): `{sedum_version, packages:{go:{extensions:[".go"]}}, records:[{record_id, gen, files:[{path, package:"go", template, captures}], phases:[{name:"default", invocations:[{action, kwargs}]}]}]}`. A real example is `~/sedum/.sedum/recordings/prov-2026-1a55bc63.json`. Sedum is 0.12.2 and on PATH; the `go` generator is `~/sedum/generators/go`.
-- Go actions (every kwarg required, `file` first): `addImport{file,path}`, `setType/setVar/setConst/setFunction{file,name,code}`, `setMethod{file,receiver,name,code}`, `setImports`, `setBuildConstraint`. `code` is the WHOLE declaration, body included. File templates: `{name}.go` (root, `package main` via `cmd/{bin}/{name}.go`), `{pkg}/{name}.go`, and so on. Anchors are header, imports, decls.
-- `render.Render(ctx, render.Exec(bin), dir, recording)` runs `grow --execute`. `render.ReadMarkers(root)` reads sedum markers (Owner = record id, version 0 for v2 markers, gen_hash).
-- Convergence regions are `graft:synth:begin/end` markers (internal/converge/region.go): one region per (record, file), created at EOF by converge if absent. `guardSedum` refuses any synth region overlapping ANY sedum region, and refuses changes to sedum regions.
-- pr12 (`graft run`): one record per spec section → one file (`running.go`, `registration.go`, …), one synth region per record. Today it asks the model for the whole file. `examples/freeq-lite/conventions.md` on pr12 gives the architecture: `package main`; `running.go` owns `Server`, `Client`, `Message`, `handlers` map, `Send`/`Reply`/`Prefix`/`Disconnect`, `main`; other files register handlers from `init()`.
-- `.github/workflows/ci.yml` does NOT install sedum. Test 2 needs a sedum install step in CI (`~/sedum/install.sh` exists; check it).
-- records carry only natural-language statements, so Plan needs a separate typed skeleton input (file, imports, types, func signatures). Proposal: a `skeleton.json` beside conventions.md.
-
-## Open design problem (blocking; I asked chad-bot-phoenix, which declined: my freeq tier is 'observe', so `ask` is refused)
-A sedum `setFunction` region contains the whole func including body, and converge forbids a synth region overlapping a sedum region. So a body cannot be a synth region inside a sedum-rendered func. Options:
-- (A) Sedum renders types/vars/imports plus owned stub funcs. Converge's region declares `<fn>Body` helpers that the stubs delegate to.
-- (B) Converge is allowed to replace a sedum `seeded`-tier stub body. This changes converge, which is chad-bot's code.
-- (C) Skeleton is declarations only, with no funcs. Package `main` then lacks `main()`, so the build needs a hand-added one. This probably fails test 6.
-- Leaning toward (A) or Plan returning `{Recording, Regions []ConvergenceRegion}`, with Regions listing func signatures that converge will fill. Needs an orchestrator or chad-bot decision before coding; use `say` in #phoenix (a plain `say` worked).
+## State of the tests
+`go vet ./...` and gofmt on the sources are clean. Last run of `go test -race ./internal/recording`: only `TestRecordingGrowsWithRealSedum` fails, because the test helper `fill` writes unformatted `fill_*.go` files and the test then gofmt-checks them. Fix the helper (run `gofmt` on its output, or `go/format.Source`), then re-run. The other tests passed in the last run, but check `TestGrowCheckCleanAfterGrow` (the earlier orphan failure came from synthetic pins with no provenance files, now fixed by `writeRecords`).
 
 ## Next
-1. Get the design call above. 2. Write the failing tests first. 3. Implement `internal/recording` (Plan, Write, golden freeq-lite skeleton). 4. Add a sedum install step to CI. 5. Run the checks, push, open the PR to chad/graft main, report in #phoenix and complete handoff 01M7PDF8ET1Y9ZSJYX0FR7ZBJH.
+1. Fix `fill` formatting; get all tests green with `-race`.
+2. TestFreeqLiteBlueprintsPlan currently builds the skeleton and then **skips** the oracle part. Oracle is not on main (it is in PR #11, flags in PR #12); once #11 merges, rebase and run the oracle against the built binary: connect must work (exit 0 or 1, not 2). `main` in the skeleton listens on `-addr` and calls the stub `serve`.
+3. Add a sedum install step to `.github/workflows/ci.yml` (`~/sedum/install.sh`; `SEDUM_INSTALL_DIR`, `--no-model`), plus provide generators for the test (a sedum checkout, or set `SEDUM_GENERATORS`), and set CI so skips become failures.
+4. Run gofmt, vet and `go test -race ./...`. Push, then `gh pr create --repo chad/graft --base main` (the GitHub MCP is down; use `gh`).
+5. Mention @chad-bot-phoenix in #phoenix with the PR link; `complete` the handoff.
+
+## Open questions
+- Does converge accept the stub/helper split (option A), or does the orchestrator want a different one? Plan's `Regions` is the interface converge would consume.
+- Should the skeleton be a `skeleton.json` beside conventions.md in the real flow (my proposal)? Who writes it for new specs?
 
 ## Gotchas
-- `freeq ask` to chad-bot is refused (tier); use `say`.
-- The GitHub MCP server failed to connect; use `gh` for the PR.
-- Never post absolute paths or secrets on freeq.
+- `render.Exec.GrowCheck` runs `--records provenance`, so real record files must exist in the dir or every region is an orphan.
+- `generators/` must be removed before `go build ./...` / gofmt, because the templates are not Go.
+- `freeq ask` is refused at my tier; use `say`. Never post secrets or absolute paths on freeq.
