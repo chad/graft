@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/chad/graft/internal/converge"
@@ -34,6 +36,14 @@ func loadConvergeConfig(path string) (convergeConfig, []converge.Gate, error) {
 	if err != nil {
 		return c, nil, err
 	}
+	// encoding/json alone is not strict: it matches keys case-insensitively,
+	// lets a duplicate key win silently, accepts null and ignores trailing data.
+	if err := strictCheck(b, map[string][]string{
+		"":        {"policy", "gates"},
+		"gates[]": {"label", "argv", "kind", "timeout_sec"},
+	}); err != nil {
+		return c, nil, fmt.Errorf("%s: %w", path, err)
+	}
 	dec := json.NewDecoder(bytes.NewReader(b))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&c); err != nil {
@@ -57,8 +67,8 @@ func loadConvergeConfig(path string) (convergeConfig, []converge.Gate, error) {
 		if g.Label == "" || len(g.Argv) == 0 || g.Argv[0] == "" || g.Kind == "" {
 			return c, nil, fmt.Errorf("%s: gate %d needs label, argv and kind", path, i)
 		}
-		if !knownKind(g.Kind) {
-			return c, nil, fmt.Errorf("%s: gate %q has unknown kind %q", path, g.Label, g.Kind)
+		if !converge.Executable(g.Kind) {
+			return c, nil, fmt.Errorf("%s: gate %q claims kind %q; a command gate can only produce an executable kind (test_run, eval, static_analysis, conformance)", path, g.Label, g.Kind)
 		}
 		if g.TimeoutSec < 0 {
 			return c, nil, fmt.Errorf("%s: gate %q has a negative timeout", path, g.Label)
@@ -69,6 +79,7 @@ func loadConvergeConfig(path string) (convergeConfig, []converge.Gate, error) {
 	return c, gates, nil
 }
 
+// knownKind: any evidence kind a policy may require.
 func knownKind(k evidence.Kind) bool {
 	switch k {
 	case evidence.TestRun, evidence.Eval, evidence.HumanSignoff, evidence.StaticAnalysis, evidence.Conformance:
@@ -82,7 +93,13 @@ func knownKind(k evidence.Kind) bool {
 //
 // Exit 0: applied. Exit 1: checked and NOT applied (a gate failed or the tier
 // is unsatisfied). Exit 2: usage or a refusal before checking (bad path,
-// stale pin, hand-edited region, sedum overlap, ...).
+// stale pin, hand-edited region, sedum overlap, ...). Exit 3: failed after
+// checking began (a later gate could not start, the tree or record changed
+// during the gates, log I/O); evidence recorded so far is kept.
+//
+// Gates run with graft's environment and permissions: the scratch copy keeps
+// them off the working tree, it is not a sandbox. --tier and --spec-hash are
+// caller-supplied until the records layer exposes them (SPEC §12).
 func convergeCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("converge", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -124,6 +141,15 @@ func convergeCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "graft: %v\n", err)
 		return 2
 	}
+	cand, err := converge.NewCandidate(store, *id, *path, *tier, *specHash, string(body))
+	if err != nil {
+		fmt.Fprintf(stderr, "graft: %v\n", err)
+		return 2
+	}
+	if _, ok := cfg.Policy[*tier]; !ok {
+		fmt.Fprintf(stderr, "graft: unknown tier %q\n", *tier)
+		return 2
+	}
 	if err := os.MkdirAll(dirOf(*logPath), 0o755); err != nil {
 		fmt.Fprintf(stderr, "graft: %v\n", err)
 		return 2
@@ -133,15 +159,20 @@ func convergeCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "graft: %v\n", err)
 		return 2
 	}
-	cand, err := converge.NewCandidate(store, *id, *path, *tier, *specHash, string(body))
-	if err != nil {
-		fmt.Fprintf(stderr, "graft: %v\n", err)
-		return 2
-	}
 	cand.Comment = *comment
 	c := converge.Converger{Root: *root, Records: store, Log: log, Policy: evidence.Policy(cfg.Policy), Gates: gates}
-	d, err := c.Converge(context.Background(), cand)
+	// Ctrl-C cancels the context: the running gate's process group is killed
+	// and Converge's deferred cleanup removes the scratch tree.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	d, err := c.Converge(ctx, cand)
 	if err != nil {
+		if len(d.Evidence) > 0 {
+			// Checking had begun (evidence was recorded) when it failed: not
+			// a refusal, not a decision.
+			fmt.Fprintf(stderr, "graft: failed after checking began (%d evidence entries recorded): %v\n", len(d.Evidence), err)
+			return 3
+		}
 		fmt.Fprintf(stderr, "graft: refused: %v\n", err)
 		return 2
 	}

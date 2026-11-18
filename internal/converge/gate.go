@@ -43,6 +43,7 @@ func (g CommandGate) Run(ctx context.Context, dir string) (evidence.Verdict, str
 	if to == 0 {
 		to = 5 * time.Minute
 	}
+	parent := ctx
 	ctx, cancel := context.WithTimeout(ctx, to)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, g.Argv[0], g.Argv[1:]...)
@@ -58,6 +59,9 @@ func (g CommandGate) Run(ctx context.Context, dir string) (evidence.Verdict, str
 	}
 	var exit *exec.ExitError
 	switch {
+	case parent.Err() != nil:
+		// Cancelled from outside (Ctrl-C): no verdict, nothing recorded.
+		return "", "", fmt.Errorf("converge: gate %s: %w", g.Label, parent.Err())
 	case ctx.Err() == context.DeadlineExceeded:
 		return evidence.Inconclusive, fmt.Sprintf("timed out after %s\n%s", to, detail), nil
 	case err == nil:
