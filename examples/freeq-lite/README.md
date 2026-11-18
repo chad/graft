@@ -78,15 +78,15 @@ n≥5 with Wilson intervals; that is the next step.
 ## Evolving it: change one section, regenerate one region
 
 `spec-v2/` is the same spec plus a **Topics** section (`TOPIC` set/query,
-331/332/403/442). The oracle's `-v2` flag adds 4 checks for it (42 total; the
-reference scores 42/42, and a committed mutant covers topic cleanup).
+331/332/403/442). The oracle's `-v2` flag adds 4 checks for it (47 total today;
+the reference scores 47/47, and a committed mutant covers topic cleanup).
 
 ```sh
 graft run --config examples/freeq-lite/graft.json --spec examples/freeq-lite/spec/freeq-lite.md    --repo R --root A --accept
 graft run --config examples/freeq-lite/graft.json --spec examples/freeq-lite/spec-v2/freeq-lite.md --repo R --root A --accept
 ```
 
-First run (claude sonnet, n=1, an anecdote):
+First run (claude sonnet, n=1, an anecdote; scored by the oracle as it was then, 38 + 4 checks):
 
 | | v1 → v2 with graft |
 |---|---|
