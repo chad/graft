@@ -57,12 +57,12 @@ func TestSynthesisInsideSedumRegionIsRefused(t *testing.T) {
 }
 
 func TestNewCandidateTakesPinFromRecords(t *testing.T) {
-	s := fakeStore{"prov-1": {RecordID: "prov-1", Version: 7, GenHash: "sha256:g7"}}
-	k, err := NewCandidate(s, "prov-1", "app.go", "low", "s1", "func F() {}")
-	if err != nil || k.Version != 7 || k.GenHash != "sha256:g7" || k.RecordID != "prov-1" {
+	s := fakeStore{"prov-1": {RecordID: "prov-1", Version: 7, GenHash: "sha256:g7", SpecHash: "sha256:s7"}}
+	k, err := NewCandidate(s, "prov-1", "app.go", "low", "func F() {}")
+	if err != nil || k.Version != 7 || k.GenHash != "sha256:g7" || k.SpecHash != "sha256:s7" || k.RecordID != "prov-1" {
 		t.Fatalf("%+v %v", k, err)
 	}
-	if _, err := NewCandidate(s, "prov-404", "app.go", "low", "", "x"); !errors.Is(err, records.ErrNotFound) {
+	if _, err := NewCandidate(s, "prov-404", "app.go", "low", "x"); !errors.Is(err, records.ErrNotFound) {
 		t.Fatalf("err = %v", err)
 	}
 }
@@ -89,11 +89,11 @@ func TestNewCandidateOverRealFixture(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	k, err := NewCandidate(s, id, "app.go", "low", "", "func F() {}")
+	k, err := NewCandidate(s, id, "app.go", "low", "func F() {}")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if k.RecordID != id || k.Version != want.Version || k.GenHash != want.GenHash || !strings.HasPrefix(k.GenHash, "sha256:") {
+	if k.RecordID != id || k.Version != want.Version || k.GenHash != want.GenHash || k.SpecHash != want.SpecHash || !strings.HasPrefix(k.GenHash, "sha256:") {
 		t.Fatalf("candidate %+v, store %+v", k, want)
 	}
 }
@@ -138,7 +138,7 @@ type movingGate struct{ s fakeStore }
 func (g movingGate) Name() string        { return "mover" }
 func (g movingGate) Kind() evidence.Kind { return evidence.TestRun }
 func (g movingGate) Run(context.Context, string) (evidence.Verdict, string, error) {
-	g.s["prov-1"] = records.Pin{RecordID: "prov-1", Version: 3, GenHash: "g3"}
+	g.s["prov-1"] = records.Pin{RecordID: "prov-1", Version: 3, GenHash: "g3", SpecHash: "s1"}
 	return evidence.Pass, "", nil
 }
 
@@ -244,5 +244,28 @@ func TestTypedNilRecordsIsErrNoRecords(t *testing.T) {
 	c.Records = s
 	if _, err := c.Converge(context.Background(), cand("func F() {}")); !errors.Is(err, ErrNoRecords) {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// A spec edit while gates run moves the record's spec hash: not applied.
+type specEditGate struct{ s fakeStore }
+
+func (g specEditGate) Name() string        { return "spec-edit" }
+func (g specEditGate) Kind() evidence.Kind { return evidence.TestRun }
+func (g specEditGate) Run(context.Context, string) (evidence.Verdict, string, error) {
+	p := g.s["prov-1"]
+	p.SpecHash = "s2"
+	g.s["prov-1"] = p
+	return evidence.Pass, "", nil
+}
+
+func TestSpecEditDuringGatesIsNotApplied(t *testing.T) {
+	c, root := setup(t)
+	c.Gates = []Gate{specEditGate{c.Records.(fakeStore)}}
+	if d, err := c.Converge(context.Background(), cand("func F() {}")); !errors.Is(err, ErrStalePin) || d.Applied {
+		t.Fatalf("%+v %v", d, err)
+	}
+	if read(t, root) != "package app\n" {
+		t.Fatal("applied against edited specs")
 	}
 }

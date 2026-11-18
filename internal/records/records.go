@@ -4,6 +4,9 @@
 package records
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -18,11 +21,20 @@ import (
 // ErrNotFound means the record, or the requested version, does not exist.
 var ErrNotFound = errors.New("records: not found")
 
+// ErrSpecMissing means an associated spec could not be read, so the record's
+// spec hash cannot be stated. It is never silently treated as "no specs".
+var ErrSpecMissing = errors.New("records: associated spec cannot be resolved")
+
 // Pin identifies a record version and the generation-driving content it had.
 type Pin struct {
 	RecordID string // stable id, never derived from content
 	Version  int
 	GenHash  string // hash over generation-driving fields only
+	// SpecHash summarises the record's associated specs: "" when it has none,
+	// otherwise "sha256:" + hex(sha256(JSON array of provenance's per-spec
+	// hashes, in record order)). Specs verify output and do not drive it, so
+	// Stale ignores this; evidence pins it (SPEC §7).
+	SpecHash string
 }
 
 // Store reads records from a provenance repo on disk
@@ -73,7 +85,33 @@ func (d *dirStore) Current(id string) (Pin, error) {
 	if v == 0 {
 		v = 1 // a v1 record reads as version 1
 	}
-	return Pin{RecordID: r.ID, Version: v, GenHash: r.GenHash()}, nil
+	sh, err := specHash(r, d.fs.Specs())
+	if err != nil {
+		return Pin{}, fmt.Errorf("%s: %w", id, err)
+	}
+	return Pin{RecordID: r.ID, Version: v, GenHash: r.GenHash(), SpecHash: sh}, nil
+}
+
+// specHash aggregates provenance's per-spec hashes (record.SpecHashes, which
+// also handles record-file specs) into one value for the pin.
+func specHash(r *record.Record, resolve record.SpecResolver) (string, error) {
+	if len(r.AssociatedSpecs) == 0 {
+		return "", nil
+	}
+	hashes, missing := r.SpecHashes(resolve)
+	if len(missing) > 0 {
+		return "", fmt.Errorf("%w: %s", ErrSpecMissing, strings.Join(missing, ", "))
+	}
+	list := make([]string, len(hashes))
+	for i, h := range hashes {
+		list[i] = *h
+	}
+	b, err := json.Marshal(list)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(b)
+	return "sha256:" + hex.EncodeToString(sum[:]), nil
 }
 
 func (d *dirStore) Snapshot(id string, version int) ([]byte, error) {

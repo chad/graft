@@ -3,6 +3,7 @@ package records
 import (
 	"bytes"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -190,5 +191,74 @@ func TestCurrentRejectsIDMismatch(t *testing.T) {
 	}
 	if p, err := s.Current("prov-other"); err == nil {
 		t.Fatalf("Current accepted a file whose inner id differs: %+v", p)
+	}
+}
+
+func TestNoSpecsMeansEmptySpecHash(t *testing.T) {
+	p, err := open(t, "base").Current(fixtureID)
+	if err != nil || p.SpecHash != "" {
+		t.Fatalf("%+v %v", p, err)
+	}
+}
+
+// copyFixture copies testdata/<name> to a temp dir the test may modify.
+func copyFixture(t *testing.T, name string) string {
+	t.Helper()
+	dst := t.TempDir()
+	src := filepath.Join("testdata", name)
+	filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(src, p)
+		if d.IsDir() {
+			return os.MkdirAll(filepath.Join(dst, rel), 0o755)
+		}
+		b, _ := os.ReadFile(p)
+		return os.WriteFile(filepath.Join(dst, rel), b, 0o644)
+	})
+	return dst
+}
+
+func TestSpecHashTracksSpecContentNotGenHash(t *testing.T) {
+	dir := copyFixture(t, "with-specs")
+	s, err := OpenDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := s.Current(fixtureID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(before.SpecHash, "sha256:") || len(before.SpecHash) != len("sha256:")+64 {
+		t.Fatalf("SpecHash = %q", before.SpecHash)
+	}
+	// CRLF folds to LF (provenance's SpecHash): not a change.
+	os.WriteFile(filepath.Join(dir, "specs", "widget.md"), []byte("# Widget\r\n\r\n- the widget renders\r\n"), 0o644)
+	if p, _ := s.Current(fixtureID); p.SpecHash != before.SpecHash {
+		t.Fatal("CRLF changed the spec hash")
+	}
+	os.WriteFile(filepath.Join(dir, "specs", "widget.md"), []byte("# Widget\n\n- the widget renders twice\n"), 0o644)
+	after, err := s.Current(fixtureID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.SpecHash == before.SpecHash {
+		t.Fatal("editing the spec did not move SpecHash")
+	}
+	if after.GenHash != before.GenHash {
+		t.Fatal("editing a spec moved GenHash: specs verify, they do not drive generation")
+	}
+	if stale, _ := Stale(s, before); stale {
+		t.Fatal("a spec-only edit made the record stale for generation")
+	}
+}
+
+func TestMissingSpecIsAnErrorNotEmpty(t *testing.T) {
+	dir := copyFixture(t, "with-specs")
+	os.Remove(filepath.Join(dir, "specs", "widget.md"))
+	s, _ := OpenDir(dir)
+	if _, err := s.Current(fixtureID); !errors.Is(err, ErrSpecMissing) {
+		t.Fatalf("err = %v", err)
 	}
 }

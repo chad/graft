@@ -64,7 +64,7 @@ type Candidate struct {
 	RecordID string
 	Version  int
 	GenHash  string
-	SpecHash string // hash of the specs the gates run (opaque; from the records layer)
+	SpecHash string // the record's spec hash (records.Pin.SpecHash); must match the store
 	Tier     string // risk tier of the owning record
 	Body     string
 }
@@ -229,9 +229,9 @@ func (c Converger) checkPin(cand Candidate) error {
 	if err != nil {
 		return err
 	}
-	if cur.Version != cand.Version || cur.GenHash != cand.GenHash {
-		return fmt.Errorf("%w: %s is at v%d %s, candidate pins v%d %s",
-			ErrStalePin, cand.RecordID, cur.Version, cur.GenHash, cand.Version, cand.GenHash)
+	if cur.Version != cand.Version || cur.GenHash != cand.GenHash || cur.SpecHash != cand.SpecHash {
+		return fmt.Errorf("%w: %s is at v%d %s specs %q, candidate pins v%d %s specs %q",
+			ErrStalePin, cand.RecordID, cur.Version, cur.GenHash, cur.SpecHash, cand.Version, cand.GenHash, cand.SpecHash)
 	}
 	return nil
 }
