@@ -139,3 +139,26 @@ func TestRunKeepsCallsAndTranscripts(t *testing.T) {
 		}
 	}
 }
+
+// failsThenErrs returns non-building code first, then fails as a command.
+type failsThenErrs struct{ n int }
+
+func (f *failsThenErrs) Complete(context.Context, string) (string, error) {
+	f.n++
+	if f.n == 1 {
+		return "```go\npackage main\nfunc main( {}\n```\n", nil
+	}
+	return "", errors.New("model CLI exploded")
+}
+
+// Review on #13: a code failure followed by a failed retry call is broke,
+// not unreachable.
+func TestCodeFailureThenModelErrorIsBroke(t *testing.T) {
+	c := cfg(t, answer{}, fakeOracle)
+	c.Model = &failsThenErrs{}
+	c.Attempts = 3
+	s := Sample(context.Background(), c, bench.ArmGraft)
+	if s.Outcome != bench.Broke || !strings.Contains(s.Reason, "failed its checks") {
+		t.Fatalf("%+v", s)
+	}
+}

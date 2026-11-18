@@ -106,6 +106,10 @@ func Run(ctx context.Context, cfg Config, acc []Accepted) ([]Outcome, error) {
 			}
 			resp, err := cfg.Model.Complete(ctx, prompt)
 			if err != nil {
+				if o.LastFailure != "" {
+					// The code had already failed its checks; keep that on record.
+					out = append(out, o)
+				}
 				return out, fmt.Errorf("%w: %v", ErrModel, err)
 			}
 			cand, err := converge.NewCandidate(store, a.ID, a.Entry.File, cfg.Tier, model.ExtractCode(resp, "go"))

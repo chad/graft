@@ -86,6 +86,23 @@ func (r *recorder) Complete(ctx context.Context, prompt string) (string, error) 
 	return resp, err
 }
 
+// classify turns a pipeline error into a sample reason. Infrastructure (a
+// model command failure, a cancelled run) is unreachable, unless the code had
+// already failed its checks in that run: a failed retry call does not erase a
+// real code failure, so that sample is broke.
+func classify(err error, outs []pipeline.Outcome, ctx context.Context) string {
+	if errors.Is(err, pipeline.ErrModel) || ctx.Err() != nil {
+		for _, o := range outs {
+			if !o.Applied && o.LastFailure != "" {
+				return fmt.Sprintf("pipeline: %s failed its checks (%s), then the retry's model call failed: %v",
+					o.Section, firstLine(o.LastFailure), err)
+			}
+		}
+		return infraPrefix + err.Error()
+	}
+	return "pipeline: " + err.Error()
+}
+
 // infraPrefix marks a failure of the harness or the model command (not of the
 // code under test); such a sample is unreachable, never broke.
 const infraPrefix = "infra: "
@@ -145,15 +162,12 @@ func (cfg Config) graftArm(ctx context.Context, dir, root string) string {
 	if err != nil {
 		return err.Error()
 	}
-	_, err = pipeline.Run(ctx, pipeline.Config{
+	outs, err := pipeline.Run(ctx, pipeline.Config{
 		Repo: repo, Root: root, Module: cfg.Case.Module, Spec: cfg.Case.Spec, Conventions: cfg.Case.Conventions,
 		Tier: cfg.Tier, Attempts: cfg.Attempts, Model: cfg.Model, Gates: cfg.Gates, Policy: cfg.Policy, Log: log,
 	}, acc)
 	if err != nil {
-		if errors.Is(err, pipeline.ErrModel) || ctx.Err() != nil {
-			return infraPrefix + err.Error()
-		}
-		return "pipeline: " + err.Error()
+		return classify(err, outs, ctx)
 	}
 	return ""
 }
