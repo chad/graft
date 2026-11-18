@@ -108,7 +108,7 @@ func freeqInput(t *testing.T, dir string) Input {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return Input{Records: writeRecords(t, dir, sk), Skeleton: sk, Tier: "low"}
+	return Input{Records: writeRecords(t, dir, sk), Skeleton: sk, Tier: "low", Contract: sedumContract(t, "go")}
 }
 
 func recordingBytes(t *testing.T, in Input) []byte {
@@ -455,15 +455,15 @@ func pin(id, typ, status string, scope ...string) records.Pin {
 	return records.Pin{RecordID: id, GenHash: "g", Type: typ, Status: status, AffectedScope: scope}
 }
 
-func simple(f File, p records.Pin) Input {
-	return Input{Tier: "low", Records: []Rec{{Pin: p, Section: "s"}}, Skeleton: Skeleton{Files: []File{f}}}
+func simple(t *testing.T, f File, p records.Pin) Input {
+	return Input{Tier: "low", Contract: sedumContract(t, "go"), Records: []Rec{{Pin: p, Section: "s"}}, Skeleton: Skeleton{Files: []File{f}}}
 }
 
 func TestPlanValidation(t *testing.T) {
 	okPin := pin("r1", "imprint", "open", "a.go")
 	okFile := File{Path: "a.go", Section: "s", Decls: []Decl{{Kind: "var", Name: "X", Code: "var X = 1"}},
 		Stubs: []Stub{{Name: "Do"}}}
-	if _, err := Plan(simple(okFile, okPin)); err != nil {
+	if _, err := Plan(simple(t, okFile, okPin)); err != nil {
 		t.Fatalf("baseline must plan: %v", err)
 	}
 	with := func(f func(*File)) File {
@@ -474,25 +474,21 @@ func TestPlanValidation(t *testing.T) {
 		return c
 	}
 	cases := map[string]Input{
-		"blueprint":          simple(okFile, pin("r1", "blueprint", "open", "a.go")),
-		"brief":              simple(okFile, pin("r1", "brief", "open", "a.go")),
-		"sealed status":      simple(okFile, pin("r1", "imprint", "sealed", "a.go")),
-		"scope mismatch":     simple(okFile, pin("r1", "imprint", "open", "b.go")),
-		"empty scope":        simple(okFile, pin("r1", "imprint", "open")),
-		"no tier":            {Records: []Rec{{Pin: okPin, Section: "s"}}, Skeleton: Skeleton{Files: []File{okFile}}},
-		"dup decl":           simple(with(func(f *File) { f.Decls = append(f.Decls, f.Decls[0]) }), okPin),
-		"decl vs stub name":  simple(with(func(f *File) { f.Decls = append(f.Decls, Decl{Kind: "func", Name: "Do", Code: "func Do() {}"}) }), okPin),
-		"decl name":          simple(with(func(f *File) { f.Decls[0].Name = "Y" }), okPin),
-		"decl kind":          simple(with(func(f *File) { f.Decls[0].Kind = "const" }), okPin),
-		"decl unparsable":    simple(with(func(f *File) { f.Decls[0].Code = "var X =" }), okPin),
-		"decl two":           simple(with(func(f *File) { f.Decls[0].Code = "var X = 1\nvar Z = 2" }), okPin),
-		"receiver name only": simple(with(func(f *File) { f.Stubs[0].ReceiverName = "c" }), okPin),
-		"receiver type only": simple(with(func(f *File) { f.Stubs[0].ReceiverType = "*T" }), okPin),
-		"dup import":         simple(with(func(f *File) { f.Imports = []string{"net", "net"} }), okPin),
-		"synth collision": {Tier: "low", Records: []Rec{{Pin: pin("r1", "imprint", "open", "a.go", "a_synth.go"), Section: "s"}},
+		"blueprint":          simple(t, okFile, pin("r1", "blueprint", "open", "a.go")),
+		"brief":              simple(t, okFile, pin("r1", "brief", "open", "a.go")),
+		"sealed status":      simple(t, okFile, pin("r1", "imprint", "sealed", "a.go")),
+		"scope mismatch":     simple(t, okFile, pin("r1", "imprint", "open", "b.go")),
+		"empty scope":        simple(t, okFile, pin("r1", "imprint", "open")),
+		"no tier":            {Contract: sedumContract(t, "go"), Records: []Rec{{Pin: okPin, Section: "s"}}, Skeleton: Skeleton{Files: []File{okFile}}},
+		"dup decl":           simple(t, with(func(f *File) { f.Decls = append(f.Decls, f.Decls[0]) }), okPin),
+		"decl vs stub name":  simple(t, with(func(f *File) { f.Decls = append(f.Decls, Decl{Kind: "func", Name: "Do", Code: "func Do() {}"}) }), okPin),
+		"receiver name only": simple(t, with(func(f *File) { f.Stubs[0].ReceiverName = "c" }), okPin),
+		"receiver type only": simple(t, with(func(f *File) { f.Stubs[0].ReceiverType = "*T" }), okPin),
+		"dup import":         simple(t, with(func(f *File) { f.Imports = []string{"net", "net"} }), okPin),
+		"synth collision": {Tier: "low", Contract: sedumContract(t, "go"), Records: []Rec{{Pin: pin("r1", "imprint", "open", "a.go", "a_synth.go"), Section: "s"}},
 			Skeleton: Skeleton{Files: []File{okFile, {Path: "a_synth.go", Section: "s"}}}},
-		"file without owner": simple(with(func(f *File) { f.Section = "" }), okPin),
-		"record and section": simple(with(func(f *File) { f.Record = "r1" }), okPin),
+		"file without owner": simple(t, with(func(f *File) { f.Section = "" }), okPin),
+		"record and section": simple(t, with(func(f *File) { f.Record = "r1" }), okPin),
 	}
 	for name, in := range cases {
 		if _, err := Plan(in); err == nil {
@@ -500,13 +496,13 @@ func TestPlanValidation(t *testing.T) {
 		}
 	}
 	// a record with no file in the skeleton
-	in := simple(okFile, okPin)
+	in := simple(t, okFile, okPin)
 	in.Records = append(in.Records, Rec{Pin: pin("r2", "imprint", "open", "b.go"), Section: "t"})
 	if _, err := Plan(in); err == nil {
 		t.Error("record with no file: Plan accepted it")
 	}
 	// implemented imprints are fine, and the recording is complete
-	p, err := Plan(simple(okFile, pin("r1", "imprint", "implemented", "a.go")))
+	p, err := Plan(simple(t, okFile, pin("r1", "imprint", "implemented", "a.go")))
 	if err != nil || !p.Recording.Complete {
 		t.Errorf("implemented imprint: %v complete=%v", err, p.Recording.Complete)
 	}

@@ -10,8 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/chad/graft/internal/contract"
 	"github.com/chad/graft/internal/converge"
-	"github.com/chad/graft/internal/lang"
 	"github.com/chad/graft/internal/recording"
 	"github.com/chad/graft/internal/records"
 	"github.com/chad/graft/internal/render"
@@ -28,7 +28,22 @@ func (cfg Config) renderTree(ctx context.Context, store records.Store, acc []Acc
 	if v, err := cfg.Sedum.Version(ctx); err == nil {
 		cfg.say("sedum %s\n", v)
 	}
-	in := recording.Input{Skeleton: *cfg.Skeleton, Tier: cfg.Tier}
+	in := recording.Input{Skeleton: *cfg.Skeleton, Tier: cfg.Tier, Generator: cfg.lang().Name, Contract: cfg.Contract}
+	if in.Contract == nil {
+		b, ok := cfg.Sedum.(interface{ Bin() string })
+		if !ok {
+			return nil, nil, errors.New("pipeline: --render: no convergence contract (Config.Contract) and the sedum is not a binary")
+		}
+		gens, err := filepath.Abs(cfg.Generators)
+		if err != nil {
+			return nil, nil, err
+		}
+		gen := cfg.Skeleton.Generator
+		if gen == "" {
+			gen = cfg.lang().Name
+		}
+		in.Contract = contract.Exec{Bin: b.Bin(), Generators: gens, Package: gen, Ctx: ctx}
+	}
 	for _, a := range acc {
 		p, err := store.Current(a.ID)
 		if err != nil {
@@ -70,7 +85,7 @@ func (cfg Config) renderTree(ctx context.Context, store records.Store, acc []Acc
 	by := map[string]recording.Region{}
 	for _, r := range planned.Regions {
 		if !recording.IsSynthPath(r.Path) {
-			return nil, nil, fmt.Errorf("pipeline: --render: region path %s is not a _synth.go file", r.Path)
+			return nil, nil, fmt.Errorf("pipeline: --render: region path %s is not a _synth file", r.Path)
 		}
 		by[r.Owner.RecordID] = r
 		p := filepath.Join(cfg.Root, filepath.FromSlash(r.Path))
@@ -150,7 +165,7 @@ func (cfg Config) sedumEnv() (func(), error) {
 // the skeleton fixed. Everything else in the tree is read-only context.
 func (cfg Config) renderPrompt(a Accepted, r recording.Region, feedback string) (string, error) {
 	var b strings.Builder
-	fmt.Fprintf(&b, "You are writing the function bodies for one part of a Go program. A deterministic layer has already rendered the program's skeleton (types, imports, stubs, the contracts between files); you write only the helper functions the stubs delegate to.\n\n")
+	fmt.Fprintf(&b, "You are writing the function bodies for one part of a %s program. A deterministic layer has already rendered the program's skeleton (types, imports, stubs, the contracts between files); you write only the helper functions the stubs delegate to.\n\n", cfg.displayName())
 	fmt.Fprintf(&b, "## Conventions\n\n%s\n\n", strings.TrimSpace(cfg.Conventions))
 	cfg.writeVisible(&b)
 	fmt.Fprintf(&b, "## The whole spec (context)\n\n%s\n\n", strings.TrimSpace(cfg.Spec))
@@ -158,8 +173,8 @@ func (cfg Config) renderPrompt(a Accepted, r recording.Region, feedback string) 
 	for _, s := range a.Draft.Statements {
 		fmt.Fprintf(&b, "- [%s] %s\n", s.Type, s.Text)
 	}
-	fmt.Fprintf(&b, "\n## Declares: the helpers you must implement, with exactly these signatures\n\n```go\n%s\n```\n", strings.Join(r.Declares, "\n"))
-	tree, err := sourceFiles(cfg.Root, r.Path, lang.Go)
+	fmt.Fprintf(&b, "\n## Declares: the helpers you must implement, with exactly these signatures\n\n```%s\n%s\n```\n", cfg.lang().Fence, strings.Join(r.Declares, "\n"))
+	tree, err := sourceFiles(cfg.Root, r.Path, cfg.lang())
 	if err != nil {
 		return "", err
 	}
@@ -167,6 +182,7 @@ func (cfg Config) renderPrompt(a Accepted, r recording.Region, feedback string) 
 	if feedback != "" {
 		fmt.Fprintf(&b, "\n## Feedback on your previous attempt\n\n%s\n", feedback)
 	}
-	fmt.Fprintf(&b, "\nAnswer with the complete contents of `%s` in a single ```go block: the package clause, the imports you need, the helpers above with their bodies, and any private helpers (named with the prefix `%s`). Do not write the skeleton's types or stubs, and do not include any line containing \"graft:synth\" or \"sedum:\".\n", r.Path, strings.TrimSuffix(filepath.Base(r.Path), "_synth.go"))
+	stem := strings.TrimSuffix(filepath.Base(r.Path), filepath.Ext(r.Path))
+	fmt.Fprintf(&b, "\nAnswer with the complete contents of `%s` in a single ```%s block, %s, then the imports you need, the helpers above with their bodies, and any private helpers (named with the prefix `%s`). Do not write the skeleton's types or stubs, and do not include any line containing \"graft:synth\" or \"sedum:\".\n", r.Path, cfg.lang().Fence, cfg.lang().Preamble, strings.TrimSuffix(stem, "_synth"))
 	return b.String(), nil
 }

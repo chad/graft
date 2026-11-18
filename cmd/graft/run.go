@@ -93,12 +93,6 @@ func runCmd(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "graft: %v\n", err)
 		return 2
 	}
-	if *renderOn && profile.Name != "go" {
-		// The recording layer still splits files with go/ast (M10b moves that
-		// to the generator); refuse rather than half-render another language.
-		fmt.Fprintf(stderr, "graft: --render supports only Go so far (language %q)\n", profile.Name)
-		return 2
-	}
 	spec, err := os.ReadFile(*specPath)
 	if err != nil {
 		fmt.Fprintf(stderr, "graft: %v\n", err)

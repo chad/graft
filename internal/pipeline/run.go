@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/chad/graft/internal/contract"
 	"github.com/chad/graft/internal/converge"
 	"github.com/chad/graft/internal/evidence"
 	"github.com/chad/graft/internal/lang"
@@ -44,8 +45,13 @@ type Config struct {
 	Progress   io.Writer           // nil for silence
 	Skeleton   *recording.Skeleton // non-nil (with Sedum): sedum lays out the tree, the model writes only Body helpers
 	Sedum      render.Sedum
-	Generators string // sedum's generators directory (contains go/); needed with Skeleton
-	Samples    int    // model answers drawn per attempt; 0 or 1 means one (today's behaviour)
+	Generators string // sedum's generators directory (contains the generator package); needed with Skeleton
+	// Contract overrides the generator's convergence contract (tests). By
+	// default it is `sedum convergence` run with Sedum's binary against
+	// Generators, for the skeleton's generator package (the profile's name when
+	// the skeleton names none).
+	Contract contract.Contract
+	Samples  int // model answers drawn per attempt; 0 or 1 means one (today's behaviour)
 }
 
 // Outcome is what happened to one record.

@@ -5,12 +5,17 @@
 //
 // What a record cannot express through catalog actions is not invented here.
 // A function whose body is open is rendered as a stub that only delegates to a
-// helper. The helpers live in a separate file, <stem>_synth.go, owned entirely
+// helper. The helpers live in a separate file, <stem>_synth<ext>, owned entirely
 // by one convergence region (SPEC §6): the region's body is the whole file
 // (package clause, imports, helpers), so converge can add imports and sedum's
 // file templates never see the helpers. Plan seeds each region with helpers
-// that panic("graft: not converged"), so the package builds before converge
+// that fail with "graft: not converged", so the package builds before converge
 // runs and each region can be gated on its own.
+//
+// Plan knows no language. How a stub, a helper signature and a seed are
+// written, what a synth file is called and what the files' extension is come
+// from the generator package's convergence contract (sedum convergence
+// render), reached through the Contract interface.
 package recording
 
 import (
@@ -18,17 +23,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"go/ast"
-	"go/format"
-	"go/parser"
-	"go/token"
 	"io"
 	"path"
 	"sort"
-	"strconv"
 	"strings"
 	"unicode"
 
+	"github.com/chad/graft/internal/contract"
 	"github.com/chad/graft/internal/converge"
 	"github.com/chad/graft/internal/records"
 )
@@ -46,22 +47,10 @@ type Decl struct {
 }
 
 // Param is a named parameter.
-type Param struct {
-	Name string `json:"name"`
-	Type string `json:"type"`
-}
+type Param = contract.Param
 
 // Stub is a function or method whose body is left to convergence.
-type Stub struct {
-	Name         string   `json:"name"`
-	ReceiverName string   `json:"receiver_name,omitempty"` // e.g. "c"
-	ReceiverType string   `json:"receiver_type,omitempty"` // e.g. "*Client" or "Server"
-	Params       []Param  `json:"params,omitempty"`
-	Results      []string `json:"results,omitempty"`
-	// Doc is the contract the stub's doc comment states (no comment markers).
-	// It is where conventions that every body must agree on live.
-	Doc string `json:"doc,omitempty"`
-}
+type Stub = contract.Stub
 
 // File is one source file owned by one record.
 type File struct {
@@ -70,8 +59,8 @@ type File struct {
 	// section the record was derived from. Exactly one is set.
 	Record  string `json:"record,omitempty"`
 	Section string `json:"section,omitempty"`
-	// Package overrides the synth file's package name ("main" for the module
-	// root and cmd/<bin>, the directory name otherwise).
+	// Package overrides the synth file's package name where the language has
+	// one (the generator's convergence block says how it is derived otherwise).
 	Package string   `json:"package,omitempty"`
 	Imports []string `json:"imports,omitempty"`
 	Decls   []Decl   `json:"decls,omitempty"`
@@ -81,7 +70,10 @@ type File struct {
 // Skeleton is the typed layout input. Records carry only statements, so the
 // declarations come from here.
 type Skeleton struct {
-	Files []File `json:"files"`
+	// Generator names the sedum generator package that renders this tree. It
+	// defaults to Input.Generator (the language profile's name).
+	Generator string `json:"generator,omitempty"`
+	Files     []File `json:"files"`
 }
 
 // Rec is an accepted record and the spec section it was derived from.
@@ -96,6 +88,11 @@ type Input struct {
 	Skeleton Skeleton
 	// Tier is the risk tier written into every seeded convergence region.
 	Tier string
+	// Contract reads the generator's convergence block and renders stubs and
+	// seeds from it. Required.
+	Contract contract.Contract
+	// Generator is the default generator package name ("go" when empty).
+	Generator string
 }
 
 // Recording is sedum's on-disk recording.
@@ -220,10 +217,35 @@ func Plan(in Input) (Planned, error) {
 	}
 	sort.Strings(ids)
 
+	if in.Contract == nil {
+		return Planned{}, errors.New("recording: Input.Contract is required (the generator's convergence contract)")
+	}
+	gen := in.Skeleton.Generator
+	if gen == "" {
+		gen = in.Generator
+	}
+	if gen == "" {
+		gen = "go"
+	}
+	info, err := in.Contract.Info()
+	if err != nil {
+		return Planned{}, fmt.Errorf("recording: %w", err)
+	}
+	if info.Placeholder != Placeholder {
+		return Planned{}, fmt.Errorf("recording: generator %s uses placeholder %q, want %q", gen, info.Placeholder, Placeholder)
+	}
+	if len(info.Extensions) == 0 {
+		return Planned{}, fmt.Errorf("recording: generator %s declares no extension", gen)
+	}
+	rendered, err := renderContract(in, info)
+	if err != nil {
+		return Planned{}, err
+	}
+
 	out := Planned{Recording: Recording{
 		SedumVersion: SedumVersion,
 		Complete:     true,
-		Packages:     map[string]Package{"go": {Extensions: []string{".go"}}},
+		Packages:     map[string]Package{gen: {Extensions: info.Extensions}},
 		Records:      []Record{},
 	}}
 	for _, id := range ids {
@@ -244,22 +266,23 @@ func Plan(in Input) (Planned, error) {
 		rec := Record{RecordID: id, Gen: pins[id].GenHash, Files: []RFile{}}
 		var invs []Invocation
 		for _, f := range files {
-			rf, err := fileEntry(f.Path)
+			rf, err := fileEntry(f.Path, gen, info)
 			if err != nil {
 				return Planned{}, err
 			}
 			rec.Files = append(rec.Files, rf)
-			fi, declares, err := invocations(f)
+			of := rendered[f.Path]
+			fi, declares, err := invocations(f, of)
 			if err != nil {
 				return Planned{}, err
 			}
 			invs = append(invs, fi...)
 			if len(declares) > 0 {
-				reg, err := region(f, pins[id], in.Tier, declares)
+				seed, err := converge.Seed(info.CommentPrefix, converge.Owner{Record: pins[id].RecordID, Version: pins[id].Version, Gen: pins[id].GenHash, Tier: in.Tier}, of.Seed)
 				if err != nil {
 					return Planned{}, err
 				}
-				out.Regions = append(out.Regions, reg)
+				out.Regions = append(out.Regions, Region{Path: of.SynthPath, Owner: pins[id], Tier: in.Tier, Declares: declares, Seed: seed})
 			}
 		}
 		rec.Phases = []Phase{{Name: "default", Invocations: invs}}
@@ -269,68 +292,91 @@ func Plan(in Input) (Planned, error) {
 	return out, nil
 }
 
-func stemOf(p string) string { return strings.TrimSuffix(path.Base(p), ".go") }
+// renderContract asks the contract about every skeleton file at once and
+// checks what it answered, without parsing any code: each helper name appears
+// in its seed and in its stub, names are claimed once per directory, and no
+// synth file collides with a skeleton file.
+func renderContract(in Input, info contract.Info) (map[string]contract.RenderedFile, error) {
+	var cin contract.Input
+	for _, f := range in.Skeleton.Files {
+		cin.Files = append(cin.Files, contract.File{Path: f.Path, Package: f.Package, Imports: f.Imports, Stubs: f.Stubs})
+	}
+	cout, err := in.Contract.Render(cin)
+	if err != nil {
+		return nil, fmt.Errorf("recording: convergence render: %w", err)
+	}
+	if len(cout.Files) != len(in.Skeleton.Files) {
+		return nil, fmt.Errorf("recording: convergence render returned %d files for %d", len(cout.Files), len(in.Skeleton.Files))
+	}
+	byPath := map[string]contract.RenderedFile{}
+	paths := map[string]bool{}
+	for _, f := range in.Skeleton.Files {
+		paths[f.Path] = true
+	}
+	names := map[string]string{} // dir|recv|name -> file
+	claim := func(file, recv, name string) error {
+		if name == "init" && recv == "" {
+			return nil // any number of init functions is legal
+		}
+		k := path.Dir(file) + "|" + recv + "|" + name
+		if prev, dup := names[k]; dup {
+			return fmt.Errorf("recording: %s declares %q, already declared in %s", file, name, prev)
+		}
+		names[k] = file
+		return nil
+	}
+	for i, f := range in.Skeleton.Files {
+		of := cout.Files[i]
+		if of.Path != f.Path {
+			return nil, fmt.Errorf("recording: convergence render answered %s for %s", of.Path, f.Path)
+		}
+		if paths[of.SynthPath] {
+			return nil, fmt.Errorf("recording: %s collides with the synth file of %s", of.SynthPath, f.Path)
+		}
+		if len(of.Stubs) != len(f.Stubs) {
+			return nil, fmt.Errorf("recording: %s: convergence render returned %d stubs for %d", f.Path, len(of.Stubs), len(f.Stubs))
+		}
+		for _, d := range f.Decls {
+			if err := claim(f.Path, d.Receiver, d.Name); err != nil {
+				return nil, err
+			}
+		}
+		for _, s := range of.Stubs {
+			if !strings.Contains(of.Seed, s.Helper) || !strings.Contains(s.Stub, s.Helper) || !strings.Contains(s.Declare, s.Helper) {
+				return nil, fmt.Errorf("recording: %s: helper %q of stub %s must appear in its stub, signature and seed", f.Path, s.Helper, s.Name)
+			}
+			if !strings.Contains(of.Seed, Placeholder) {
+				return nil, fmt.Errorf("recording: %s: the seed lacks the placeholder %q", f.Path, Placeholder)
+			}
+			if err := claim(f.Path, s.Kwargs["receiver"], s.Kwargs["name"]); err != nil {
+				return nil, err
+			}
+			if err := claim(f.Path, "", s.Helper); err != nil {
+				return nil, err
+			}
+		}
+		byPath[f.Path] = of
+	}
+	if info.SynthSuffix != cout.SynthSuffix {
+		return nil, fmt.Errorf("recording: convergence info says suffix %q, render says %q", info.SynthSuffix, cout.SynthSuffix)
+	}
+	return byPath, nil
+}
 
-// synthPath is the file that holds a skeleton file's convergence region.
-func synthPath(p string) string { return path.Join(path.Dir(p), stemOf(p)+"_synth.go") }
-
-// Placeholder is the panic message of a seeded, not-yet-converged helper. A
-// body that still contains it is never converged.
+// Placeholder is the message of a seeded, not-yet-converged helper. A body
+// that still contains it is never converged. It is fixed by sedum's core.
 const Placeholder = "graft: not converged"
 
-// IsSynthPath reports whether p is a model-written synthesis file; everything
-// else a render produces comes from sedum.
-func IsSynthPath(p string) bool { return strings.HasSuffix(p, "_synth.go") }
-
-func helperName(f File, s Stub) string { return stemOf(f.Path) + upperFirst(s.Name) + "Body" }
-
-func packageName(f File) string {
-	if f.Package != "" {
-		return f.Package
-	}
-	dir := path.Dir(f.Path)
-	if dir == "." || strings.HasPrefix(dir, "cmd/") {
-		return "main"
-	}
-	return path.Base(dir)
+// IsSynthPath reports whether p is a model-written synthesis file (<stem>_synth
+// plus the extension); everything else a render produces comes from sedum.
+// Plan checks that the generator's synth suffix is this one.
+func IsSynthPath(p string) bool {
+	return strings.HasSuffix(strings.TrimSuffix(p, path.Ext(p)), "_synth")
 }
 
-// region builds the seeded synthesis region for f: package clause, the
-// imports the helper signatures need, and one panicking helper per stub.
-func region(f File, owner records.Pin, tier string, declares []string) (Region, error) {
-	var b strings.Builder
-	b.WriteString("package " + packageName(f) + "\n\n")
-	all := strings.Join(declares, "\n")
-	var imps []string
-	for _, i := range f.Imports {
-		if strings.Contains(all, path.Base(i)+".") {
-			imps = append(imps, i)
-		}
-	}
-	sort.Strings(imps)
-	for _, i := range imps {
-		b.WriteString("import " + strconv.Quote(i) + "\n")
-	}
-	b.WriteString("\n")
-	for _, d := range declares {
-		b.WriteString(d + " {\n\tpanic(\"" + Placeholder + "\")\n}\n\n")
-	}
-	body, err := format.Source([]byte(b.String()))
-	if err != nil {
-		return Region{}, fmt.Errorf("recording: %s: seeded region does not format: %w", f.Path, err)
-	}
-	sp := synthPath(f.Path)
-	// gofmt wants a blank line between the last declaration and the end marker.
-	seed, err := converge.Seed("//", converge.Owner{Record: owner.RecordID, Version: owner.Version, Gen: owner.GenHash, Tier: tier}, string(body)+"\n")
-	if err != nil {
-		return Region{}, err
-	}
-	return Region{Path: sp, Owner: owner, Tier: tier, Declares: declares, Seed: seed}, nil
-}
-
-// validateSkeleton checks the whole skeleton before any record is read into
-// it: paths, imports, that each decl's name and kind match its code, and that
-// no name is declared twice in a package.
+// validateSkeleton checks the layout before any record is read into it: paths
+// and imports, and that no declaration name is claimed twice in a directory.
+// Stub and helper names are checked after the contract names them.
 func validateSkeleton(sk Skeleton) error {
 	paths := map[string]bool{}
 	for _, f := range sk.Files {
@@ -339,22 +385,7 @@ func validateSkeleton(sk Skeleton) error {
 		}
 		paths[f.Path] = true
 	}
-	names := map[string]string{} // dir|recv|name -> file
-	claim := func(f File, recv, name string) error {
-		if name == "init" && recv == "" {
-			return nil // any number of init functions is legal
-		}
-		k := path.Dir(f.Path) + "|" + recv + "|" + name
-		if prev, dup := names[k]; dup {
-			return fmt.Errorf("recording: %s declares %q, already declared in %s", f.Path, name, prev)
-		}
-		names[k] = f.Path
-		return nil
-	}
 	for _, f := range sk.Files {
-		if paths[synthPath(f.Path)] {
-			return fmt.Errorf("recording: %s collides with the synth file of %s", synthPath(f.Path), f.Path)
-		}
 		seenImp := map[string]bool{}
 		for _, i := range f.Imports {
 			if i == "" || strings.ContainsAny(i, " \t\"") || seenImp[i] {
@@ -363,11 +394,11 @@ func validateSkeleton(sk Skeleton) error {
 			seenImp[i] = true
 		}
 		for _, d := range f.Decls {
-			if err := checkDecl(f.Path, d); err != nil {
-				return err
+			if d.Name == "" {
+				return fmt.Errorf("recording: %s: decl without a name", f.Path)
 			}
-			if err := claim(f, d.Receiver, d.Name); err != nil {
-				return err
+			if d.Kind != "method" && d.Receiver != "" {
+				return fmt.Errorf("recording: %s: decl %q: only methods have a receiver", f.Path, d.Name)
 			}
 		}
 		for _, s := range f.Stubs {
@@ -376,13 +407,6 @@ func validateSkeleton(sk Skeleton) error {
 			}
 			if (s.ReceiverType == "") != (s.ReceiverName == "") {
 				return fmt.Errorf("recording: %s: stub %s needs both receiver_name and receiver_type, or neither", f.Path, s.Name)
-			}
-			recv := strings.TrimPrefix(s.ReceiverType, "*")
-			if err := claim(f, recv, s.Name); err != nil {
-				return err
-			}
-			if err := claim(f, "", helperName(f, s)); err != nil {
-				return err
 			}
 			for _, p := range s.Params {
 				if p.Name == "" || p.Type == "" {
@@ -394,106 +418,44 @@ func validateSkeleton(sk Skeleton) error {
 	return nil
 }
 
-// checkDecl parses d.Code and requires it to be exactly one declaration of
-// the stated kind, name and receiver.
-func checkDecl(file string, d Decl) error {
-	bad := func(format string, a ...any) error {
-		return fmt.Errorf("recording: %s: decl %q: %s", file, d.Name, fmt.Sprintf(format, a...))
-	}
-	if d.Name == "" {
-		return fmt.Errorf("recording: %s: decl without a name", file)
-	}
-	af, err := parser.ParseFile(token.NewFileSet(), "", "package p\n"+d.Code, parser.ParseComments)
-	if err != nil {
-		return bad("code does not parse: %v", err)
-	}
-	if len(af.Decls) != 1 {
-		return bad("code holds %d declarations, want exactly one", len(af.Decls))
-	}
-	switch x := af.Decls[0].(type) {
-	case *ast.FuncDecl:
-		switch {
-		case d.Kind == "func" && x.Recv == nil, d.Kind == "method" && x.Recv != nil:
-		default:
-			return bad("kind %q does not match the code", d.Kind)
+// fileEntry maps a skeleton path to the file template of the generator
+// package: {name}<ext> at the root, {pkg}/{name}<ext> one directory down, and
+// cmd/{bin}/{name}<ext> for a binary directory.
+func fileEntry(p, gen string, info contract.Info) (RFile, error) {
+	ext := ""
+	for _, e := range info.Extensions {
+		if strings.HasSuffix(p, e) {
+			ext = e
+			break
 		}
-		if x.Name.Name != d.Name {
-			return bad("code declares %q", x.Name.Name)
-		}
-		if d.Kind == "func" && d.Receiver != "" {
-			return bad("a func has no receiver")
-		}
-		if d.Kind == "method" && recvName(x.Recv) != d.Receiver {
-			return bad("receiver is %q in the code, %q in the decl", recvName(x.Recv), d.Receiver)
-		}
-	case *ast.GenDecl:
-		want := map[string]token.Token{"type": token.TYPE, "var": token.VAR, "const": token.CONST}[d.Kind]
-		if want == token.ILLEGAL || x.Tok != want {
-			return bad("kind %q does not match the code", d.Kind)
-		}
-		if len(x.Specs) != 1 {
-			return bad("grouped declarations are not allowed")
-		}
-		ok := false
-		switch sp := x.Specs[0].(type) {
-		case *ast.TypeSpec:
-			ok = sp.Name.Name == d.Name
-		case *ast.ValueSpec:
-			ok = len(sp.Names) == 1 && sp.Names[0].Name == d.Name
-		}
-		if !ok {
-			return bad("code does not declare exactly %q", d.Name)
-		}
-	default:
-		return bad("unsupported declaration")
 	}
-	if d.Kind != "method" && d.Receiver != "" {
-		return bad("only methods have a receiver")
+	if ext == "" || path.Clean(p) != p || strings.HasPrefix(p, "/") || strings.HasPrefix(p, "../") {
+		return RFile{}, fmt.Errorf("recording: bad file path %q (generator %s handles %s)", p, gen, strings.Join(info.Extensions, ", "))
 	}
-	return nil
-}
-
-func recvName(fl *ast.FieldList) string {
-	if fl == nil || len(fl.List) != 1 {
-		return ""
-	}
-	t := fl.List[0].Type
-	if s, ok := t.(*ast.StarExpr); ok {
-		t = s.X
-	}
-	if id, ok := t.(*ast.Ident); ok {
-		return id.Name
-	}
-	return ""
-}
-
-func fileEntry(p string) (RFile, error) {
-	if !strings.HasSuffix(p, ".go") || path.Clean(p) != p || strings.HasPrefix(p, "/") || strings.HasPrefix(p, "../") {
-		return RFile{}, fmt.Errorf("recording: bad file path %q", p)
-	}
-	name := strings.TrimSuffix(path.Base(p), ".go")
-	if strings.HasSuffix(name, "_synth") {
-		return RFile{}, fmt.Errorf("recording: %s: _synth.go files belong to convergence regions", p)
+	name := strings.TrimSuffix(path.Base(p), ext)
+	if strings.HasSuffix(name, info.SynthSuffix) {
+		return RFile{}, fmt.Errorf("recording: %s: %s files belong to convergence regions", p, info.SynthSuffix+ext)
 	}
 	dir := path.Dir(p)
 	switch {
 	case dir == ".":
-		return RFile{Path: p, Package: "go", Template: "{name}.go", Captures: map[string]string{"name": name}}, nil
+		return RFile{Path: p, Package: gen, Template: "{name}" + ext, Captures: map[string]string{"name": name}}, nil
 	case strings.HasPrefix(dir, "cmd/") && strings.Count(dir, "/") == 1:
-		return RFile{Path: p, Package: "go", Template: "cmd/{bin}/{name}.go",
+		return RFile{Path: p, Package: gen, Template: "cmd/{bin}/{name}" + ext,
 			Captures: map[string]string{"bin": strings.TrimPrefix(dir, "cmd/"), "name": name}}, nil
 	case !strings.Contains(dir, "/"):
-		return RFile{Path: p, Package: "go", Template: "{pkg}/{name}.go", Captures: map[string]string{"pkg": dir, "name": name}}, nil
+		return RFile{Path: p, Package: gen, Template: "{pkg}/{name}" + ext, Captures: map[string]string{"pkg": dir, "name": name}}, nil
 	}
 	return RFile{}, fmt.Errorf("recording: unsupported file layout %q", p)
 }
 
-func invocations(f File) ([]Invocation, []string, error) {
+// invocations lists the catalog calls for one file: its imports (the contract
+// adds the one a stub file needs for its helpers), its declarations, then its
+// stubs. declares are the helper signatures the model must implement.
+func invocations(f File, of contract.RenderedFile) ([]Invocation, []string, error) {
 	var invs []Invocation
-	imps := append([]string(nil), f.Imports...)
-	sort.Strings(imps)
-	for _, i := range imps {
-		invs = append(invs, Invocation{"addImport", map[string]string{"file": f.Path, "path": i}})
+	for _, kw := range of.Imports {
+		invs = append(invs, Invocation{"addImport", kw})
 	}
 	for _, d := range f.Decls {
 		switch d.Kind {
@@ -512,63 +474,11 @@ func invocations(f File) ([]Invocation, []string, error) {
 		}
 	}
 	var declares []string
-	for _, s := range f.Stubs {
-		helper := helperName(f, s)
-		params, args := paramText(s.Params)
-		res := resultText(s.Results)
-		call := helper + "(" + args + ")"
-		sig := "func "
-		stubSig := "func "
-		if s.ReceiverType != "" {
-			recv := "(" + s.ReceiverName + " " + s.ReceiverType + ") "
-			stubSig += recv
-			sig += recv
-			call = s.ReceiverName + "." + call
-		}
-		stubSig += s.Name + "(" + params + ")" + res
-		sig += helper + "(" + params + ")" + res
-		body := call
-		if len(s.Results) > 0 {
-			body = "return " + call
-		}
-		doc := "// " + s.Name + " is rendered by graft; its body is a convergence region (" + helper + ")."
-		if s.Doc != "" {
-			doc = "// " + strings.ReplaceAll(strings.TrimSpace(s.Doc), "\n", "\n// ") + "\n" + doc
-		}
-		code := doc + "\n" + stubSig + " {\n\t" + body + "\n}"
-		kw := map[string]string{"file": f.Path, "name": s.Name, "code": code}
-		act := "setFunction"
-		if s.ReceiverType != "" {
-			act = "setMethod"
-			kw["receiver"] = strings.TrimPrefix(s.ReceiverType, "*")
-		}
-		invs = append(invs, Invocation{act, kw})
-		declares = append(declares, sig)
+	for _, s := range of.Stubs {
+		invs = append(invs, Invocation{s.Action, s.Kwargs})
+		declares = append(declares, s.Declare)
 	}
 	return invs, declares, nil
-}
-
-func paramText(ps []Param) (decl, args string) {
-	var d, a []string
-	for _, p := range ps {
-		d = append(d, p.Name+" "+p.Type)
-		if strings.HasPrefix(p.Type, "...") {
-			a = append(a, p.Name+"...")
-		} else {
-			a = append(a, p.Name)
-		}
-	}
-	return strings.Join(d, ", "), strings.Join(a, ", ")
-}
-
-func resultText(rs []string) string {
-	switch len(rs) {
-	case 0:
-		return ""
-	case 1:
-		return " " + rs[0]
-	}
-	return " (" + strings.Join(rs, ", ") + ")"
 }
 
 func upperFirst(s string) string {
