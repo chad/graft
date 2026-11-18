@@ -2,7 +2,7 @@ package bench
 
 import (
 	"bufio"
-	"crypto/sha256"
+	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -67,6 +67,26 @@ func validLayer(l Layer) bool {
 	return false
 }
 
+func validLayers(ls []Layer) error {
+	if len(ls) == 0 {
+		return errors.New("bench: an attribution names at least one layer (LayerUnknown if it cannot be told)")
+	}
+	seen := map[Layer]bool{}
+	for _, l := range ls {
+		if !validLayer(l) {
+			return fmt.Errorf("bench: unknown layer %q", l)
+		}
+		if seen[l] {
+			return fmt.Errorf("bench: layer %q named twice", l)
+		}
+		seen[l] = true
+	}
+	if seen[LayerUnknown] && len(ls) > 1 {
+		return errors.New("bench: LayerUnknown cannot be combined with a named layer")
+	}
+	return nil
+}
+
 // Sample is one draw. It carries no attribution: that is added later, by
 // separate Attribution records, so the run log is never rewritten.
 type Sample struct {
@@ -92,7 +112,7 @@ type Attribution struct {
 // Record is one run of one arm on one case. Records are appended, never edited.
 type Record struct {
 	Schema     int        `json:"schema"`
-	ID         string     `json:"id"` // content hash, assigned by Append
+	ID         string     `json:"id"` // random 128-bit id, assigned by Append
 	Case       string     `json:"case"`
 	Arm        Arm        `json:"arm"`
 	Commit     string     `json:"commit"`  // graft's commit: the answerer
@@ -171,14 +191,14 @@ func (s Store) Append(r Record) (Record, error) {
 	if r.At.IsZero() {
 		r.At = time.Now().UTC()
 	}
-	r.ID = ""
-	b, err := json.Marshal(r)
-	if err != nil {
+	// A random id, not a content hash: two identical runs are two runs.
+	var nonce [16]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
 		return r, err
 	}
-	sum := sha256.Sum256(b)
-	r.ID = hex.EncodeToString(sum[:16])
-	if b, err = json.Marshal(r); err != nil {
+	r.ID = hex.EncodeToString(nonce[:])
+	b, err := json.Marshal(r)
+	if err != nil {
 		return r, err
 	}
 	return r, appendLine(s.Dir, p, b)
@@ -190,16 +210,11 @@ func (s Store) Attribute(caseName string, a Attribution) error {
 	if err != nil {
 		return err
 	}
-	if len(a.Layers) == 0 {
-		return errors.New("bench: an attribution names at least one layer (LayerUnknown if it cannot be told)")
+	if a.RecordID == "" {
+		return errors.New("bench: an attribution names a record id")
 	}
-	for _, l := range a.Layers {
-		if !validLayer(l) {
-			return fmt.Errorf("bench: unknown layer %q", l)
-		}
-		if l == LayerUnknown && len(a.Layers) > 1 {
-			return errors.New("bench: LayerUnknown cannot be combined with a named layer")
-		}
+	if err := validLayers(a.Layers); err != nil {
+		return err
 	}
 	recs, _, err := s.Load(caseName)
 	if err != nil {
@@ -207,7 +222,10 @@ func (s Store) Attribute(caseName string, a Attribution) error {
 	}
 	var target *Record
 	for i := range recs {
-		if recs[i].ID == a.RecordID {
+		if recs[i].ID == a.RecordID && recs[i].Schema == Schema {
+			if target != nil {
+				return fmt.Errorf("bench: record id %q is not unique in case %s", a.RecordID, caseName)
+			}
 			target = &recs[i]
 		}
 	}
@@ -267,6 +285,7 @@ func appendLine(dir, p string, b []byte) error {
 
 // Corrupt is a line Load could not read. It is reported, never dropped silently.
 type Corrupt struct {
+	File string
 	Line int
 	Err  string
 }
@@ -290,7 +309,7 @@ func loadLines[T any](p string) ([]T, []Corrupt, error) {
 		}
 		var v T
 		if err := json.Unmarshal(sc.Bytes(), &v); err != nil {
-			bad = append(bad, Corrupt{Line: n, Err: err.Error()})
+			bad = append(bad, Corrupt{File: filepath.Base(p), Line: n, Err: err.Error()})
 			continue
 		}
 		out = append(out, v)
@@ -348,15 +367,30 @@ func Aggregate(recs []Record, attrs []Attribution) (parts []Partition, excluded 
 		id  string
 		idx int
 	}
+	// Attributions loaded from disk are validated again: a hand-edited or
+	// foreign line cannot invent a layer. An invalid one is ignored, so the
+	// sample falls back to the previous valid attribution or to unattributed.
 	latest := map[sampleKey][]Layer{}
 	for _, a := range attrs {
+		if a.Schema != Schema || a.RecordID == "" || validLayers(a.Layers) != nil {
+			continue
+		}
 		latest[sampleKey{a.RecordID, a.SampleIdx}] = a.Layers
+	}
+	// Duplicate record ids are excluded outright: an attribution could not say which it meant.
+	idCount := map[string]int{}
+	for _, r := range recs {
+		idCount[r.ID]++
 	}
 	cells := map[key]*acc{}
 	excluded = map[int]string{}
 	for i, r := range recs {
 		if ok, why := r.Citable(); !ok {
 			excluded[i] = why
+			continue
+		}
+		if idCount[r.ID] > 1 {
+			excluded[i] = fmt.Sprintf("record id %.12s is not unique in this case", r.ID)
 			continue
 		}
 		k := key{r.Fixture, r.Commit, r.Model, r.Arm}

@@ -2,10 +2,14 @@ package bench
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func mustW(t *testing.T, k, n int) Interval {
@@ -60,8 +64,10 @@ func TestCompareNeverGivesAVerdictOnOverlap(t *testing.T) {
 	}
 }
 
+var recSeq atomic.Int64
+
 func rec(arm Arm, commit string, res Resolution, outcomes ...Outcome) Record {
-	r := Record{Schema: Schema, ID: "id-" + string(arm) + "-" + commit + "-" + string(res), Case: "todo", Arm: arm, Commit: commit, Fixture: "fx1", Model: "m1", Resolution: res}
+	r := Record{Schema: Schema, ID: fmt.Sprintf("id-%d", recSeq.Add(1)), Case: "todo", Arm: arm, Commit: commit, Fixture: "fx1", Model: "m1", Resolution: res}
 	for _, o := range outcomes {
 		s := Sample{Outcome: o, Checks: 10, Passed: 10}
 		if o != Works {
@@ -298,5 +304,95 @@ func TestConcurrentAppendsKeepEveryLineWhole(t *testing.T) {
 	attrs, badA, _ := s.LoadAttributions("todo")
 	if len(recs) != 21 || len(bad) != 0 || len(attrs) != 20 || len(badA) != 0 {
 		t.Fatalf("records %d (corrupt %d), attributions %d (corrupt %d)", len(recs), len(bad), len(attrs), len(badA))
+	}
+}
+
+// Review on #8: two identical runs are two runs, with two ids.
+func TestIdenticalAppendsGetDistinctIDs(t *testing.T) {
+	s := Store{Dir: t.TempDir()}
+	r := rec(ArmGraft, "c1", Coarse, five(Broke)...)
+	r.At = time.Date(2026, 11, 17, 0, 0, 0, 0, time.UTC)
+	a, _ := s.Append(r)
+	b, _ := s.Append(r)
+	if a.ID == b.ID {
+		t.Fatal("identical appends share an id")
+	}
+}
+
+// Review on #8: an empty record id never matches id-less (v1) records.
+func TestAttributeRefusesEmptyRecordID(t *testing.T) {
+	s := Store{Dir: t.TempDir()}
+	os.WriteFile(filepath.Join(s.Dir, "todo.jsonl"),
+		[]byte(`{"schema":1,"case":"todo","arm":"graft","resolution":"coarse","samples":[{"outcome":"broke","checks":1,"passed":0}]}`+"\n"), 0o644)
+	if err := s.Attribute("todo", Attribution{RecordID: "", SampleIdx: 0, Layers: []Layer{LayerRender}}); err == nil {
+		t.Fatal("attributed to an empty id")
+	}
+	recs, _, _ := s.Load("todo")
+	if _, ex, _ := Aggregate(recs, nil); len(ex) != 1 {
+		t.Fatal("a v1 record was counted")
+	}
+}
+
+func TestDuplicateIDsAreExcluded(t *testing.T) {
+	a := rec(ArmGraft, "c1", Coarse, five(Works)...)
+	parts, ex, _ := Aggregate([]Record{a, a}, nil)
+	if len(parts) != 0 || len(ex) != 2 {
+		t.Fatalf("parts %d excluded %d", len(parts), len(ex))
+	}
+}
+
+// Review on #8: layers loaded from disk are validated again.
+func TestInvalidLoadedAttributionIsIgnored(t *testing.T) {
+	r := rec(ArmGraft, "c1", Coarse, Works, Works, Works, Works, Broke)
+	attrs := []Attribution{
+		{Schema: Schema, RecordID: r.ID, SampleIdx: 4, Layers: []Layer{LayerRender}},
+		{Schema: Schema, RecordID: r.ID, SampleIdx: 4, Layers: []Layer{"vibes"}},
+	}
+	parts, _, _ := Aggregate([]Record{r}, attrs)
+	if p := parts[0]; p.ByLayer["vibes"] != 0 || p.ByLayer[LayerRender] != 1 {
+		t.Fatalf("%+v", p.ByLayer)
+	}
+}
+
+// Review on #8: a word ban list misses "Graft wins." A fixed template does not:
+// every comparison line must be exactly one of the three permitted sentences.
+func TestComparisonLinesMatchTheTemplate(t *testing.T) {
+	iv := `\d+/\d+ \[\d\.\d\d, \d\.\d\d\]`
+	templates := []*regexp.Regexp{
+		regexp.MustCompile(`^These runs do NOT distinguish \w+ ` + iv + ` from \w+ ` + iv + `\.$`),
+		regexp.MustCompile(`^These runs distinguish \w+ ` + iv + ` from \w+ ` + iv + ` \(intervals disjoint\)\.$`),
+		regexp.MustCompile(`^\w+ and \w+ cannot be compared: one has no eligible samples\.$`),
+	}
+	recs := []Record{
+		rec(ArmGraft, "c1", Coarse, Works, Works, Works, Works, Disagreed),
+		rec(ArmBaseline, "c1", Coarse, five(Works)...),
+		rec(ArmIntent, "c1", Coarse, five(Broke)...),
+	}
+	var b bytes.Buffer
+	Report(&b, "todo", recs, nil, nil)
+	n := 0
+	for _, line := range strings.Split(b.String(), "\n") {
+		if !strings.HasPrefix(line, "- These") && !strings.Contains(line, "cannot be compared") {
+			continue
+		}
+		n++
+		body := strings.TrimPrefix(line, "- ")
+		ok := false
+		for _, re := range templates {
+			ok = ok || re.MatchString(body)
+		}
+		if !ok {
+			t.Errorf("comparison line outside the template: %q", body)
+		}
+	}
+	if n != 2 {
+		t.Fatalf("%d comparison lines, want 2", n)
+	}
+	for _, s := range []string{"Graft wins.", "Graft is ahead."} {
+		for _, re := range templates {
+			if re.MatchString(s) {
+				t.Fatalf("template admits %q", s)
+			}
+		}
 	}
 }

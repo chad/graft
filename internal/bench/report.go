@@ -33,7 +33,7 @@ func Report(w io.Writer, caseName string, recs []Record, attrs []Attribution, co
 	if len(corrupt) > 0 {
 		fmt.Fprintf(w, "\nCorrupt log lines, counted in nothing (%d):\n", len(corrupt))
 		for _, c := range corrupt {
-			fmt.Fprintf(w, "- line %d: %s\n", c.Line, c.Err)
+			fmt.Fprintf(w, "- %s line %d: %s\n", c.File, c.Line, c.Err)
 		}
 	}
 	if len(excluded) > 0 {
