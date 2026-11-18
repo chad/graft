@@ -149,14 +149,29 @@ sum `total_cost_usd`):
 | sonnet, run B | 46/47 (`unknown_command_421_as_sent` fails) | 7 / 7 (all attempt 1) | $1.08 | 554 | 207 |
 | haiku | 47/47 | 7 / 7 (all attempt 1) | $0.07 | 630 | 207 |
 
-Every region passed all gates on attempt 1 in all three runs. Two Sonnet runs
+Every region passed all gates on attempt 1 in all three runs in the table.
+(The Sonnet failure described below came from an earlier run, before the gate
+fix; it is not a row here.) Two Sonnet runs
 of the same input differ by one oracle check, so single scores say little;
 and a run can pass every gate and still fail the oracle.
 
-The first Sonnet attempt failed on the Running region: the registry gate
-rejected `running_synth.go` for reading `handlers`. The gate now treats the
-declaring file's `_synth.go` as part of the declaring file, and
-`conventions.md` says the Running region may read `handlers`.
+An earlier Sonnet run (not in the table) failed on the Running region: the
+registry gate rejected `running_synth.go` for reading `handlers`. The gate now
+lets the declaring file's `_synth.go` read `handlers` (index reads and `range`
+only: no aliasing, writes, `clear` or passing the map on), and `conventions.md`
+says the Running region may read `handlers`.
+
+Notes on `--render`:
+
+- `.sedum/run.log` is append-only and grows on every run, even a no-op one, so
+  a committed tree shows it as modified after a re-run. Git-ignore
+  `.sedum/run.log` (or ignore it when checking that a re-run is byte-identical).
+- Dropping a section (for example v2 back to v1) removes nothing: `topics.go`
+  and `topics_synth.go` stay in the tree, with no error and no model call.
+  Delete the files yourself if the section is really gone.
+- A `_synth.go` that still contains the seeded `graft: not converged` panic is
+  never accepted: it counts as pending (regenerated) and a model answer that
+  contains it is refused before any check or evidence.
 
 v1 to v2 with `--render` (haiku, n=1, `--skeleton skeleton-v2.json`, spec-v2):
 only Topics (`topics_synth.go`) was generated (1 call, about $0.01); the other
