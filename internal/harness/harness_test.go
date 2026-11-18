@@ -14,6 +14,7 @@ import (
 	"github.com/chad/graft/internal/bench"
 	"github.com/chad/graft/internal/converge"
 	"github.com/chad/graft/internal/evidence"
+	"github.com/chad/graft/internal/recording"
 )
 
 const good = "package main\n\nimport \"fmt\"\n\nfunc main() { fmt.Println(\"hello\") }\n"
@@ -281,6 +282,28 @@ func TestEvolveV1RetryThenChangeInfraIsUnreachable(t *testing.T) {
 	})
 	c.Attempts = 3
 	if s := EvolveSample(context.Background(), c, bench.ArmGraft); s.Outcome != bench.Unreachable {
+		t.Fatalf("%+v", s)
+	}
+}
+
+func TestFilterSynth(t *testing.T) {
+	got := filterSynth(map[string]string{"a.go": "x", "a_synth.go": "y", "b_synth.go": "z"})
+	if len(got) != 2 || got["a_synth.go"] != "y" {
+		t.Fatalf("%v", got)
+	}
+}
+
+func TestGraftRenderWithoutSedumIsUnreachable(t *testing.T) {
+	c := cfg(t, answer{map[string]string{"core.go": good}}, fakeOracle)
+	c.Case.Skeleton = &recording.Skeleton{}
+	if s := Sample(context.Background(), c, bench.ArmGraftRender); s.Outcome != bench.Unreachable {
+		t.Fatalf("%+v", s)
+	}
+}
+
+func TestGraftRenderWithoutSkeletonIsUnreachable(t *testing.T) {
+	c := cfg(t, answer{map[string]string{"core.go": good}}, fakeOracle)
+	if s := Sample(context.Background(), c, bench.ArmGraftRender); s.Outcome != bench.Unreachable || !strings.Contains(s.Reason, "no skeleton") {
 		t.Fatalf("%+v", s)
 	}
 }

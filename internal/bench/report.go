@@ -23,7 +23,7 @@ func Report(w io.Writer, caseName string, recs []Record, attrs []Attribution, co
 		fmt.Fprintln(w, "| fixture | commit | model | arm | works | unreachable (not in works) | checks passed (descriptive; checks within a sample are correlated, so no interval) | failures by layer |")
 		fmt.Fprintln(w, "|---|---|---|---|---|---|---|---|")
 		for _, p := range parts {
-			fmt.Fprintf(w, "| %.12s | %.12s | %s | %s | %s | %d | %s | %s |\n", p.Fixture, p.Commit, p.Model, p.Arm, p.Works, p.Outcomes[Unreachable], fmt.Sprintf("%d/%d", p.Checks.K, p.Checks.N), layers(p.ByLayer, p.Unattributed))
+			fmt.Fprintf(w, "| %.12s | %.12s | %s | %s | %s | %d | %s | %s |\n", p.Fixture, p.Commit, p.Model, armLabel(p), p.Works, p.Outcomes[Unreachable], fmt.Sprintf("%d/%d", p.Checks.K, p.Checks.N), layers(p.ByLayer, p.Unattributed))
 		}
 		fmt.Fprintln(w)
 		for _, cmp := range comparisons(parts) {
@@ -89,14 +89,16 @@ func comparisons(parts []Partition) []string {
 		by[c][p.Arm] = p
 	}
 	var out []string
+	pairs := [][2]Arm{
+		{ArmGraft, ArmBaseline}, {ArmGraft, ArmIntent},
+		{ArmGraftRender, ArmBaseline}, {ArmGraftRender, ArmIntent}, {ArmGraftRender, ArmGraft},
+	}
 	for _, c := range order {
-		g, ok := by[c][ArmGraft]
-		if !ok {
-			continue
-		}
-		for _, ctl := range []Arm{ArmBaseline, ArmIntent} {
-			if p, ok := by[c][ctl]; ok {
-				out = append(out, Compare("graft", g.Works, string(ctl), p.Works))
+		for _, pr := range pairs {
+			a, okA := by[c][pr[0]]
+			b, okB := by[c][pr[1]]
+			if okA && okB {
+				out = append(out, Compare(string(pr[0]), a.Works, string(pr[1]), b.Works))
 			}
 		}
 	}
@@ -111,8 +113,11 @@ func changeCosts(recs []Record, excluded map[int]string) []string {
 		if _, ex := excluded[i]; ex {
 			continue
 		}
-		var calls, kept, bytes []string
+		var calls, kept, bytes, synth []string
 		for _, s := range r.Samples {
+			if s.SynthDiffLines != nil {
+				synth = append(synth, fmt.Sprint(*s.SynthDiffLines))
+			}
 			if s.DiffLines != nil {
 				bytes = append(bytes, fmt.Sprint(*s.DiffLines))
 			}
@@ -127,8 +132,14 @@ func changeCosts(recs []Record, excluded map[int]string) []string {
 			continue
 		}
 		line := fmt.Sprintf("%s @%.12s: model calls for the change [%s]", r.Arm, r.Commit, strings.Join(calls, " "))
+		if r.Tools != "" {
+			line = fmt.Sprintf("%s (+ %s)", line, r.Tools)
+		}
 		if len(bytes) > 0 {
 			line += fmt.Sprintf("; lines changed (added+removed, same measure for every arm) [%s]", strings.Join(bytes, " "))
+		}
+		if len(synth) > 0 {
+			line += fmt.Sprintf("; of which model-written (*_synth.go) [%s]", strings.Join(synth, " "))
 		}
 		if len(kept) > 0 {
 			line += fmt.Sprintf("; pre-change files left byte-identical [%s]", strings.Join(kept, " "))
@@ -136,4 +147,13 @@ func changeCosts(recs []Record, excluded map[int]string) []string {
 		out = append(out, line)
 	}
 	return out
+}
+
+// armLabel names an arm with any extra tools it used, so an extra input
+// (sedum's skeleton) is visible next to the numbers it produced.
+func armLabel(p Partition) string {
+	if p.Tools == "" {
+		return string(p.Arm)
+	}
+	return fmt.Sprintf("%s (+ %s)", p.Arm, p.Tools)
 }

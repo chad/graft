@@ -24,6 +24,9 @@ const (
 	ArmGraft    Arm = "graft"    // the full pipeline
 	ArmBaseline Arm = "baseline" // same intent, same model, one call, no pipeline
 	ArmIntent   Arm = "intent"   // one sentence and the runtime contract
+	// ArmGraftRender is the pipeline with sedum rendering the skeleton: the
+	// model writes only the Body helpers in *_synth.go files.
+	ArmGraftRender Arm = "graft-render"
 )
 
 // Resolution is the question a run's sample size answers.
@@ -106,6 +109,9 @@ type Sample struct {
 	// DiffLines is the size of the change, measured identically for every
 	// arm: lines added plus removed across the tree's .go files.
 	DiffLines *int `json:"diff_lines,omitempty"`
+	// SynthDiffLines is the part of DiffLines in model-written *_synth.go
+	// files (graft-render only); the rest was rendered by sedum.
+	SynthDiffLines *int `json:"synth_diff_lines,omitempty"`
 }
 
 // Attribution says which layer(s) one failed sample's failure came from.
@@ -123,14 +129,18 @@ type Attribution struct {
 
 // Record is one run of one arm on one case. Records are appended, never edited.
 type Record struct {
-	Schema     int        `json:"schema"`
-	ID         string     `json:"id"` // random 128-bit id, assigned by Append
-	Case       string     `json:"case"`
-	Arm        Arm        `json:"arm"`
-	Commit     string     `json:"commit"`  // graft's commit: the answerer
-	Dirty      bool       `json:"dirty"`   // uncommitted changes: the commit pins nothing
-	Fixture    string     `json:"fixture"` // digest of spec + checks + runtime contract: the question
-	Model      string     `json:"model"`
+	Schema  int    `json:"schema"`
+	ID      string `json:"id"` // random 128-bit id, assigned by Append
+	Case    string `json:"case"`
+	Arm     Arm    `json:"arm"`
+	Commit  string `json:"commit"`  // graft's commit: the answerer
+	Dirty   bool   `json:"dirty"`   // uncommitted changes: the commit pins nothing
+	Fixture string `json:"fixture"` // digest of spec + checks + runtime contract: the question
+	Model   string `json:"model"`
+	// Tools records extra tools an arm used (e.g. "sedum 0.12.2" for
+	// graft-render); it is not part of the partition key, so arms stay
+	// comparable within one model.
+	Tools      string     `json:"tools,omitempty"`
 	Resolution Resolution `json:"resolution"`
 	Samples    []Sample   `json:"samples"`
 	At         time.Time  `json:"at"`
@@ -189,7 +199,7 @@ func (s Store) Append(r Record) (Record, error) {
 		return r, err
 	}
 	switch r.Arm {
-	case ArmGraft, ArmBaseline, ArmIntent:
+	case ArmGraft, ArmBaseline, ArmIntent, ArmGraftRender:
 	default:
 		return r, fmt.Errorf("bench: unknown arm %q", r.Arm)
 	}
@@ -368,6 +378,7 @@ type Partition struct {
 	Unattributed           int           // failures with no attribution yet
 	Outcomes               map[Outcome]int
 	Records                int
+	Tools                  string // extra tools the arm used (from its records)
 }
 
 // Aggregate pools the CITABLE records of a case into partitions, sorted by
@@ -381,6 +392,7 @@ func Aggregate(recs []Record, attrs []Attribution) (parts []Partition, excluded 
 	}
 	type acc struct {
 		works, eligible, passed, checks, records, unattributed int
+		tools                                                  string
 		byLayer                                                map[Layer]int
 		outcomes                                               map[Outcome]int
 	}
@@ -421,6 +433,9 @@ func Aggregate(recs []Record, attrs []Attribution) (parts []Partition, excluded 
 			cells[k] = a
 		}
 		a.records++
+		if r.Tools != "" {
+			a.tools = r.Tools
+		}
 		for i, s := range r.Samples {
 			a.outcomes[s.Outcome]++
 			if s.Outcome == Unreachable {
@@ -452,7 +467,7 @@ func Aggregate(recs []Record, attrs []Attribution) (parts []Partition, excluded 
 			return nil, nil, err
 		}
 		parts = append(parts, Partition{Fixture: k.fixture, Commit: k.commit, Model: k.model, Arm: k.arm, Works: w, Checks: c,
-			ByLayer: a.byLayer, Unattributed: a.unattributed, Outcomes: a.outcomes, Records: a.records})
+			ByLayer: a.byLayer, Unattributed: a.unattributed, Outcomes: a.outcomes, Records: a.records, Tools: a.tools})
 	}
 	sort.Slice(parts, func(i, j int) bool {
 		a, b := parts[i], parts[j]
