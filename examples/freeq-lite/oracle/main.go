@@ -100,6 +100,24 @@ func (k *conn) closed() error {
 
 func (k *conn) close() { k.c.Close() }
 
+// drainUntil reads lines until want arrives (skipping others).
+func (k *conn) drainUntil(want string) error {
+	deadline := time.After(wait)
+	for {
+		select {
+		case got, ok := <-k.lines:
+			if !ok {
+				return fmt.Errorf("connection closed, wanted %q", want)
+			}
+			if got == want {
+				return nil
+			}
+		case <-deadline:
+			return fmt.Errorf("timed out waiting for %q", want)
+		}
+	}
+}
+
 var seq atomic.Int64
 
 // uniq makes nick and channel names unique across checks on a shared server.
@@ -626,6 +644,116 @@ var checks = []check{
 		k.send("PRIVMSG " + n + " :" + strings.Repeat("x", 600))
 		k.send("PING still-here")
 		return k.expect(":freeq-lite PONG freeq-lite :still-here")
+	}},
+	{"nick_boundary_and_charset_accepted", func(a string) error {
+		// 16 characters, and '_' and '-' after the first letter, are all valid.
+		for _, base := range []string{"abcdefghijklmn", "a_b-c"} {
+			n := base + fmt.Sprint(seq.Add(1)%10)
+			if len(n) > 16 {
+				n = n[:16]
+			}
+			k, err := register(a, n)
+			if err != nil {
+				return fmt.Errorf("valid nick %q: %w", n, err)
+			}
+			k.close()
+		}
+		n := "p" + strings.Repeat("q", 14) + fmt.Sprint(seq.Add(1)%10) // exactly 16
+		k, err := register(a, n)
+		if err != nil {
+			return fmt.Errorf("16-character nick %q: %w", n, err)
+		}
+		k.close()
+		return nil
+	}},
+	{"old_nick_freed_after_change", func(a string) error {
+		old, nn := uniq("lou"), uniq("lulu")
+		ka, err := register(a, old)
+		if err != nil {
+			return err
+		}
+		defer ka.close()
+		ka.send("NICK " + nn)
+		if err := ka.expect(":" + pfx(old) + " NICK " + nn); err != nil {
+			return err
+		}
+		kb, err := register(a, old) // the old nick is free again
+		if err != nil {
+			return err
+		}
+		kb.close()
+		return nil
+	}},
+	{"nick_change_not_sent_to_strangers", func(a string) error {
+		na, nc := uniq("moe"), uniq("nan")
+		ka, err := register(a, na)
+		if err != nil {
+			return err
+		}
+		defer ka.close()
+		kc, err := register(a, nc) // shares no channel with na
+		if err != nil {
+			return err
+		}
+		defer kc.close()
+		nn := uniq("moey")
+		ka.send("NICK " + nn)
+		return first(ka.expect(":"+pfx(na)+" NICK "+nn), kc.silent(400*time.Millisecond))
+	}},
+	{"dropped_user_leaves_channels", func(a string) error {
+		ch := uniq("#left")
+		na, nb := uniq("ola"), uniq("pia")
+		ka, err := register(a, na)
+		if err != nil {
+			return err
+		}
+		kb, err := register(a, nb)
+		if err != nil {
+			return err
+		}
+		defer kb.close()
+		ka.send("JOIN " + ch)
+		kb.send("JOIN " + ch)
+		time.Sleep(300 * time.Millisecond)
+		ka.close()
+		if err := kb.drainUntil(":" + pfx(na) + " QUIT :Connection closed"); err != nil {
+			return err
+		}
+		kb.send("NAMES " + ch)
+		return first(kb.expect(":freeq-lite 353 "+nb+" = "+ch+" :"+nb),
+			kb.expect(":freeq-lite 366 "+nb+" "+ch+" :End of /NAMES list"))
+	}},
+	{"privmsg_nick_not_echoed", func(a string) error {
+		na, nb := uniq("quinn"), uniq("rita")
+		ka, err := register(a, na)
+		if err != nil {
+			return err
+		}
+		defer ka.close()
+		kb, err := register(a, nb)
+		if err != nil {
+			return err
+		}
+		defer kb.close()
+		ka.send("PRIVMSG " + nb + " :just you")
+		return first(kb.expect(":"+pfx(na)+" PRIVMSG "+nb+" :just you"), ka.silent(400*time.Millisecond))
+	}},
+	{"quit_not_sent_to_strangers", func(a string) error {
+		na, nc := uniq("sol"), uniq("tom")
+		ka, err := register(a, na)
+		if err != nil {
+			return err
+		}
+		kc, err := register(a, nc)
+		if err != nil {
+			return err
+		}
+		defer kc.close()
+		ka.send("JOIN " + uniq("#alone"))
+		time.Sleep(200 * time.Millisecond)
+		ka.send("QUIT :bye")
+		ka.close()
+		return kc.silent(500 * time.Millisecond)
 	}},
 }
 

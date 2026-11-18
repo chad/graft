@@ -44,7 +44,8 @@ No federation, no identity, no media: just people, nicks and channels.
 
 - `PRIVMSG <channel> :<text>` sends `:<prefix> PRIVMSG <channel> :<text>` to every member of the channel except the sender
 - Only members may send to a channel; anyone else is answered with `:freeq-lite 404 <nick> <channel> :Cannot send to channel`
-- `PRIVMSG <nick> :<text>` sends `:<prefix> PRIVMSG <nick> :<text>` to that user; nick matching ignores case
+- `PRIVMSG <nick> :<text>` sends `:<prefix> PRIVMSG <nick> :<text>` to that user, where `<nick>` in the delivered line is the recipient's nick as they registered it; nick matching ignores case
+- The sender of a `PRIVMSG` never receives their own message back
 - A message to a nick or channel that does not exist is answered with `:freeq-lite 401 <nick> <target> :No such nick/channel`
 - A `PRIVMSG` with no text is answered with `:freeq-lite 412 <nick> :No text to send`
 
