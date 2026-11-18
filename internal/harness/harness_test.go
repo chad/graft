@@ -163,6 +163,31 @@ func TestCodeFailureThenModelErrorIsBroke(t *testing.T) {
 	}
 }
 
+func TestEvolveSampleGraftPreservesAndCounts(t *testing.T) {
+	c := cfg(t, answer{map[string]string{"core.go": good, "extra.go": "package main\n\nfunc Twice(x int) int { return 2 * x }\n"}}, fakeOracle)
+	c.Case.SpecV2 = c.Case.Spec + "\n## Extra\n\n- The program must define a function Twice that returns twice its argument\n"
+	s := EvolveSample(context.Background(), c, bench.ArmGraft)
+	if s.Outcome != bench.Works || s.ChangeCalls == nil || *s.ChangeCalls != 1 || s.Preserved == nil || *s.Preserved != 1 {
+		t.Fatalf("%+v calls=%v preserved=%v", s, deref(s.ChangeCalls), deref(s.Preserved))
+	}
+}
+
+func TestEvolveSampleBaselineCountsOneCall(t *testing.T) {
+	c := cfg(t, answer{map[string]string{"main.go": good}}, fakeOracle)
+	c.Case.SpecV2 = c.Case.Spec + "\n- It must also exit with status 0\n"
+	s := EvolveSample(context.Background(), c, bench.ArmBaseline)
+	if s.Outcome != bench.Works || s.ChangeCalls == nil || *s.ChangeCalls != 1 || s.Preserved != nil {
+		t.Fatalf("%+v", s)
+	}
+}
+
+func deref(p *int) any {
+	if p == nil {
+		return nil
+	}
+	return *p
+}
+
 // failsThenPassesThenErrs: region 1 fails then passes; region 2 hits a model error.
 type failsThenPassesThenErrs struct{ n int }
 
@@ -190,7 +215,7 @@ func TestEarlierGateFailureInAnyRegionIsBroke(t *testing.T) {
 	}
 }
 
-// cancelAfterFailure fails the gate once, then cancels the run.
+// A gate failure followed by cancellation is broke.
 func TestGateFailureThenCancelIsBroke(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
