@@ -10,7 +10,10 @@ import (
 
 // sedumVersion pins the sedum the recording tests run against, so the
 // recording format cannot drift underneath them.
-const sedumVersion = "v0.12.2"
+//
+// This is the sedum PR branch that adds `sedum convergence` (livecodelife/sedum
+// #68). Replace it with the release tag that carries it once there is one.
+const sedumVersion = "m10b-convergence-contract"
 
 // TestMain provisions sedum in CI without a workflow change: when CI is set
 // and sedum is not on PATH, it installs the pinned release with `go install`
