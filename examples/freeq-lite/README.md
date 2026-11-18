@@ -12,7 +12,7 @@ identity, no media.
 
 The oracle was written from the spec **before any code was generated**, imports
 nothing from any implementation, and must score the reference 46/46
-(`go test ./examples/freeq-lite/oracle`). **Twenty-five committed mutants** of the
+(`go test ./examples/freeq-lite/oracle`). **Twenty-eight committed mutants** of the
 reference (`oracle/mutants_test.go`) must each fail their named check, so "the
 oracle has teeth" is something anyone can re-run. Eleven of them are bugs
 livecodelife's agent wrote that escaped earlier versions of the oracle (six

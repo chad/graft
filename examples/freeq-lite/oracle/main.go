@@ -877,11 +877,31 @@ var checks = []check{
 			return err
 		}
 		defer kb.close()
-		lower := strings.ToLower(base)
+		lower, upper := strings.ToLower(base), strings.ToUpper(base)
 		kb.send("JOIN " + lower)
 		// Same channel, shown with the name it was created with.
-		return first(ka.expect(":"+pfx(nb)+" JOIN "+base), kb.expect(":"+pfx(nb)+" JOIN "+base),
-			kb.expect(":freeq-lite 353 "+nb+" = "+base+" :"+na+" "+nb))
+		if err := first(ka.expect(":"+pfx(nb)+" JOIN "+base), kb.expect(":"+pfx(nb)+" JOIN "+base),
+			kb.expect(":freeq-lite 353 "+nb+" = "+base+" :"+na+" "+nb),
+			kb.expect(":freeq-lite 366 "+nb+" "+base+" :End of /NAMES list")); err != nil {
+			return err
+		}
+		// PRIVMSG under another case reaches the same channel.
+		kb.send("PRIVMSG " + upper + " :hi all")
+		if err := ka.expect(":" + pfx(nb) + " PRIVMSG " + base + " :hi all"); err != nil {
+			return fmt.Errorf("PRIVMSG %s: %w", upper, err)
+		}
+		// NAMES under another case lists the same members.
+		ka.send("NAMES " + upper)
+		if err := first(ka.expect(":freeq-lite 353 "+na+" = "+base+" :"+na+" "+nb),
+			ka.expect(":freeq-lite 366 "+na+" "+base+" :End of /NAMES list")); err != nil {
+			return fmt.Errorf("NAMES %s: %w", upper, err)
+		}
+		// PART under another case leaves the same channel.
+		kb.send("PART " + upper)
+		if err := first(ka.expect(":"+pfx(nb)+" PART "+base), kb.expect(":"+pfx(nb)+" PART "+base)); err != nil {
+			return fmt.Errorf("PART %s: %w", upper, err)
+		}
+		return nil
 	}},
 	{"part_reason_reaches_members", func(a string) error {
 		ch := uniq("#bye")
