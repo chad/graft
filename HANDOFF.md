@@ -13,7 +13,8 @@ Four tests (done); real runs with Sonnet AND Haiku scored by the oracle, recorde
 ## Next
 1. First real run (sonnet) failed on the Running region: `registry ownership` gate reports `running_synth.go:80: handlers may only be used as handlers["CMD"] = ... outside running.go`. The serve body legitimately dispatches via `handlers` and lives in running_synth.go. Fix: make examples/freeq-lite/gates/registry.go treat `<declarer stem>_synth.go` (running_synth.go) as part of the declaring file (see `declarer` and the check at ~line 59); add/adjust its test in examples/freeq-lite/gates. Also note in conventions.md that the Running region may read `handlers`. Re-run gates tests.
 2. Rerun: `go build -o $SCRATCH/graft ./cmd/graft`; `SEDUM_GENERATORS=~/sedum/generators graft run --render --config examples/freeq-lite/graft.json --spec examples/freeq-lite/spec/freeq-lite.md --repo $W/repo --root $W/app --accept` with W outside the repo. Build `$W/app` to `$W/server`, score with `go run ./examples/freeq-lite/oracle -bin $W/server`. For haiku, copy graft.json to $W with `--model haiku` and a conventions copy (or sed the argv) and pass that --config.
-3. Count: model calls/attempts (progress output "attempt N"), lines in *_synth.go (model) vs other .go (sedum).
+3. Also record each real run's cost (total_cost_usd, per the brief Addendum; the claude CLI JSON output has it, so the model argv may need `--output-format json` handling, or sum it from the CLI's own report) in the README anecdote.
+   Count: model calls/attempts (progress output "attempt N"), lines in *_synth.go (model) vs other .go (sedum).
 4. README anecdotes (sonnet + haiku, n=1 each), plus a short `--render` usage section; also run the v1 -> v2 evolve once if cheap (skeleton-v2.json + spec-v2) and note which synth region regenerated.
 5. gofmt -l ., go vet ./..., go test -race ./..., `git rm HANDOFF.md`, push, PR, announce in #phoenix, complete handoff.
 
