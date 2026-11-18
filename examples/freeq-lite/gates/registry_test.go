@@ -77,3 +77,14 @@ func TestIndirectRegistryUseFails(t *testing.T) {
 		t.Fatalf("dispatcher refused:\n%s", out)
 	}
 }
+
+// The declaring file's _synth.go (render mode) is part of the declaring file.
+func TestDeclarerSynthMayReadRegistry(t *testing.T) {
+	disp := "package main\n\nfunc runningServe(c string) { if h, ok := handlers[c]; ok { h() } }\n"
+	if out, ok := runGate(t, map[string]string{"running.go": core, "running_synth.go": disp}); !ok {
+		t.Fatal(out)
+	}
+	if out, ok := runGate(t, map[string]string{"running.go": core, "topics_synth.go": disp}); ok {
+		t.Fatal("other synth file passed:\n" + out)
+	}
+}

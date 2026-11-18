@@ -56,7 +56,7 @@ func main() {
 		// the name is a direct registration: handlers["CMD"] = <handler>.
 		// Aliases, parenthesised forms, passing the map anywhere (reflect,
 		// helpers) and reassigning the whole map are all refused.
-		if f != declarer {
+		if f != declarer && f != strings.TrimSuffix(declarer, ".go")+"_synth.go" {
 			allowed := map[*ast.Ident]bool{}
 			ast.Inspect(af, func(n ast.Node) bool {
 				if as, ok := n.(*ast.AssignStmt); ok && as.Tok == token.ASSIGN {
