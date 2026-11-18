@@ -36,14 +36,17 @@ func provisionSedum() error {
 	if err != nil {
 		return err
 	}
-	if _, err := exec.LookPath("sedum"); err != nil {
-		bin := filepath.Join(tmp, "bin")
-		cmd := exec.Command("go", "install", "github.com/livecodelife/sedum/cmd/sedum@"+sedumVersion)
-		cmd.Env = append(os.Environ(), "GOBIN="+bin)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("go install sedum@%s: %v\n%s", sedumVersion, err, out)
-		}
-		os.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	// Always build exactly the pinned commit in CI: a sedum already on PATH may
+	// predate `sedum convergence`.
+	bin := filepath.Join(tmp, "bin")
+	cmd := exec.Command("go", "install", "github.com/livecodelife/sedum/cmd/sedum@"+sedumVersion)
+	cmd.Env = append(os.Environ(), "GOBIN="+bin, "GOPROXY=direct", "GOFLAGS=-mod=mod")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("go install sedum@%s: %v\n%s", sedumVersion, err, out)
+	}
+	os.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if out, err := exec.Command(filepath.Join(bin, "sedum"), "convergence", "--help").CombinedOutput(); err != nil {
+		return fmt.Errorf("the sedum built from %s has no `convergence` command: %v\n%s", sedumVersion, err, out)
 	}
 	if os.Getenv("SEDUM_GENERATORS") == "" {
 		src := filepath.Join(tmp, "sedum")
