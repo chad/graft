@@ -651,3 +651,56 @@ func TestAbsoluteRootRelativeLogInsideTree(t *testing.T) {
 		t.Fatalf("%+v %v", d, err)
 	}
 }
+
+func TestConvergeCheckCommitEquivalent(t *testing.T) {
+	g := fakeGate{file: "app.go", want: "func Add", kind: evidence.TestRun}
+	body := "func Add(a, b int) int { return a + b }"
+	c1, root1 := setup(t, g)
+	d1, err := c1.Converge(context.Background(), cand(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c2, root2 := setup(t, g)
+	tr, err := c2.Check(context.Background(), cand(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if read(t, root2) != "package app\n" {
+		t.Fatal("Check touched the tree")
+	}
+	if len(tr.Verdicts) != 1 || tr.Verdicts[0] != evidence.Pass {
+		t.Fatalf("verdicts %v", tr.Verdicts)
+	}
+	d2, err := c2.Commit(tr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !d2.Applied || d1.Applied != d2.Applied || read(t, root1) != read(t, root2) ||
+		len(d1.Evidence) != len(d2.Evidence) || d1.Evidence[0].Pin != d2.Evidence[0].Pin {
+		t.Fatalf("differ: %+v vs %+v", d1, d2)
+	}
+
+	// An unsatisfied Trial is refused.
+	c3, root3 := setup(t, g)
+	bad, err := c3.Check(context.Background(), cand("func Sub() {}"))
+	if err != nil || bad.Decision.Result.Satisfied {
+		t.Fatalf("%v %+v", err, bad.Decision)
+	}
+	if len(bad.Decision.Evidence) != 1 {
+		t.Fatal("a losing candidate must still get evidence")
+	}
+	if _, err := c3.Commit(bad); !errors.Is(err, ErrNotSatisfied) || read(t, root3) != "package app\n" {
+		t.Fatalf("err = %v", err)
+	}
+
+	// A tree change after Check is refused.
+	c4, root4 := setup(t, g)
+	ok, err := c4.Check(context.Background(), cand(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(root4, "app.go"), []byte("package app\n// edited\n"), 0o644)
+	if d, err := c4.Commit(ok); !errors.Is(err, ErrChanged) || d.Applied {
+		t.Fatalf("err = %v applied = %v", err, d.Applied)
+	}
+}

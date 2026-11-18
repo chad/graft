@@ -47,6 +47,7 @@ func runCmd(args []string, stdout, stderr io.Writer) int {
 	accept := fs.Bool("accept", false, "accept the drafts as records (the human step)")
 	renderOn := fs.Bool("render", false, "sedum lays out the skeleton; the model converges only the Body helpers")
 	skelPath := fs.String("skeleton", "", "skeleton JSON for --render (default: graft.json \"skeleton\", else skeleton.json beside it)")
+	samples := fs.Int("samples", 1, "model answers drawn per attempt; every one is checked and the smallest-diff passing one is applied (best-of-N)")
 	logPath := fs.String("log", "", "evidence log (default <repo>/.graft/evidence.jsonl)")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -57,6 +58,10 @@ func runCmd(args []string, stdout, stderr io.Writer) int {
 	}
 	if !*renderOn && *skelPath != "" {
 		fmt.Fprintln(stderr, "graft: --skeleton has no effect without --render")
+		return 2
+	}
+	if *samples < 1 {
+		fmt.Fprintln(stderr, "graft: --samples must be at least 1")
 		return 2
 	}
 	cfg, gates, err := loadConvergeConfig(*cfgPath)
@@ -159,14 +164,16 @@ func runCmd(args []string, stdout, stderr io.Writer) int {
 		Tier: cfg.Tier, Attempts: cfg.Attempts,
 		Model: model.Command{Argv: cfg.Model.Argv, Timeout: time.Duration(cfg.Model.TimeoutSec) * time.Second},
 		Gates: gates, Policy: evidence.Policy(cfg.Policy), Log: log, Progress: stdout,
-		Skeleton: skel, Sedum: sedum, Generators: gens,
+		Skeleton: skel, Sedum: sedum, Generators: gens, Samples: *samples,
 	}, acc)
-	applied := 0
+	applied, calls := 0, 0
 	for _, o := range out {
 		if o.Applied {
 			applied++
 		}
+		calls += o.Calls
 	}
+	fmt.Fprintf(stdout, "%d model calls (samples %d)\n", calls, *samples)
 	fmt.Fprintf(stdout, "%d/%d regions applied (guarantee: checked)\n", applied, len(acc))
 	if err != nil {
 		fmt.Fprintf(stderr, "graft: %v\n", err)

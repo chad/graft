@@ -42,6 +42,7 @@ type Config struct {
 	Skeleton   *recording.Skeleton // non-nil (with Sedum): sedum lays out the tree, the model writes only Body helpers
 	Sedum      render.Sedum
 	Generators string // sedum's generators directory (contains go/); needed with Skeleton
+	Samples    int    // model answers drawn per attempt; 0 or 1 means one (today's behaviour)
 }
 
 // Outcome is what happened to one record.
@@ -50,6 +51,8 @@ type Outcome struct {
 	Applied           bool
 	Attempts          int
 	LastFailure       string
+	Samples           int // answers drawn per attempt (1 unless best-of-N)
+	Calls             int // model calls actually made for this record
 }
 
 // Run converges one region per accepted record, in spec order. A record whose
@@ -62,6 +65,9 @@ type Outcome struct {
 func Run(ctx context.Context, cfg Config, acc []Accepted) ([]Outcome, error) {
 	if cfg.Attempts == 0 {
 		cfg.Attempts = 3
+	}
+	if cfg.Samples < 1 {
+		cfg.Samples = 1
 	}
 	if err := bootstrap(cfg); err != nil {
 		return nil, err
@@ -85,7 +91,7 @@ func Run(ctx context.Context, cfg Config, acc []Accepted) ([]Outcome, error) {
 		return nil, err
 	}
 	for _, a := range acc {
-		o := Outcome{ID: a.ID, Section: a.Entry.Section, File: a.Entry.File}
+		o := Outcome{ID: a.ID, Section: a.Entry.Section, File: a.Entry.File, Samples: cfg.Samples}
 		file := a.Entry.File
 		reg, hasReg := byRec[a.ID]
 		if cfg.Skeleton != nil {
