@@ -276,3 +276,61 @@ func TestSpecPathEscapeIsRefused(t *testing.T) {
 		}
 	}
 }
+
+// Review on #10: Stale is gen_hash-only and must not need the spec files.
+func TestStaleIgnoresMissingSpec(t *testing.T) {
+	dir := copyFixture(t, "with-specs")
+	s, _ := OpenDir(dir)
+	p, err := s.Current(fixtureID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Remove(filepath.Join(dir, "specs", "widget.md"))
+	stale, err := Stale(s, p)
+	if err != nil || stale {
+		t.Fatalf("stale=%v err=%v", stale, err)
+	}
+}
+
+func TestSymlinkedSpecLeavingRepoIsMissing(t *testing.T) {
+	dir := copyFixture(t, "with-specs")
+	outside := filepath.Join(t.TempDir(), "secret.md")
+	os.WriteFile(outside, []byte("secret"), 0o644)
+	spec := filepath.Join(dir, "specs", "widget.md")
+	os.Remove(spec)
+	os.Symlink(outside, spec)
+	s, _ := OpenDir(dir)
+	if _, err := s.Current(fixtureID); !errors.Is(err, ErrSpecMissing) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func twoSpecFixture(t *testing.T, first, second string) string {
+	dir := copyFixture(t, "with-specs")
+	os.WriteFile(filepath.Join(dir, "specs", "a.md"), []byte("alpha\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "specs", "b.md"), []byte("beta\n"), 0o644)
+	f := filepath.Join(dir, "provenance", fixtureID+".yml")
+	b, _ := os.ReadFile(f)
+	two := "  - path: specs/" + first + "\n    type: integration\n  - path: specs/" + second + "\n    type: integration"
+	os.WriteFile(f, []byte(strings.Replace(string(b), "  - path: specs/widget.md\n    type: integration", two, 1)), 0o644)
+	return dir
+}
+
+// Review on #10: order matters (a swap moves the hash), and the encoding is
+// pinned by a golden value, so neither sorting nor separator-less joining survives.
+func TestSpecHashOrderAndGolden(t *testing.T) {
+	ab, _ := OpenDir(twoSpecFixture(t, "a.md", "b.md"))
+	ba, _ := OpenDir(twoSpecFixture(t, "b.md", "a.md"))
+	p1, err1 := ab.Current(fixtureID)
+	p2, err2 := ba.Current(fixtureID)
+	if err1 != nil || err2 != nil {
+		t.Fatal(err1, err2)
+	}
+	if p1.SpecHash == p2.SpecHash {
+		t.Fatal("swapping spec order did not move the spec hash")
+	}
+	const golden = "sha256:d0c625e9be317d4826eac829a24f33a2be70a39b793555aff2073d35cdce55b7" // = sha256(JSON ["sha256:"+sha256("alpha\n"), "sha256:"+sha256("beta\n")]), reproduced independently
+	if p1.SpecHash != golden {
+		t.Fatalf("SpecHash = %s; if the encoding change is intended, update the golden value", p1.SpecHash)
+	}
+}

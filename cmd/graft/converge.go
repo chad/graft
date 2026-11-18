@@ -110,7 +110,7 @@ func knownKind(k evidence.Kind) bool {
 }
 
 // convergeCmd: graft converge --config graft.json --records DIR --log FILE
-// --record ID --path FILE --tier T [--spec-hash H] [--comment //] [--root .] BODY|-
+// --record ID --path FILE --tier T [--comment //] [--root .] BODY|-
 //
 // Exit 0: applied. Exit 1: checked and NOT applied (a gate failed or the tier
 // is unsatisfied). Exit 2: usage or a refusal before checking (bad path,
