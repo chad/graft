@@ -2,10 +2,10 @@ package bench
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -354,45 +354,67 @@ func TestInvalidLoadedAttributionIsIgnored(t *testing.T) {
 	}
 }
 
-// Review on #8: a word ban list misses "Graft wins." A fixed template does not:
-// every comparison line must be exactly one of the three permitted sentences.
-func TestComparisonLinesMatchTheTemplate(t *testing.T) {
-	iv := `\d+/\d+ \[\d\.\d\d, \d\.\d\d\]`
-	templates := []*regexp.Regexp{
-		regexp.MustCompile(`^These runs do NOT distinguish \w+ ` + iv + ` from \w+ ` + iv + `\.$`),
-		regexp.MustCompile(`^These runs distinguish \w+ ` + iv + ` from \w+ ` + iv + ` \(intervals disjoint\)\.$`),
-		regexp.MustCompile(`^\w+ and \w+ cannot be compared: one has no eligible samples\.$`),
-	}
+// Review on #8: every line of the comparison block is one of the three
+// permitted sentences, and Report refuses at runtime to print anything else.
+func TestComparisonBlockIsOnlyPermittedSentences(t *testing.T) {
 	recs := []Record{
 		rec(ArmGraft, "c1", Coarse, Works, Works, Works, Works, Disagreed),
 		rec(ArmBaseline, "c1", Coarse, five(Works)...),
 		rec(ArmIntent, "c1", Coarse, five(Broke)...),
 	}
 	var b bytes.Buffer
-	Report(&b, "todo", recs, nil, nil)
+	if err := Report(&b, "todo", recs, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	// The comparison block runs from the blank line after the table to the next blank line.
+	lines := strings.Split(b.String(), "\n")
+	i := 0
+	for i < len(lines) && !strings.HasPrefix(lines[i], "|") {
+		i++
+	}
+	for i < len(lines) && strings.HasPrefix(lines[i], "|") {
+		i++
+	}
+	i++ // the blank line
 	n := 0
-	for _, line := range strings.Split(b.String(), "\n") {
-		if !strings.HasPrefix(line, "- These") && !strings.Contains(line, "cannot be compared") {
-			continue
-		}
+	for ; i < len(lines) && lines[i] != ""; i++ {
 		n++
-		body := strings.TrimPrefix(line, "- ")
-		ok := false
-		for _, re := range templates {
-			ok = ok || re.MatchString(body)
-		}
-		if !ok {
-			t.Errorf("comparison line outside the template: %q", body)
+		if !strings.HasPrefix(lines[i], "- ") || !Permitted(strings.TrimPrefix(lines[i], "- ")) {
+			t.Errorf("comparison block line outside the permitted sentences: %q", lines[i])
 		}
 	}
 	if n != 2 {
 		t.Fatalf("%d comparison lines, want 2", n)
 	}
-	for _, s := range []string{"Graft wins.", "Graft is ahead."} {
-		for _, re := range templates {
-			if re.MatchString(s) {
-				t.Fatalf("template admits %q", s)
-			}
+	for _, bad := range []string{"Graft wins.", "Graft is ahead.", "These runs distinguish graft 5/5 [0.57, 1.00] from intent 0/5 [0.00, 0.43]. Graft is better."} {
+		if Permitted(bad) {
+			t.Fatalf("Permitted(%q)", bad)
 		}
+	}
+}
+
+func TestAppendRefusesUnknownResolution(t *testing.T) {
+	if _, err := (Store{Dir: t.TempDir()}).Append(rec(ArmGraft, "c1", "huge", five(Works)...)); err == nil {
+		t.Fatal("stored resolution \"huge\"")
+	}
+}
+
+func TestAttributeRefusesDuplicateRecordID(t *testing.T) {
+	s := Store{Dir: t.TempDir()}
+	r, _ := s.Append(rec(ArmGraft, "c1", Coarse, five(Broke)...))
+	b, _ := json.Marshal(r)
+	f, _ := os.OpenFile(filepath.Join(s.Dir, "todo.jsonl"), os.O_APPEND|os.O_WRONLY, 0)
+	f.Write(append(b, '\n')) // the same record twice, as a botched copy would leave it
+	f.Close()
+	if err := s.Attribute("todo", Attribution{RecordID: r.ID, SampleIdx: 0, Layers: []Layer{LayerRender}}); err == nil {
+		t.Fatal("attributed to an ambiguous id")
+	}
+}
+
+func TestLoadedAttributionFromAnotherSchemaIsIgnored(t *testing.T) {
+	r := rec(ArmGraft, "c1", Coarse, Works, Works, Works, Works, Broke)
+	parts, _, _ := Aggregate([]Record{r}, []Attribution{{Schema: 1, RecordID: r.ID, SampleIdx: 4, Layers: []Layer{LayerRender}}})
+	if p := parts[0]; p.ByLayer[LayerRender] != 0 || p.Unattributed != 1 {
+		t.Fatalf("%+v", p)
 	}
 }

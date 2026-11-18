@@ -27,6 +27,9 @@ func Report(w io.Writer, caseName string, recs []Record, attrs []Attribution, co
 		}
 		fmt.Fprintln(w)
 		for _, cmp := range comparisons(parts) {
+			if !Permitted(cmp) {
+				return fmt.Errorf("bench: refusing to print a comparison outside the permitted sentences: %q", cmp)
+			}
 			fmt.Fprintln(w, "- "+cmp)
 		}
 	}

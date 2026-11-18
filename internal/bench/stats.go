@@ -11,6 +11,7 @@ package bench
 import (
 	"fmt"
 	"math"
+	"regexp"
 )
 
 // z is the 95% two-sided normal quantile, the only level the harness offers.
@@ -65,6 +66,26 @@ func Overlaps(a, b Interval) bool {
 		return true
 	}
 	return a.Lo <= b.Hi && b.Lo <= a.Hi
+}
+
+var (
+	ivRE        = `\d+/\d+ \[\d\.\d\d, \d\.\d\d\]`
+	permittedRE = []*regexp.Regexp{
+		regexp.MustCompile(`^These runs do NOT distinguish [\w-]+ ` + ivRE + ` from [\w-]+ ` + ivRE + `\.$`),
+		regexp.MustCompile(`^These runs distinguish [\w-]+ ` + ivRE + ` from [\w-]+ ` + ivRE + ` \(intervals disjoint\)\.$`),
+		regexp.MustCompile(`^[\w-]+ and [\w-]+ cannot be compared: one has no eligible samples\.$`),
+	}
+)
+
+// Permitted reports whether s is one of the three sentences a comparison may
+// be. Report refuses to print anything else in its comparison block.
+func Permitted(s string) bool {
+	for _, re := range permittedRE {
+		if re.MatchString(s) {
+			return true
+		}
+	}
+	return false
 }
 
 // Compare is the sentence a comparison is allowed to print.

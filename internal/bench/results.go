@@ -166,7 +166,11 @@ func (s Store) path(caseName, suffix string) (string, error) {
 }
 
 // Append adds r to its case's log and returns it with Schema, At and ID set.
-// It refuses unknown arms and outcomes and impossible check counts.
+// It refuses unknown arms, resolutions and outcomes and impossible check counts.
+//
+// Append is not idempotent: each call is a new run with a new random id. If
+// it returns an error after the bytes reached the file (a failed Sync), a
+// retry records the run twice and N doubles. Inspect the log before retrying.
 func (s Store) Append(r Record) (Record, error) {
 	p, err := s.path(r.Case, ".jsonl")
 	if err != nil {
@@ -176,6 +180,11 @@ func (s Store) Append(r Record) (Record, error) {
 	case ArmGraft, ArmBaseline, ArmIntent:
 	default:
 		return r, fmt.Errorf("bench: unknown arm %q", r.Arm)
+	}
+	switch r.Resolution {
+	case Smoke, Coarse, Fine, Unstated:
+	default:
+		return r, fmt.Errorf("bench: unknown resolution %q", r.Resolution)
 	}
 	for i, smp := range r.Samples {
 		switch smp.Outcome {
