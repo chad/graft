@@ -173,7 +173,9 @@ func runCmd(args []string, stdout, stderr io.Writer) int {
 		}
 		calls += o.Calls
 	}
-	fmt.Fprintf(stdout, "%d model calls (samples %d)\n", calls, *samples)
+	if *samples > 1 {
+		fmt.Fprintf(stdout, "%d model calls (samples %d)\n", calls, *samples)
+	}
 	fmt.Fprintf(stdout, "%d/%d regions applied (guarantee: checked)\n", applied, len(acc))
 	if err != nil {
 		fmt.Fprintf(stderr, "graft: %v\n", err)

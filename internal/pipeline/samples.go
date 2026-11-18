@@ -16,6 +16,9 @@ import (
 	"github.com/chad/graft/internal/records"
 )
 
+// maxParallelSamples caps concurrent model calls within one attempt.
+const maxParallelSamples = 4
+
 // sample is one drawn answer after checking.
 type sample struct {
 	idx     int
@@ -41,10 +44,13 @@ func (cfg Config) attemptSamples(ctx context.Context, c converge.Converger, stor
 	resps := make([]string, n)
 	errs := make([]error, n)
 	var wg sync.WaitGroup
+	sem := make(chan struct{}, min(n, maxParallelSamples))
 	for i := 0; i < n; i++ {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
 			resps[i], errs[i] = cfg.Model.Complete(ctx, prompt)
 		}(i)
 	}
@@ -62,6 +68,9 @@ func (cfg Config) attemptSamples(ctx context.Context, c converge.Converger, stor
 	}
 	if failed == n { // infrastructure, not a verdict on the code
 		return false, fmt.Errorf("%w: %v", ErrModel, firstErr)
+	}
+	if failed > 0 {
+		cfg.say("  %d of %d model calls failed (%v); continuing with the rest\n", failed, n, firstErr)
 	}
 
 	base := currentBody(regions, a, file, cfg.Root)
@@ -85,8 +94,11 @@ func (cfg Config) attemptSamples(ctx context.Context, c converge.Converger, stor
 		switch {
 		case errors.Is(err, converge.ErrMarkerInBody), errors.Is(err, converge.ErrSedumRegion):
 			s.failure = err.Error()
-		case err != nil:
+		case err != nil && ctx.Err() != nil:
 			return false, fmt.Errorf("%s: %w", a.Entry.Section, err)
+		case err != nil:
+			// A gate error on one sample is not a verdict on the others.
+			s.failure = "checking this answer failed: " + err.Error()
 		default:
 			s.checked, s.trial = true, t
 			s.smoke = smokePassed(t.Decision)
@@ -155,13 +167,13 @@ func smokePassed(d converge.Decision) int {
 }
 
 // closer reports whether a is a closer miss than b: most gates passed, then
-// most smoke checks passed (only when both print a count), then checked over
-// refused, then the smallest diff. Ties keep the lower index (a is only ever the later sample).
+// most smoke checks passed (no count ranks as -1, so the order is total), then
+// checked over refused, then the smallest diff. Ties keep the lower index (a is only ever the later sample).
 func closer(a, b sample) bool {
 	if a.gates != b.gates {
 		return a.gates > b.gates
 	}
-	if a.smoke >= 0 && b.smoke >= 0 && a.smoke != b.smoke {
+	if a.smoke != b.smoke {
 		return a.smoke > b.smoke
 	}
 	if a.checked != b.checked {

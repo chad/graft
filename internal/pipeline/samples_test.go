@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -204,5 +205,146 @@ func TestDiffLines(t *testing.T) {
 	}
 	if d := diffLines("", "a\nb\n"); d != 2 {
 		t.Fatalf("got %d", d)
+	}
+}
+
+func decisionWith(details ...string) converge.Decision {
+	var d converge.Decision
+	for _, s := range details {
+		d.Evidence = append(d.Evidence, evidence.Evidence{Detail: s})
+	}
+	return d
+}
+
+func TestSmokePassed(t *testing.T) {
+	cases := []struct {
+		name string
+		d    converge.Decision
+		want int
+	}{
+		{"none", decisionWith("ok", "FAIL"), -1},
+		{"no evidence", converge.Decision{}, -1},
+		{"first line", decisionWith("smoke: 7/12 checks passed\nFAIL x"), 7},
+		{"later evidence", decisionWith("ok", "exit 1\nsmoke: 0/12 checks passed"), 0},
+		{"after a head cut", decisionWith("smoke: 11/12 checks passed\n…\nlast lines"), 11},
+		{"malformed", decisionWith("smoke: x/12 checks passed"), -1},
+	}
+	for _, c := range cases {
+		if got := smokePassed(c.d); got != c.want {
+			t.Errorf("%s: got %d, want %d", c.name, got, c.want)
+		}
+	}
+}
+
+func TestCloser(t *testing.T) {
+	mk := func(gates, smoke int, checked bool, diff int) sample {
+		return sample{gates: gates, smoke: smoke, checked: checked, diff: diff}
+	}
+	cases := []struct {
+		name string
+		a, b sample
+		want bool
+	}{
+		{"more gates wins", mk(2, -1, true, 9), mk(1, 12, true, 1), true},
+		{"fewer gates loses", mk(1, 12, true, 1), mk(2, -1, true, 9), false},
+		{"more smoke wins", mk(1, 5, true, 9), mk(1, 3, true, 1), true},
+		{"missing count ranks below any count", mk(1, -1, true, 1), mk(1, 0, true, 9), false},
+		{"any count beats missing", mk(1, 0, true, 9), mk(1, -1, true, 1), true},
+		{"checked beats refused", mk(0, -1, true, 9), mk(0, -1, false, 1), true},
+		{"smaller diff", mk(1, 4, true, 2), mk(1, 4, true, 3), true},
+		{"equal keeps the earlier", mk(1, 4, true, 3), mk(1, 4, true, 3), false},
+	}
+	for _, c := range cases {
+		if got := closer(c.a, c.b); got != c.want {
+			t.Errorf("%s: closer = %v, want %v", c.name, got, c.want)
+		}
+	}
+	// Transitivity: a > b > c in the cases above must also give a > c.
+	a, b, c := mk(1, 5, true, 9), mk(1, 0, true, 1), mk(1, -1, true, 0)
+	if !closer(a, b) || !closer(b, c) || !closer(a, c) {
+		t.Error("ordering is not transitive over missing counts")
+	}
+}
+
+// flakyModel fails the first fail extra.go calls of an attempt and answers the rest.
+type flakyModel struct {
+	*seqModel
+	fail int
+	mu2  sync.Mutex
+	seen int
+}
+
+func (m *flakyModel) Complete(ctx context.Context, prompt string) (string, error) {
+	if strings.Contains(prompt, "Write the complete file `extra.go`") {
+		m.mu2.Lock()
+		m.seen++
+		bad := m.seen <= m.fail
+		m.mu2.Unlock()
+		if bad {
+			return "", errors.New("model exploded")
+		}
+	}
+	return m.seqModel.Complete(ctx, prompt)
+}
+
+func TestRunSamplesPartialModelError(t *testing.T) {
+	cfg, root, acc := samplesSetup(t, doubleGate)
+	var progress strings.Builder
+	cfg.Progress = &progress
+	m := &flakyModel{seqModel: &seqModel{pick: func(int, string) string { return smallBody }}, fail: 2}
+	cfg.Model, cfg.Samples = m, 3
+	out, err := Run(context.Background(), cfg, acc)
+	if err != nil || !out[1].Applied || out[1].Calls != 3 {
+		t.Fatalf("%v %+v", err, out)
+	}
+	got, _ := os.ReadFile(filepath.Join(root, "extra.go"))
+	if !strings.Contains(string(got), "// small") {
+		t.Fatalf("surviving sample not applied:\n%s", got)
+	}
+	if !strings.Contains(progress.String(), "2 of 3 model calls failed") {
+		t.Fatalf("dropped samples are not reported:\n%s", progress.String())
+	}
+}
+
+func TestRunSamplesAllModelErrors(t *testing.T) {
+	cfg, _, acc := samplesSetup(t, doubleGate)
+	m := &flakyModel{seqModel: &seqModel{pick: func(int, string) string { return smallBody }}, fail: 99}
+	cfg.Model, cfg.Samples = m, 3
+	_, err := Run(context.Background(), cfg, acc)
+	if !errors.Is(err, ErrModel) {
+		t.Fatalf("want ErrModel, got %v", err)
+	}
+}
+
+// concModel records the most calls in flight at once.
+type concModel struct {
+	mu        sync.Mutex
+	cur, peak int
+}
+
+func (m *concModel) Complete(_ context.Context, prompt string) (string, error) {
+	if !strings.Contains(prompt, "Write the complete file `extra.go`") {
+		return fenced(coreBody), nil
+	}
+	m.mu.Lock()
+	m.cur++
+	m.peak = max(m.peak, m.cur)
+	m.mu.Unlock()
+	time.Sleep(30 * time.Millisecond)
+	m.mu.Lock()
+	m.cur--
+	m.mu.Unlock()
+	return fenced(smallBody), nil
+}
+
+func TestRunSamplesCapsParallelCalls(t *testing.T) {
+	cfg, _, acc := samplesSetup(t, doubleGate)
+	m := &concModel{}
+	cfg.Model, cfg.Samples = m, 10
+	if _, err := Run(context.Background(), cfg, acc); err != nil {
+		t.Fatal(err)
+	}
+	if m.peak > maxParallelSamples {
+		t.Fatalf("%d calls in flight, cap is %d", m.peak, maxParallelSamples)
 	}
 }

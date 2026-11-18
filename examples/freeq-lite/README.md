@@ -227,7 +227,10 @@ converged on the first attempt, and the held-out oracle scored it 47/47
 ## Cost: Haiku best-of-N vs Sonnet
 
 `graft run --samples N` draws N candidates per region in one round and keeps
-the one that ranks best (gates first, then the smoke-check count). The
+the passing candidate with the smallest diff against the region's current
+body (ties: lowest sample index). When none passes, the closest miss (most
+gates passed, then most smoke checks passed) supplies the feedback for the
+next attempt and is never applied. At most 4 model calls run at once. The
 question measured here: can Haiku with `--samples 3` (arm B) match Sonnet with
 `--samples 1` (arm A) at lower cost? Each run generates freeq-lite v1 from
 the spec into a fresh tree; the oracle (held out, never shown to the model) is
@@ -262,7 +265,7 @@ suite on about 11 behaviours (see above).
 | B-3 Haiku x3 | 47 | 21 | 0.174 | 226s |
 
 **What this does and does not show.** Haiku x3 cost about $0.19 per run
-against about $1.00 for Sonnet x1, roughly a fifth, and in 4 of 6 Haiku runs
+against about $1.00 for Sonnet x1, roughly a fifth, and in 3 of 6 Haiku runs
 (2 of 3 post-smoke) reached 47/47. But n=3 cannot separate close arms, and
 Haiku's variance is large: one pre-smoke run scored 4/47 and one post-smoke
 run failed to converge. Sonnet scored 46 or 47 in all six runs. Best-of-3
