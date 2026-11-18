@@ -11,3 +11,4 @@ Architecture, so that each file can be written and compiled on its own:
   - Helpers every other file uses: `(c *Client) Send(line string)`, `(s *Server) Reply(c *Client, code, text string)` producing `:freeq-lite <code> <nick-or-*> <text>`, `(c *Client) Prefix() string`, and `(s *Server) Disconnect(c *Client, reason string)` which performs the leaving rules.
 - Every other file adds its commands by assigning into `handlers` from an `init()` function, and may declare only unexported helpers whose names start with the file's own name (for example `channelsValidName`), so files never collide.
 - Never block while holding `s.mu`: sends go through the client's queue.
+- Leave no function that nothing calls: a gate rejects dead functions. If a statement in your section is already handled by another file (for example, unknown commands are answered by `running.go`'s read loop), do not write a helper for it; say in a comment where it is handled.
