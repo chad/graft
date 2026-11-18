@@ -55,7 +55,7 @@ type Stub struct {
 // File is one source file owned by one record.
 type File struct {
 	Path    string   `json:"path"`
-	Record  string   `json:"record"`
+	Section string   `json:"section"` // spec section; the record derived from it owns the file
 	Imports []string `json:"imports,omitempty"`
 	Decls   []Decl   `json:"decls,omitempty"`
 	Stubs   []Stub   `json:"stubs,omitempty"`
@@ -67,9 +67,15 @@ type Skeleton struct {
 	Files []File `json:"files"`
 }
 
+// Rec is an accepted record and the spec section it was derived from.
+type Rec struct {
+	Pin     records.Pin
+	Section string
+}
+
 // Input is everything Plan reads.
 type Input struct {
-	Pins     []records.Pin
+	Records  []Rec
 	Skeleton Skeleton
 }
 
@@ -130,23 +136,30 @@ type Planned struct {
 // Plan is deterministic: the same input gives a byte-identical recording.
 func Plan(in Input) (Planned, error) {
 	pins := map[string]records.Pin{}
-	for _, p := range in.Pins {
+	bySection := map[string]string{}
+	for _, r := range in.Records {
+		p := r.Pin
 		if _, dup := pins[p.RecordID]; dup {
 			return Planned{}, fmt.Errorf("recording: duplicate record %q", p.RecordID)
 		}
+		if _, dup := bySection[r.Section]; dup {
+			return Planned{}, fmt.Errorf("recording: two records for section %q", r.Section)
+		}
 		pins[p.RecordID] = p
+		bySection[r.Section] = p.RecordID
 	}
 	byRec := map[string][]File{}
 	seen := map[string]bool{}
 	for _, f := range in.Skeleton.Files {
-		if _, ok := pins[f.Record]; !ok {
-			return Planned{}, fmt.Errorf("recording: file %s names unknown record %q", f.Path, f.Record)
+		rid, ok := bySection[f.Section]
+		if !ok {
+			return Planned{}, fmt.Errorf("recording: file %s names section %q, which no record covers", f.Path, f.Section)
 		}
 		if seen[f.Path] {
 			return Planned{}, fmt.Errorf("recording: file %s listed twice", f.Path)
 		}
 		seen[f.Path] = true
-		byRec[f.Record] = append(byRec[f.Record], f)
+		byRec[rid] = append(byRec[rid], f)
 	}
 	ids := make([]string, 0, len(byRec))
 	for id := range byRec {

@@ -2,7 +2,6 @@
   "files": [
     {
       "path": "running.go",
-      "record": "prov-2026-r0000001",
       "imports": [
         "flag",
         "log",
@@ -106,61 +105,62 @@
             }
           ]
         }
-      ]
+      ],
+      "section": "freeq-lite › Running"
     },
     {
       "path": "registration.go",
-      "record": "prov-2026-r0000002",
       "stubs": [
         {
           "name": "init"
         }
-      ]
-    },
-    {
-      "path": "channels.go",
-      "record": "prov-2026-r0000003",
-      "stubs": [
-        {
-          "name": "init"
-        }
-      ]
-    },
-    {
-      "path": "messaging.go",
-      "record": "prov-2026-r0000004",
-      "stubs": [
-        {
-          "name": "init"
-        }
-      ]
+      ],
+      "section": "freeq-lite › Registration"
     },
     {
       "path": "keepalive.go",
-      "record": "prov-2026-r0000005",
       "stubs": [
         {
           "name": "init"
         }
-      ]
+      ],
+      "section": "freeq-lite › Keepalive"
     },
     {
-      "path": "quit.go",
-      "record": "prov-2026-r0000006",
+      "path": "channels.go",
       "stubs": [
         {
           "name": "init"
         }
-      ]
+      ],
+      "section": "freeq-lite › Channels"
     },
     {
-      "path": "numerics.go",
-      "record": "prov-2026-r0000007",
+      "path": "messages.go",
       "stubs": [
         {
           "name": "init"
         }
-      ]
+      ],
+      "section": "freeq-lite › Messages"
+    },
+    {
+      "path": "leaving.go",
+      "stubs": [
+        {
+          "name": "init"
+        }
+      ],
+      "section": "freeq-lite › Leaving"
+    },
+    {
+      "path": "fallback.go",
+      "stubs": [
+        {
+          "name": "init"
+        }
+      ],
+      "section": "freeq-lite › Everything else"
     }
   ]
 }

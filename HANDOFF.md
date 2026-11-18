@@ -13,21 +13,7 @@ The 6 tests from the brief, plus gofmt / vet / `go test -race ./...` clean, a se
 - `internal/recording/recording_test.go`: the 6 brief tests plus a bad-input test. The tests copy sedum's generators from `$SEDUM_GENERATORS` or `~/sedum/generators` (the release binary does not carry them; they skip locally if absent, and fail under `CI`).
 - Found with real sedum: a fixed `func` decl is action `setFunction` (fixed).
 
-## State of the tests
-`go vet ./...` and gofmt on the sources are clean. Last run of `go test -race ./internal/recording`: only `TestRecordingGrowsWithRealSedum` fails, because the test helper `fill` writes unformatted `fill_*.go` files and the test then gofmt-checks them. Fix the helper (run `gofmt` on its output, or `go/format.Source`), then re-run. The other tests passed in the last run, but check `TestGrowCheckCleanAfterGrow` (the earlier orphan failure came from synthetic pins with no provenance files, now fixed by `writeRecords`).
-
-## Next
-1. Fix `fill` formatting; get all tests green with `-race`.
-2. TestFreeqLiteBlueprintsPlan currently builds the skeleton and then **skips** the oracle part. Oracle is not on main (it is in PR #11, flags in PR #12); once #11 merges, rebase and run the oracle against the built binary: connect must work (exit 0 or 1, not 2). `main` in the skeleton listens on `-addr` and calls the stub `serve`.
-3. Add a sedum install step to `.github/workflows/ci.yml` (`~/sedum/install.sh`; `SEDUM_INSTALL_DIR`, `--no-model`), plus provide generators for the test (a sedum checkout, or set `SEDUM_GENERATORS`), and set CI so skips become failures.
-4. Run gofmt, vet and `go test -race ./...`. Push, then `gh pr create --repo chad/graft --base main` (the GitHub MCP is down; use `gh`).
-5. Mention @chad-bot-phoenix in #phoenix with the PR link; `complete` the handoff.
-
-## Open questions
-- Does converge accept the stub/helper split (option A), or does the orchestrator want a different one? Plan's `Regions` is the interface converge would consume.
-- Should the skeleton be a `skeleton.json` beside conventions.md in the real flow (my proposal)? Who writes it for new specs?
-
-## Gotchas
-- `render.Exec.GrowCheck` runs `--records provenance`, so real record files must exist in the dir or every region is an orphan.
-- `generators/` must be removed before `go build ./...` / gofmt, because the templates are not Go.
-- `freeq ask` is refused at my tier; use `say`. Never post secrets or absolute paths on freeq.
+## Update (orchestrator confirmed option A; fixtures now from the drafter)
+- Skeleton is `examples/freeq-lite/skeleton.json` (files keyed by spec *section*); records come from running `internal/drafter` on `internal/recording/testdata/freeq-lite.md` (a copy of PR #11's spec) inside the test: 7 valid blueprints written as real provenance records, ids derived from section.
+- All tests pass locally with `-race`; gofmt and vet clean; CI gained a sedum install step (unverified until CI runs it).
+- Remaining: oracle half of TestFreeqLiteBlueprintsPlan skips until PR #11 merges (oracle is not on main). Then rebase, build the skeleton and run the oracle: connect must work (exit 0 or 1, not 2). When #12 lands, move skeleton.json beside its conventions.md (already examples/freeq-lite/).

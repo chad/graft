@@ -3,39 +3,64 @@ package recording
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"go/format"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/chad/graft/internal/drafter"
 	"github.com/chad/graft/internal/records"
 	"github.com/chad/graft/internal/render"
 )
 
-// writeRecords writes seven real provenance records under dir/provenance and
-// returns their pins as records.OpenDir reads them.
-func writeRecords(t *testing.T, dir string) []records.Pin {
+// writeRecords runs the drafter on the freeq-lite spec and writes each draft
+// as a provenance record under dir/provenance, ids derived from the section so
+// the result is deterministic. It returns the records as records.OpenDir reads
+// them.
+func writeRecords(t *testing.T, dir string) []Rec {
 	t.Helper()
+	spec, err := os.ReadFile("testdata/freeq-lite.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	drafts := drafter.Drafts(string(spec))
+	if len(drafts) != 7 {
+		t.Fatalf("drafter produced %d blueprints, want 7", len(drafts))
+	}
 	if err := os.MkdirAll(filepath.Join(dir, "provenance"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	var pins []records.Pin
-	var ids []string
-	for i := 1; i <= 7; i++ {
-		id := fmt.Sprintf("prov-2026-r000000%d", i)
-		ids = append(ids, id)
+	st, err := records.OpenDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []Rec
+	for _, d := range drafts {
+		if !d.Receipt.Validated {
+			t.Fatalf("%s: draft does not validate: %s", d.Section, d.Receipt.Reason)
+		}
+		sum := sha256.Sum256([]byte(d.Section))
+		id := "prov-2026-" + hex.EncodeToString(sum[:4])
+		var intent strings.Builder
+		for _, s := range d.Statements {
+			intent.WriteString(s.Text + "\n")
+		}
 		y := fmt.Sprintf(`id: %s
-title: freeq-lite blueprint %d
+title: %s
 type: blueprint
 status: open
 version: 1
 reason: ""
 created_at: "2026-11-18"
 author: fixture@example.com
-intent: Implement part %d of freeq-lite.
+intent: %s
 constraints: []
 affected_scope: []
 forbidden_scope: []
@@ -45,28 +70,22 @@ associated_specs: []
 associated_traces: []
 monitors: []
 tags: []
-`, id, i, i)
+`, id, strconv.Quote(d.Section), strconv.Quote(intent.String()))
 		if err := os.WriteFile(filepath.Join(dir, "provenance", id+".yml"), []byte(y), 0o644); err != nil {
 			t.Fatal(err)
 		}
-	}
-	st, err := records.OpenDir(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, id := range ids {
 		p, err := st.Current(id)
 		if err != nil {
 			t.Fatal(err)
 		}
-		pins = append(pins, p)
+		out = append(out, Rec{Pin: p, Section: d.Section})
 	}
-	return pins
+	return out
 }
 
 func freeqInput(t *testing.T, dir string) Input {
 	t.Helper()
-	b, err := os.ReadFile("testdata/freeqlite.skeleton.json")
+	b, err := os.ReadFile("../../examples/freeq-lite/skeleton.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +93,7 @@ func freeqInput(t *testing.T, dir string) Input {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return Input{Pins: writeRecords(t, dir), Skeleton: sk}
+	return Input{Records: writeRecords(t, dir), Skeleton: sk}
 }
 
 func recordingBytes(t *testing.T, in Input) []byte {
@@ -99,8 +118,8 @@ func TestPlanIsDeterministic(t *testing.T) {
 		}
 	}
 	rev := freeqInput(t, t.TempDir())
-	for i, j := 0, len(rev.Pins)-1; i < j; i, j = i+1, j-1 {
-		rev.Pins[i], rev.Pins[j] = rev.Pins[j], rev.Pins[i]
+	for i, j := 0, len(rev.Records)-1; i < j; i, j = i+1, j-1 {
+		rev.Records[i], rev.Records[j] = rev.Records[j], rev.Records[i]
 	}
 	if !bytes.Equal(a, recordingBytes(t, rev)) {
 		t.Fatal("pin order changed the recording")
@@ -109,11 +128,11 @@ func TestPlanIsDeterministic(t *testing.T) {
 
 func TestPlanRejectsBadInput(t *testing.T) {
 	in := freeqInput(t, t.TempDir())
-	in.Pins = in.Pins[:2]
+	in.Records = in.Records[:2]
 	if _, err := Plan(in); err == nil {
 		t.Fatal("file naming an unknown record must be an error")
 	}
-	if _, err := Plan(Input{Pins: []records.Pin{{RecordID: "x"}}, Skeleton: Skeleton{Files: []File{{Path: "../x.go", Record: "x"}}}}); err == nil {
+	if _, err := Plan(Input{Records: []Rec{{Pin: records.Pin{RecordID: "x"}, Section: "s"}}, Skeleton: Skeleton{Files: []File{{Path: "../x.go", Section: "s"}}}}); err == nil {
 		t.Fatal("escaping path must be an error")
 	}
 }
@@ -183,6 +202,15 @@ func dropGenerators(t *testing.T, dir string) {
 	}
 }
 
+func formatted(t *testing.T, src string) []byte {
+	t.Helper()
+	b, err := format.Source([]byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
 // fill plays converge: one region-less file declaring every helper the stubs call.
 func fill(t *testing.T, dir string, p Planned) {
 	t.Helper()
@@ -200,7 +228,7 @@ func fill(t *testing.T, dir string, p Planned) {
 			sb.WriteString("}\n\n")
 		}
 		name := "fill_" + strings.TrimSuffix(r.Path, ".go") + ".go"
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(sb.String()), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, name), formatted(t, sb.String()), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -231,8 +259,8 @@ func TestGrowCheckCleanAfterGrow(t *testing.T) {
 func TestRegionsOwnedByRecords(t *testing.T) {
 	dir, _, p, in := grown(t)
 	want := map[string]records.Pin{}
-	for _, pin := range in.Pins {
-		want[pin.RecordID] = pin
+	for _, r := range in.Records {
+		want[r.Pin.RecordID] = r.Pin
 	}
 	regs, err := render.ReadMarkers(dir)
 	if err != nil || len(regs) == 0 {

@@ -13,6 +13,12 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - name: install sedum (binary + go generator for internal/recording tests)
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/livecodelife/sedum/main/install.sh | SEDUM_VERSION=0.12.2 SEDUM_INSTALL_DIR="$RUNNER_TEMP/bin" sh -s -- --no-model
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          git clone --depth 1 --branch v0.12.2 https://github.com/livecodelife/sedum "$RUNNER_TEMP/sedum"
+          echo "SEDUM_GENERATORS=$RUNNER_TEMP/sedum/generators" >> "$GITHUB_ENV"
       - run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
       - run: go vet ./...
       - run: go test -race ./...
