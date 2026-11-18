@@ -33,6 +33,12 @@ func Report(w io.Writer, caseName string, recs []Record, attrs []Attribution, co
 			fmt.Fprintln(w, "- "+cmp)
 		}
 	}
+	if costs := changeCosts(recs, excluded); len(costs) > 0 {
+		fmt.Fprintln(w, "\nChange cost per sample (citable runs; listed, not rated):")
+		for _, line := range costs {
+			fmt.Fprintln(w, "- "+line)
+		}
+	}
 	if len(corrupt) > 0 {
 		fmt.Fprintf(w, "\nCorrupt log lines, counted in nothing (%d):\n", len(corrupt))
 		for _, c := range corrupt {
@@ -93,6 +99,41 @@ func comparisons(parts []Partition) []string {
 				out = append(out, Compare("graft", g.Works, string(ctl), p.Works))
 			}
 		}
+	}
+	return out
+}
+
+// changeCosts lists, per citable evolve record, each sample's change calls and
+// preserved files, without turning them into a rate.
+func changeCosts(recs []Record, excluded map[int]string) []string {
+	var out []string
+	for i, r := range recs {
+		if _, ex := excluded[i]; ex {
+			continue
+		}
+		var calls, kept, bytes []string
+		for _, s := range r.Samples {
+			if s.DiffLines != nil {
+				bytes = append(bytes, fmt.Sprint(*s.DiffLines))
+			}
+			if s.ChangeCalls != nil {
+				calls = append(calls, fmt.Sprint(*s.ChangeCalls))
+			}
+			if s.Preserved != nil {
+				kept = append(kept, fmt.Sprint(*s.Preserved))
+			}
+		}
+		if len(calls) == 0 {
+			continue
+		}
+		line := fmt.Sprintf("%s @%.12s: model calls for the change [%s]", r.Arm, r.Commit, strings.Join(calls, " "))
+		if len(bytes) > 0 {
+			line += fmt.Sprintf("; lines changed (added+removed, same measure for every arm) [%s]", strings.Join(bytes, " "))
+		}
+		if len(kept) > 0 {
+			line += fmt.Sprintf("; pre-change files left byte-identical [%s]", strings.Join(kept, " "))
+		}
+		out = append(out, line)
 	}
 	return out
 }

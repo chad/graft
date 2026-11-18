@@ -30,15 +30,22 @@ type caseFile struct {
 	Conventions string `json:"conventions"`
 	Config      string `json:"config"` // graft.json: model, gates, policy, tier
 	Oracle      string `json:"oracle"` // Go package dir of the oracle
+	Evolve      *struct {
+		Spec       string   `json:"spec"`        // the changed spec
+		OracleArgs []string `json:"oracle_args"` // e.g. ["-v2"]
+	} `json:"evolve"`
 }
 
 const benchUsage = `usage:
-  graft bench run    --case CASE.json --arms graft,baseline,intent --resolution smoke|coarse|fine [--results DIR]
+  graft bench run    --case CASE.json --arms graft,baseline,intent --resolution smoke|coarse|fine [--evolve] [--results DIR]
   graft bench report --case NAME [--results DIR]
 
 run draws the resolution's sample count for each arm (smoke 2, coarse 5,
 fine 30), scores every sample with the case's oracle, and appends one record
-per arm. report prints intervals and the only permitted comparisons.
+per arm. With --evolve, each sample builds the spec, changes it to the case's
+evolve spec in the same tree, and is scored by the evolved oracle; results go
+to <case>-evolve and record the model calls the change cost. report prints
+intervals and the only permitted comparisons.
 `
 
 func benchCmd(args []string, stdout, stderr io.Writer) int {
@@ -91,6 +98,7 @@ func benchRun(args []string, stdout, stderr io.Writer) int {
 	resFlag := fs.String("resolution", "", "smoke | coarse | fine")
 	dir := fs.String("results", "bench/results", "results directory")
 	transcripts := fs.String("transcripts", "", "keep every prompt and answer under this directory")
+	evolve := fs.Bool("evolve", false, "run the case's change-then-regenerate variant")
 	if err := fs.Parse(args); err != nil || *casePath == "" {
 		fmt.Fprint(stderr, benchUsage)
 		return 2
@@ -153,6 +161,25 @@ func benchRun(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "graft: build oracle: %v\n%s", err, out)
 		return 2
 	}
+	name, specV2, oracleArgs, fixtureExtra := cf.Name, "", []string(nil), ""
+	if *evolve {
+		if cf.Evolve == nil {
+			fmt.Fprintln(stderr, "graft: the case has no evolve section")
+			return 2
+		}
+		if specV2, err = read(cf.Evolve.Spec); err != nil {
+			fmt.Fprintf(stderr, "graft: %v\n", err)
+			return 2
+		}
+		for _, a := range arms {
+			if a == bench.ArmIntent {
+				fmt.Fprintln(stderr, "graft: evolve runs the graft and baseline arms only")
+				return 2
+			}
+		}
+		name, oracleArgs = cf.Name+"-evolve", cf.Evolve.OracleArgs
+		fixtureExtra = specV2 + "\x00" + strings.Join(oracleArgs, " ")
+	}
 	commit, dirty := gitState()
 	modelName := strings.Join(cfg.Model.Argv, " ")
 	// An alias like "sonnet" is not a model; record the CLI's version with it.
@@ -160,24 +187,29 @@ func benchRun(args []string, stdout, stderr io.Writer) int {
 		modelName += " [" + strings.TrimSpace(strings.SplitN(string(v), "\n", 2)[0]) + "]"
 	}
 	hc := harness.Config{
-		Case: harness.Case{Name: cf.Name, Spec: spec, Intent: cf.Intent, Contract: cf.Contract, Conventions: conv,
-			Module: cfg.Module, Fixture: harness.Digest(spec, cf.Intent, cf.Contract, oracleSrc)},
+		Case: harness.Case{Name: name, Spec: spec, Intent: cf.Intent, Contract: cf.Contract, Conventions: conv,
+			Module: cfg.Module, Fixture: harness.Digest(spec, cf.Intent, cf.Contract, oracleSrc, fixtureExtra),
+			SpecV2: specV2, OracleArgs: oracleArgs},
 		Model:     model.Command{Argv: cfg.Model.Argv, Timeout: time.Duration(cfg.Model.TimeoutSec) * time.Second},
 		ModelName: modelName, Gates: gates, Policy: evidence.Policy(cfg.Policy), Tier: cfg.Tier, Attempts: cfg.Attempts,
 		OracleArgv: []string{oracleBin}, Commit: commit, Dirty: dirty, Progress: stdout, Transcripts: *transcripts,
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	recs, err := harness.Run(ctx, hc, bench.Store{Dir: *dir}, arms, n, res)
+	runner := harness.Run
+	if *evolve {
+		runner = harness.RunEvolve
+	}
+	recs, err := runner(ctx, hc, bench.Store{Dir: *dir}, arms, n, res)
 	if err != nil {
 		fmt.Fprintf(stderr, "graft: %v (%d arm records written)\n", err, len(recs))
 		return 3
 	}
 	st := bench.Store{Dir: *dir}
-	all, bad, _ := st.Load(cf.Name)
-	attrs, _, _ := st.LoadAttributions(cf.Name)
+	all, bad, _ := st.Load(name)
+	attrs, _, _ := st.LoadAttributions(name)
 	fmt.Fprintln(stdout)
-	if err := bench.Report(stdout, cf.Name, all, attrs, bad); err != nil {
+	if err := bench.Report(stdout, name, all, attrs, bad); err != nil {
 		fmt.Fprintf(stderr, "graft: %v\n", err)
 		return 3
 	}

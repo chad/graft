@@ -5,5 +5,6 @@
   "contract": "It is a single Go program, standard library only. It is started as `<binary> -addr <host:port>` and must listen for TCP connections on that address; the server's name in replies is `freeq-lite`.",
   "conventions": "conventions.md",
   "config": "graft.json",
-  "oracle": "oracle"
+  "oracle": "oracle",
+  "evolve": {"spec": "spec-v2/freeq-lite.md", "oracle_args": ["-v2"]}
 }

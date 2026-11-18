@@ -43,6 +43,10 @@ type Case struct {
 	Conventions string // graft arm only: architecture conventions
 	Module      string
 	Fixture     string // digest of spec + intent + contract + oracle source: the question
+	// Evolve cases: build Spec first, then change it to SpecV2 in the same tree,
+	// and score with OracleArgs appended (e.g. -v2).
+	SpecV2     string
+	OracleArgs []string
 }
 
 // Config is one harness run.
@@ -95,9 +99,9 @@ func (r *recorder) Complete(ctx context.Context, prompt string) (string, error) 
 // any gate recorded a non-pass verdict at any point in this sample (a region
 // that later passed included), the sample is broke. Only a sample in which no
 // gate ever failed can be unreachable.
-func classify(err error, log *evidence.Log, ctx context.Context) string {
+func classify(err error, log *evidence.Log, since int, ctx context.Context) string {
 	if errors.Is(err, pipeline.ErrModel) || ctx.Err() != nil {
-		if f := firstFailure(log); f != "" {
+		if f := firstFailure(log, since); f != "" {
 			return fmt.Sprintf("pipeline: a gate had failed in this sample (%s) before the infrastructure failure: %v", f, err)
 		}
 		return infraPrefix + err.Error()
@@ -105,12 +109,17 @@ func classify(err error, log *evidence.Log, ctx context.Context) string {
 	return "pipeline: " + err.Error()
 }
 
-// firstFailure returns the first non-pass gate verdict in the sample's log.
-func firstFailure(log *evidence.Log) string {
+// firstFailure returns the first non-pass gate verdict in the log from entry
+// since on: the step being classified, not earlier steps of the same sample.
+func firstFailure(log *evidence.Log, since int) string {
 	if log == nil || log.Verify() != nil {
 		return ""
 	}
-	for _, e := range log.All() {
+	all := log.All()
+	if since > len(all) {
+		since = len(all)
+	}
+	for _, e := range all[since:] {
 		if e.Verdict != evidence.Pass {
 			return firstLine(e.Detail)
 		}
@@ -167,25 +176,7 @@ func Sample(ctx context.Context, cfg Config, arm bench.Arm) bench.Sample {
 }
 
 func (cfg Config) graftArm(ctx context.Context, dir, root string) string {
-	repo := filepath.Join(dir, "repo")
-	acc, err := pipeline.Accept(repo, drafter.Drafts(cfg.Case.Spec), "graft bench", time.Now())
-	if err != nil {
-		return "accept: " + err.Error()
-	}
-	os.MkdirAll(filepath.Join(repo, ".graft"), 0o755)
-	log, err := evidence.Open(filepath.Join(repo, ".graft", "evidence.jsonl"))
-	if err != nil {
-		return err.Error()
-	}
-	outs, err := pipeline.Run(ctx, pipeline.Config{
-		Repo: repo, Root: root, Module: cfg.Case.Module, Spec: cfg.Case.Spec, Conventions: cfg.Case.Conventions,
-		Tier: cfg.Tier, Attempts: cfg.Attempts, Model: cfg.Model, Gates: cfg.Gates, Policy: cfg.Policy, Log: log,
-	}, acc)
-	_ = outs
-	if err != nil {
-		return classify(err, log, ctx)
-	}
-	return ""
+	return cfg.graftStep(ctx, filepath.Join(dir, "repo"), root, cfg.Case.Spec)
 }
 
 func (cfg Config) baselinePrompt() string {
@@ -228,7 +219,7 @@ type oracleResult struct {
 // score runs the oracle: exit 0/1 with JSON is a measurement; exit 2 means
 // the server never listened (broke); anything else is the harness's failure.
 func (cfg Config) score(ctx context.Context, bin string) bench.Sample {
-	argv := append(append([]string{}, cfg.OracleArgv...), "-bin", bin)
+	argv := append(append(append([]string{}, cfg.OracleArgv...), cfg.Case.OracleArgs...), "-bin", bin)
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
@@ -303,4 +294,220 @@ func firstLine(s string) string {
 		return s[:i]
 	}
 	return s
+}
+
+// counting wraps a Model and counts calls.
+type counting struct {
+	m     model.Model
+	calls int
+}
+
+func (c *counting) Complete(ctx context.Context, p string) (string, error) {
+	c.calls++
+	return c.m.Complete(ctx, p)
+}
+
+// EvolveSample builds Spec, changes it to SpecV2 in the same tree, and scores
+// the result with the evolved oracle. It records the model calls the change
+// cost, and for graft how many pre-change files the change left byte-identical.
+func EvolveSample(ctx context.Context, cfg Config, arm bench.Arm) bench.Sample {
+	dir, err := os.MkdirTemp("", "graft-evolve-*")
+	if err != nil {
+		return bench.Sample{Outcome: bench.Unreachable, Reason: err.Error()}
+	}
+	defer os.RemoveAll(dir)
+	root := filepath.Join(dir, "app")
+	cm := &counting{m: cfg.Model}
+	c := cfg
+	c.Model = cm
+	var reason string
+	var preserved, changed *int
+	switch arm {
+	case bench.ArmGraft:
+		repo := filepath.Join(dir, "repo")
+		if reason = c.graftStep(ctx, repo, root, c.Case.Spec); reason != "" {
+			break
+		}
+		before, err := snapshot(root)
+		if err != nil {
+			reason = err.Error()
+			break
+		}
+		cm.calls = 0
+		if reason = c.graftStep(ctx, repo, root, c.Case.SpecV2); reason != "" {
+			break
+		}
+		after, _ := snapshot(root)
+		n := 0
+		for f, src := range before {
+			if after[f] == src {
+				n++
+			}
+		}
+		d := diffLines(before, after)
+		preserved, changed = &n, &d
+	case bench.ArmBaseline:
+		if reason = c.oneCall(ctx, root, c.baselinePrompt()); reason != "" {
+			break
+		}
+		before, _ := snapshot(root)
+		cm.calls = 0
+		if reason = c.oneCall(ctx, root, c.evolvePrompt(before["main.go"])); reason == "" {
+			after, _ := snapshot(root)
+			d := diffLines(before, after)
+			changed = &d
+		}
+	default:
+		return bench.Sample{Outcome: bench.Unreachable, Reason: "evolve cases run the graft and baseline arms"}
+	}
+	calls := cm.calls
+	if reason != "" {
+		if strings.HasPrefix(reason, infraPrefix) {
+			return bench.Sample{Outcome: bench.Unreachable, Reason: strings.TrimPrefix(reason, infraPrefix), ChangeCalls: &calls}
+		}
+		return bench.Sample{Outcome: bench.Broke, Reason: reason, ChangeCalls: &calls, Preserved: preserved, DiffLines: changed}
+	}
+	bin := filepath.Join(dir, "server")
+	build := exec.CommandContext(ctx, "go", "build", "-o", bin, ".")
+	build.Dir = root
+	if out, err := build.CombinedOutput(); err != nil {
+		return bench.Sample{Outcome: bench.Broke, Reason: "does not build: " + tail(string(out), 400), ChangeCalls: &calls, Preserved: preserved, DiffLines: changed}
+	}
+	s := cfg.score(ctx, bin)
+	s.ChangeCalls, s.Preserved, s.DiffLines = &calls, preserved, changed
+	return s
+}
+
+func (cfg Config) graftStep(ctx context.Context, repo, root, spec string) string {
+	acc, err := pipeline.Accept(repo, drafter.Drafts(spec), "graft bench", time.Now())
+	if err != nil {
+		return "accept: " + err.Error()
+	}
+	os.MkdirAll(filepath.Join(repo, ".graft"), 0o755)
+	log, err := evidence.Open(filepath.Join(repo, ".graft", "evidence.jsonl"))
+	if err != nil {
+		return err.Error()
+	}
+	// Verdicts are scoped to this step: in an evolve sample, a gate retry while
+	// building v1 says nothing about whether the change was measured.
+	since := len(log.All())
+	outs, err := pipeline.Run(ctx, pipeline.Config{
+		Repo: repo, Root: root, Module: cfg.Case.Module, Spec: spec, Conventions: cfg.Case.Conventions,
+		Tier: cfg.Tier, Attempts: cfg.Attempts, Model: cfg.Model, Gates: cfg.Gates, Policy: cfg.Policy, Log: log,
+	}, acc)
+	_ = outs
+	if err != nil {
+		return classify(err, log, since, ctx)
+	}
+	return ""
+}
+
+func (cfg Config) evolvePrompt(current string) string {
+	return "Here is a Go program and its revised spec. Update the program so it satisfies the revised spec.\n\n## Revised spec\n\n" +
+		strings.TrimSpace(cfg.Case.SpecV2) + "\n\n## How it is run\n\n" + strings.TrimSpace(cfg.Case.Contract) +
+		"\n\n## Current main.go\n\n```go\n" + current + "```\n\nAnswer with the complete updated `main.go` in a single ```go block.\n"
+}
+
+// snapshot reads every .go file in root.
+func snapshot(root string) (map[string]string, error) {
+	out := map[string]string{}
+	names, err := filepath.Glob(filepath.Join(root, "*.go"))
+	if err != nil {
+		return nil, err
+	}
+	for _, n := range names {
+		b, err := os.ReadFile(n)
+		if err != nil {
+			return nil, err
+		}
+		out[filepath.Base(n)] = string(b)
+	}
+	return out, nil
+}
+
+// diffLines is the size of the change between two trees, measured the same
+// way for every arm: lines added plus lines removed, per file, by a
+// longest-common-subsequence line diff (a new file counts all its lines, a
+// deleted file all of its).
+func diffLines(before, after map[string]string) int {
+	total := 0
+	seen := map[string]bool{}
+	for f, a := range before {
+		seen[f] = true
+		total += lineDiff(a, after[f])
+	}
+	for f, b := range after {
+		if !seen[f] {
+			total += lineDiff("", b)
+		}
+	}
+	return total
+}
+
+func splitLinesKeep(s string) []string {
+	if s == "" {
+		return nil
+	}
+	return strings.Split(strings.TrimSuffix(s, "\n"), "\n")
+}
+
+// lineDiff returns added+removed lines between a and b.
+func lineDiff(a, b string) int {
+	x, y := splitLinesKeep(a), splitLinesKeep(b)
+	if a == b {
+		return 0
+	}
+	// LCS length by dynamic programming over two rows.
+	prev := make([]int, len(y)+1)
+	cur := make([]int, len(y)+1)
+	for i := 1; i <= len(x); i++ {
+		for j := 1; j <= len(y); j++ {
+			switch {
+			case x[i-1] == y[j-1]:
+				cur[j] = prev[j-1] + 1
+			case prev[j] >= cur[j-1]:
+				cur[j] = prev[j]
+			default:
+				cur[j] = cur[j-1]
+			}
+		}
+		prev, cur = cur, prev
+	}
+	lcs := prev[len(y)]
+	return (len(x) - lcs) + (len(y) - lcs)
+}
+
+// RunEvolve draws n evolve samples of each arm and appends one record per arm.
+func RunEvolve(ctx context.Context, cfg Config, store bench.Store, arms []bench.Arm, n int, res bench.Resolution) ([]bench.Record, error) {
+	var out []bench.Record
+	for _, arm := range arms {
+		r := bench.Record{Case: cfg.Case.Name, Arm: arm, Commit: cfg.Commit, Dirty: cfg.Dirty, Fixture: cfg.Case.Fixture,
+			Model: cfg.ModelName, Resolution: res}
+		for i := 0; i < n; i++ {
+			if ctx.Err() != nil {
+				return out, ctx.Err()
+			}
+			s := EvolveSample(ctx, cfg, arm)
+			if cfg.Progress != nil {
+				extra := ""
+				if s.ChangeCalls != nil {
+					extra += fmt.Sprintf(" change_calls=%d", *s.ChangeCalls)
+				}
+				if s.Preserved != nil {
+					extra += fmt.Sprintf(" preserved=%d", *s.Preserved)
+				}
+				if s.DiffLines != nil {
+					extra += fmt.Sprintf(" diff_lines=%d", *s.DiffLines)
+				}
+				fmt.Fprintf(cfg.Progress, "%s %d/%d: %s %d/%d%s %s\n", arm, i+1, n, s.Outcome, s.Passed, s.Checks, extra, firstLine(s.Reason))
+			}
+			r.Samples = append(r.Samples, s)
+		}
+		stored, err := store.Append(r)
+		if err != nil {
+			return out, err
+		}
+		out = append(out, stored)
+	}
+	return out, nil
 }

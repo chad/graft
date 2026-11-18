@@ -98,6 +98,14 @@ type Sample struct {
 	// where its prompts and answers were kept, if the run kept them.
 	Calls      *int   `json:"calls,omitempty"`
 	Transcript string `json:"transcript,omitempty"`
+	// Evolve cases only: model calls spent on the change, and for the graft
+	// arm how many pre-change files were left byte-identical. Recorded and
+	// shown; never aggregated into a rate.
+	ChangeCalls *int `json:"change_calls,omitempty"`
+	Preserved   *int `json:"preserved,omitempty"`
+	// DiffLines is the size of the change, measured identically for every
+	// arm: lines added plus removed across the tree's .go files.
+	DiffLines *int `json:"diff_lines,omitempty"`
 }
 
 // Attribution says which layer(s) one failed sample's failure came from.
