@@ -69,8 +69,9 @@ func Run(ctx context.Context, cfg Config, acc []Accepted) ([]Outcome, error) {
 	}
 	sort.Slice(acc, func(i, j int) bool { return acc[i].Entry.Order < acc[j].Entry.Order })
 	var byRec map[string]recording.Region
+	var pending map[string]bool // regions still holding their seeded placeholder
 	if cfg.Skeleton != nil {
-		if byRec, err = cfg.renderTree(ctx, store, acc); err != nil {
+		if byRec, pending, err = cfg.renderTree(ctx, store, acc); err != nil {
 			return nil, err
 		}
 	}
@@ -102,7 +103,7 @@ func Run(ctx context.Context, cfg Config, acc []Accepted) ([]Outcome, error) {
 				return out, fmt.Errorf("%s: %w: %s was edited by hand; keep the edit by revising the record, or restore the region", a.Entry.Section, converge.ErrHandEdited, r.Path)
 			}
 		}
-		if body, ok := current(store, regions, a, file, cfg.Root); ok {
+		if body, ok := current(store, regions, a, file, cfg.Root); ok && !pending[a.ID] {
 			cand, err := converge.NewCandidate(store, a.ID, file, cfg.Tier, body)
 			if err != nil {
 				return out, err

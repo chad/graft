@@ -19,9 +19,9 @@ import (
 // renders it with sedum into cfg.Root, and seeds each region's _synth.go file
 // if it does not exist yet (a converged body is never clobbered). It returns
 // the regions by owning record id. It makes no model call.
-func (cfg Config) renderTree(ctx context.Context, store records.Store, acc []Accepted) (map[string]recording.Region, error) {
+func (cfg Config) renderTree(ctx context.Context, store records.Store, acc []Accepted) (map[string]recording.Region, map[string]bool, error) {
 	if cfg.Sedum == nil || cfg.Generators == "" {
-		return nil, errors.New("pipeline: --render needs sedum and its generators")
+		return nil, nil, errors.New("pipeline: --render needs sedum and its generators")
 	}
 	if v, err := cfg.Sedum.Version(ctx); err == nil {
 		cfg.say("sedum %s\n", v)
@@ -30,58 +30,62 @@ func (cfg Config) renderTree(ctx context.Context, store records.Store, acc []Acc
 	for _, a := range acc {
 		p, err := store.Current(a.ID)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		in.Records = append(in.Records, recording.Rec{Pin: p, Section: a.Entry.Section})
 	}
 	planned, err := recording.Plan(in)
 	if err != nil {
-		return nil, fmt.Errorf("pipeline: --render: %w", err)
+		return nil, nil, fmt.Errorf("pipeline: --render: %w", err)
 	}
 	var buf bytes.Buffer
 	if err := recording.Write(&buf, planned.Recording); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	tmp, err := os.MkdirTemp("", "graft-render-*")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer os.RemoveAll(tmp)
 	recPath := filepath.Join(tmp, "recording.json")
 	if err := os.WriteFile(recPath, buf.Bytes(), 0o644); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	cleanup, err := cfg.sedumEnv()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer cleanup()
 	if err := render.Render(ctx, cfg.Sedum, cfg.Root, recPath); err != nil {
 		if errors.Is(err, render.ErrHandEdited) {
-			return nil, fmt.Errorf("pipeline: refusing to render before any model call: %w (restore the file, or revise the record)", err)
+			return nil, nil, fmt.Errorf("pipeline: refusing to render before any model call: %w (restore the file, or revise the record)", err)
 		}
-		return nil, fmt.Errorf("pipeline: --render: %w", err)
+		return nil, nil, fmt.Errorf("pipeline: --render: %w", err)
 	}
 	if err := cfg.Sedum.GrowCheck(ctx, cfg.Root); err != nil {
-		return nil, fmt.Errorf("pipeline: --render: grow --check after render: %w", err)
+		return nil, nil, fmt.Errorf("pipeline: --render: grow --check after render: %w", err)
 	}
 	by := map[string]recording.Region{}
+	pending := map[string]bool{}
 	for _, r := range planned.Regions {
 		by[r.Owner.RecordID] = r
 		p := filepath.Join(cfg.Root, filepath.FromSlash(r.Path))
-		if _, err := os.Stat(p); err == nil {
+		if have, err := os.ReadFile(p); err == nil {
+			// An untouched seed is still a placeholder: it must be converged.
+			pending[r.Owner.RecordID] = bytes.Equal(have, r.Seed)
 			continue
 		} else if !errors.Is(err, os.ErrNotExist) {
-			return nil, err
+			return nil, nil, err
 		}
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if err := os.WriteFile(p, r.Seed, 0o644); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
+		pending[r.Owner.RecordID] = true
 	}
-	return by, nil
+	return by, pending, nil
 }
 
 // sedumEnv gives sedum what it expects beside the tree: its generators and the
