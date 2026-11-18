@@ -17,6 +17,7 @@ import (
 
 	"github.com/chad/graft/internal/converge"
 	"github.com/chad/graft/internal/evidence"
+	"github.com/chad/graft/internal/lang"
 	"github.com/chad/graft/internal/records"
 )
 
@@ -33,6 +34,8 @@ type convergeConfig struct {
 	Attempts    int      `json:"attempts"`
 	Module      string   `json:"module"`
 	Skeleton    string   `json:"skeleton"` // path, relative to the config file (graft run --render)
+	// Language is the target language profile; absent means Go.
+	Language *lang.Profile `json:"language"`
 
 	Policy map[string][]evidence.Kind `json:"policy"`
 	Gates  []struct {
@@ -52,9 +55,10 @@ func loadConvergeConfig(path string) (convergeConfig, []converge.Gate, error) {
 	// encoding/json alone is not strict: it matches keys case-insensitively,
 	// lets a duplicate key win silently, accepts null and ignores trailing data.
 	if err := strictCheck(b, map[string][]string{
-		"":        {"policy", "gates", "model", "conventions", "visible", "tier", "attempts", "module", "skeleton"},
-		"gates[]": {"label", "argv", "kind", "timeout_sec"},
-		"model":   {"argv", "timeout_sec"},
+		"":         {"policy", "gates", "model", "conventions", "visible", "tier", "attempts", "module", "skeleton", "language"},
+		"language": {"name", "ext", "fence", "comment", "synth_suffix", "preamble", "bootstrap", "build", "run"},
+		"gates[]":  {"label", "argv", "kind", "timeout_sec"},
+		"model":    {"argv", "timeout_sec"},
 	}); err != nil {
 		return c, nil, fmt.Errorf("%s: %w", path, err)
 	}

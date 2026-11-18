@@ -319,13 +319,32 @@ func all(errs ...error) error {
 const placeholder = "graft: not converged"
 
 // generated reports whether a section's file exists and is not a seed.
-func generated(file string) bool {
+func generated(file, ext string) bool {
 	stem := strings.TrimSuffix(file, ".go")
-	if b, err := os.ReadFile(stem + "_synth.go"); err == nil {
+	if b, err := os.ReadFile(stem + "_synth" + ext); err == nil {
 		return !strings.Contains(string(b), placeholder)
 	}
-	b, err := os.ReadFile(file)
+	b, err := os.ReadFile(stem + ext)
 	return err == nil && !strings.Contains(string(b), placeholder)
+}
+
+// sameSection: -only accepts a section file in any language (channels.go,
+// channels.py) or its bare stem.
+func sameSection(file, only string) bool {
+	stem := func(s string) string { return strings.TrimSuffix(s, filepath.Ext(s)) }
+	return stem(file) == stem(only)
+}
+
+// nothingPassed prints the summary for a server that never ran, first and
+// last like a normal run, and exits 1.
+func nothingPassed(n int, asJSON bool, why string) {
+	if asJSON {
+		b, _ := json.Marshal(map[string]any{"checks": n, "passed": 0, "failed": []string{why}})
+		fmt.Println(string(b))
+	} else {
+		fmt.Printf("smoke: 0/%d checks passed\n%s\nsmoke: 0/%d checks passed\n", n, strings.TrimRight(why, "\n"), n)
+	}
+	os.Exit(1)
 }
 
 func main() {
@@ -333,16 +352,18 @@ func main() {
 	bin := flag.String("bin", "", "server binary to test (default: build the tree in the current directory)")
 	extra := flag.String("server-args", "", "extra arguments for the server, space-separated (e.g. -v2 for the reference)")
 	only := flag.String("only", "", "run only the checks of this section file (e.g. channels.go)")
+	ext := flag.String("ext", ".go", "source file extension of the tree under test (which sections are generated)")
+	cmdJSON := flag.String("cmd", "", `start the server with this JSON argv in the current directory instead of building it, e.g. ["python3","main.py"]; "-addr A" is appended unless an argument holds {addr}`)
 	asJSON := flag.Bool("json", false, `print {"checks":N,"passed":M,"failed":[...]} instead of text`)
 	flag.Parse()
 	var run []check
 	for _, c := range checks {
 		switch {
 		case *only != "":
-			if c.file == *only {
+			if sameSection(c.file, *only) {
 				run = append(run, c)
 			}
-		case *every || generated(c.file):
+		case *every || generated(c.file, *ext):
 			run = append(run, c)
 		}
 	}
@@ -354,23 +375,26 @@ func main() {
 		fmt.Println("smoke: no sections generated yet; nothing to check")
 		return
 	}
-	server := *bin
-	if server == "" {
+	var argv []string
+	switch {
+	case *cmdJSON != "":
+		if err := json.Unmarshal([]byte(*cmdJSON), &argv); err != nil || len(argv) == 0 {
+			fail("smoke: -cmd must be a non-empty JSON array of strings")
+		}
+	case *bin != "":
+		argv = []string{*bin}
+	default:
 		dir, err := os.MkdirTemp("", "graft-smoke-*")
 		if err != nil {
 			fail(err.Error())
 		}
 		defer os.RemoveAll(dir)
-		server = filepath.Join(dir, "server")
+		server := filepath.Join(dir, "server")
 		if out, err := exec.Command("go", "build", "-o", server, ".").CombinedOutput(); err != nil {
 			// Same summary shape as a run, so a ranker can read it: nothing passed.
-			if *asJSON {
-				fmt.Printf("{\"checks\":%d,\"passed\":0,\"failed\":[\"the server does not build\"]}\n", len(run))
-			} else {
-				fmt.Printf("smoke: 0/%d checks passed\nthe server does not build:\n%s\nsmoke: 0/%d checks passed\n", len(run), out, len(run))
-			}
-			os.Exit(1)
+			nothingPassed(len(run), *asJSON, "the server does not build:\n"+string(out))
 		}
+		argv = []string{server}
 	}
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -378,9 +402,20 @@ func main() {
 	}
 	addr := l.Addr().String()
 	l.Close()
-	srv := exec.Command(server, append([]string{"-addr", addr}, strings.Fields(*extra)...)...)
+	full, placed := make([]string, len(argv)), false
+	for i, a := range argv {
+		full[i] = strings.ReplaceAll(a, "{addr}", addr)
+		placed = placed || full[i] != a
+	}
+	if !placed {
+		full = append(full, "-addr", addr)
+	}
+	full = append(full, strings.Fields(*extra)...)
+	srv := exec.Command(full[0], full[1:]...)
+	var srvErr strings.Builder
+	srv.Stderr = &srvErr
 	if err := srv.Start(); err != nil {
-		fail(err.Error())
+		nothingPassed(len(run), *asJSON, "the server does not start: "+err.Error())
 	}
 	defer func() { srv.Process.Kill(); srv.Wait() }()
 	up := false
@@ -394,7 +429,8 @@ func main() {
 	}
 	if !up {
 		srv.Process.Kill()
-		fail("smoke: the server never listened on -addr")
+		srv.Wait()
+		nothingPassed(len(run), *asJSON, "the server never listened on -addr:\n"+tailOf(srvErr.String(), 1500))
 	}
 	var failed []string
 	for _, c := range run {
@@ -419,6 +455,13 @@ func main() {
 		srv.Wait()
 		os.Exit(1)
 	}
+}
+
+func tailOf(s string, n int) string {
+	if len(s) > n {
+		return "..." + s[len(s)-n:]
+	}
+	return s
 }
 
 func nonNil(s []string) []string {

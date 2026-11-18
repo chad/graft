@@ -13,6 +13,7 @@ import (
 	"github.com/chad/graft/internal/converge"
 	"github.com/chad/graft/internal/drafter"
 	"github.com/chad/graft/internal/evidence"
+	"github.com/chad/graft/internal/lang"
 )
 
 const spec = `# Tiny
@@ -225,5 +226,59 @@ func TestVisibleChecksAreInThePrompt(t *testing.T) {
 	p, err := cfg.prompt(acc[0], "")
 	if err != nil || !strings.Contains(p, "SMOKE-MARKER") || !strings.Contains(p, "### smoke/smoke.go") {
 		t.Fatalf("%v\n%s", err, p)
+	}
+}
+
+// pyModel answers in a python fence and records the prompts it saw.
+type pyModel struct{ prompts []string }
+
+func (m *pyModel) Complete(_ context.Context, prompt string) (string, error) {
+	m.prompts = append(m.prompts, prompt)
+	if strings.Contains(prompt, "Write the complete file `core.py`") {
+		return "```python\nprint(\"hello\")\n```\n", nil
+	}
+	return "```python\ndef twice(x):\n    return x * 2\n```\n", nil
+}
+
+func TestPythonProfile(t *testing.T) {
+	py, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skip("needs python3")
+	}
+	cfg, root := setup(t)
+	cfg.Lang = lang.Profile{Name: "python", Ext: ".py", Fence: "python", Comment: "#", SynthSuffix: "_synth",
+		Preamble: "a complete module", Bootstrap: map[string]string{"main.py": "# {module} entry\n"},
+		Run: []string{"python3", "main.py"}}
+	cfg.Gates = []converge.Gate{converge.CommandGate{Label: "py_compile",
+		Argv: []string{py, "-c", "import glob,py_compile;[py_compile.compile(f,doraise=True) for f in glob.glob('*.py')]"},
+		As:   evidence.TestRun, Timeout: time.Minute}}
+	m := &pyModel{}
+	cfg.Model = m
+	acc, err := AcceptExt(cfg.Repo, drafter.Drafts(spec), "test", time.Now(), ".py")
+	if err != nil || acc[0].Entry.File != "core.py" || acc[1].Entry.File != "extra.py" {
+		t.Fatalf("%v %+v", err, acc)
+	}
+	if _, err := Run(context.Background(), cfg, acc); err != nil {
+		t.Fatal(err)
+	}
+	boot, _ := os.ReadFile(filepath.Join(root, "main.py"))
+	if string(boot) != "# tiny entry\n" {
+		t.Fatalf("bootstrap: %q", boot)
+	}
+	core, _ := os.ReadFile(filepath.Join(root, "core.py"))
+	if !strings.HasPrefix(string(core), "# graft:synth:begin ") || !strings.Contains(string(core), "print(\"hello\")") {
+		t.Fatalf("markers must use the profile's comment:\n%s", core)
+	}
+	if out, err := exec.Command(py, filepath.Join(root, "core.py")).CombinedOutput(); err != nil || string(out) != "hello\n" {
+		t.Fatalf("the generated file must run: %v %q", err, out)
+	}
+	last := m.prompts[len(m.prompts)-1]
+	for _, want := range []string{"one file of a python program", "```python\n# graft:synth:begin", "in a single ```python block, a complete module"} {
+		if !strings.Contains(last, want) {
+			t.Fatalf("prompt lacks %q:\n%s", want, last)
+		}
+	}
+	if strings.Contains(last, "package clause") {
+		t.Fatal("a python prompt must not ask for a package clause")
 	}
 }

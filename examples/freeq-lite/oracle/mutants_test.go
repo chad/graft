@@ -100,7 +100,7 @@ func TestMutantsAreCaught(t *testing.T) {
 			if target == nil {
 				t.Fatalf("no check named %q", m.mustFail)
 			}
-			addr, stop, err := start(bin, "-v2")
+			addr, stop, err := start([]string{bin}, "", "-v2")
 			if err != nil {
 				t.Fatal(err)
 			}

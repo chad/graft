@@ -14,6 +14,7 @@ import (
 
 	"github.com/chad/graft/internal/drafter"
 	"github.com/chad/graft/internal/evidence"
+	"github.com/chad/graft/internal/lang"
 	"github.com/chad/graft/internal/model"
 	"github.com/chad/graft/internal/pipeline"
 	"github.com/chad/graft/internal/recording"
@@ -87,6 +88,17 @@ func runCmd(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "graft: %v\n", err)
 		return 2
 	}
+	profile, err := lang.Resolve(cfg.Language)
+	if err != nil {
+		fmt.Fprintf(stderr, "graft: %v\n", err)
+		return 2
+	}
+	if *renderOn && profile.Name != "go" {
+		// The recording layer still splits files with go/ast (M10b moves that
+		// to the generator); refuse rather than half-render another language.
+		fmt.Fprintf(stderr, "graft: --render supports only Go so far (language %q)\n", profile.Name)
+		return 2
+	}
 	spec, err := os.ReadFile(*specPath)
 	if err != nil {
 		fmt.Fprintf(stderr, "graft: %v\n", err)
@@ -100,7 +112,7 @@ func runCmd(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "graft: nothing written; review the drafts above and re-run with --accept")
 		return 2
 	}
-	acc, err := pipeline.Accept(*repo, drafts, "graft run", time.Now())
+	acc, err := pipeline.AcceptExt(*repo, drafts, "graft run", time.Now(), profile.Ext)
 	if err != nil {
 		fmt.Fprintf(stderr, "graft: %v\n", err)
 		return 2
@@ -164,7 +176,7 @@ func runCmd(args []string, stdout, stderr io.Writer) int {
 		Tier: cfg.Tier, Attempts: cfg.Attempts,
 		Model: model.Command{Argv: cfg.Model.Argv, Timeout: time.Duration(cfg.Model.TimeoutSec) * time.Second},
 		Gates: gates, Policy: evidence.Policy(cfg.Policy), Log: log, Progress: stdout,
-		Skeleton: skel, Sedum: sedum, Generators: gens, Samples: *samples,
+		Skeleton: skel, Sedum: sedum, Generators: gens, Samples: *samples, Lang: profile,
 	}, acc)
 	applied, calls := 0, 0
 	for _, o := range out {

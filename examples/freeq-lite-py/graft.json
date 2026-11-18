@@ -1,0 +1,86 @@
+{
+  "module": "freeqlite",
+  "tier": "low",
+  "attempts": 3,
+  "conventions": "conventions.md",
+  "language": {
+    "name": "python",
+    "ext": ".py",
+    "fence": "python",
+    "comment": "#",
+    "synth_suffix": "_synth",
+    "preamble": "a complete module (imports first); never write main.py",
+    "bootstrap": {
+      "main.py": "\"\"\"Entry point, written by graft and not generated.\n\nIt imports running, then every other module in name order (each registers its\nhandlers when imported), then starts the server: python3 main.py -addr host:port\n\"\"\"\nimport glob\nimport importlib\nimport os\nimport sys\n\nHERE = os.path.dirname(os.path.abspath(__file__))\nsys.path.insert(0, HERE)\nimport running  # noqa: E402\n\nfor _f in sorted(glob.glob(os.path.join(HERE, \"*.py\"))):\n    _name = os.path.basename(_f)[:-3]\n    if _name not in (\"main\", \"running\"):\n        importlib.import_module(_name)\n\nif __name__ == \"__main__\":\n    running.main(sys.argv[1:])\n"
+    },
+    "build": [],
+    "run": [
+      "python3",
+      "main.py"
+    ]
+  },
+  "model": {
+    "argv": [
+      "claude",
+      "-p",
+      "--tools",
+      "",
+      "--strict-mcp-config",
+      "--model",
+      "sonnet"
+    ],
+    "timeout_sec": 600
+  },
+  "policy": {
+    "low": [
+      "static_analysis",
+      "eval"
+    ]
+  },
+  "gates": [
+    {
+      "label": "compile and import",
+      "argv": [
+        "python3",
+        "./gates/check.py"
+      ],
+      "kind": "static_analysis",
+      "timeout_sec": 120
+    },
+    {
+      "label": "registry ownership",
+      "argv": [
+        "python3",
+        "./gates/registry.py"
+      ],
+      "kind": "static_analysis",
+      "timeout_sec": 60
+    },
+    {
+      "label": "no dead functions",
+      "argv": [
+        "python3",
+        "./gates/unused.py"
+      ],
+      "kind": "static_analysis",
+      "timeout_sec": 60
+    },
+    {
+      "label": "smoke (visible)",
+      "argv": [
+        "go",
+        "run",
+        "../freeq-lite/smoke/smoke.go",
+        "-ext",
+        ".py",
+        "-cmd",
+        "[\"python3\",\"main.py\"]"
+      ],
+      "kind": "eval",
+      "timeout_sec": 300
+    }
+  ],
+  "visible": [
+    "../freeq-lite/smoke/smoke.go"
+  ]
+}

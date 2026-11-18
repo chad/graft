@@ -12,6 +12,7 @@ import (
 
 	"github.com/chad/graft/internal/converge"
 	"github.com/chad/graft/internal/evidence"
+	"github.com/chad/graft/internal/lang"
 	"github.com/chad/graft/internal/model"
 	"github.com/chad/graft/internal/recording"
 	"github.com/chad/graft/internal/records"
@@ -24,9 +25,11 @@ var ErrModel = errors.New("pipeline: model command failed")
 
 // Config is one `graft run`.
 type Config struct {
-	Repo        string // provenance repo (records + .graft index)
-	Root        string // the code tree being generated
-	Module      string // Go module path for a fresh tree
+	Repo   string // provenance repo (records + .graft index)
+	Root   string // the code tree being generated
+	Module string // module name for a fresh tree ({module} in the profile's bootstrap)
+	// Lang is the target language; the zero value is lang.Go.
+	Lang        lang.Profile
 	Spec        string // the full spec text, shown to the model as context
 	Conventions string // architecture conventions, shown to the model
 	// Visible are checks the model is shown (name → source), e.g. a smoke
@@ -113,7 +116,7 @@ func Run(ctx context.Context, cfg Config, acc []Accepted) ([]Outcome, error) {
 			}
 		}
 		if body, ok := current(store, regions, a, file, cfg.Root); ok && !pending[a.ID] {
-			cand, err := converge.NewCandidate(store, a.ID, file, cfg.Tier, body)
+			cand, err := cfg.newCandidate(store, a.ID, file, body)
 			if err != nil {
 				return out, err
 			}
@@ -163,7 +166,7 @@ func Run(ctx context.Context, cfg Config, acc []Accepted) ([]Outcome, error) {
 				}
 				return out, fmt.Errorf("%w: %v", ErrModel, err)
 			}
-			code := model.ExtractCode(resp, "go")
+			code := model.ExtractCode(resp, cfg.lang().Fence)
 			if cfg.Skeleton != nil && hasPlaceholder(code) {
 				// The seed is a placeholder, not an answer: refuse before any check runs.
 				o.LastFailure = "the answer still contains the placeholder panic (" + recording.Placeholder + ")"
@@ -171,7 +174,7 @@ func Run(ctx context.Context, cfg Config, acc []Accepted) ([]Outcome, error) {
 				cfg.say("  not applied: %s\n", o.LastFailure)
 				continue
 			}
-			cand, err := converge.NewCandidate(store, a.ID, file, cfg.Tier, code)
+			cand, err := cfg.newCandidate(store, a.ID, file, code)
 			if err != nil {
 				return out, err
 			}
@@ -231,6 +234,21 @@ func current(store records.Store, regions []converge.Region, a Accepted, file, r
 	return "", false
 }
 
+// fenceFor names a visible file's code fence from its extension (the checks
+// may be in another language than the program, e.g. a Go smoke suite).
+func fenceFor(name string) string {
+	switch e := strings.TrimPrefix(filepath.Ext(name), "."); e {
+	case "py":
+		return "python"
+	case "ts":
+		return "typescript"
+	case "js":
+		return "javascript"
+	default:
+		return e
+	}
+}
+
 // writeVisible adds the visible checks to a prompt, in name order.
 func (cfg Config) writeVisible(b *strings.Builder) {
 	if len(cfg.Visible) == 0 {
@@ -243,7 +261,7 @@ func (cfg Config) writeVisible(b *strings.Builder) {
 	sort.Strings(names)
 	fmt.Fprintf(b, "## Checks your code will be run against (visible; they run as a gate)\n\n")
 	for _, n := range names {
-		fmt.Fprintf(b, "### %s\n\n```go\n%s```\n\n", n, cfg.Visible[n])
+		fmt.Fprintf(b, "### %s\n\n```%s\n%s```\n\n", n, fenceFor(n), cfg.Visible[n])
 	}
 }
 
@@ -260,21 +278,57 @@ func firstLine(s string) string {
 	return s
 }
 
-// bootstrap gives a fresh tree its go.mod. (When sedum rendering lands, the
-// scaffold comes from the generator package instead.)
+// lang returns the target language profile (Go when unset).
+func (cfg Config) lang() lang.Profile {
+	if cfg.Lang.Name == "" {
+		return lang.Go
+	}
+	return cfg.Lang
+}
+
+// displayName is the language's name for the prompt.
+func (cfg Config) displayName() string {
+	if n := cfg.lang().Name; n != "go" {
+		return n
+	}
+	return "Go"
+}
+
+// newCandidate is converge.NewCandidate with the language's comment prefix.
+func (cfg Config) newCandidate(store records.Store, id, file, code string) (converge.Candidate, error) {
+	cand, err := converge.NewCandidate(store, id, file, cfg.Tier, code)
+	cand.Comment = cfg.lang().Comment
+	return cand, err
+}
+
+// bootstrap writes the profile's fresh-tree files (Go: go.mod) that are not
+// there yet. (Under --render the scaffold comes from the generator package.)
 func bootstrap(cfg Config) error {
 	if err := os.MkdirAll(cfg.Root, 0o755); err != nil {
 		return err
-	}
-	gm := filepath.Join(cfg.Root, "go.mod")
-	if _, err := os.Stat(gm); err == nil {
-		return nil
 	}
 	mod := cfg.Module
 	if mod == "" {
 		mod = "app"
 	}
-	return os.WriteFile(gm, []byte("module "+mod+"\n\ngo 1.22\n"), 0o644)
+	names := make([]string, 0, len(cfg.lang().Bootstrap))
+	for n := range cfg.lang().Bootstrap {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		p := filepath.Join(cfg.Root, filepath.FromSlash(n))
+		if _, err := os.Stat(p); err == nil {
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(p, []byte(lang.Expand(cfg.lang().Bootstrap[n], map[string]string{"module": mod})), 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // prompt shows the model: the conventions, the whole spec as context, this
@@ -282,7 +336,7 @@ func bootstrap(cfg Config) error {
 // It never shows the oracle.
 func (cfg Config) prompt(a Accepted, feedback string) (string, error) {
 	var b strings.Builder
-	fmt.Fprintf(&b, "You are writing one file of a Go program, generated section by section from a spec.\n\n")
+	fmt.Fprintf(&b, "You are writing one file of a %s program, generated section by section from a spec.\n\n", cfg.displayName())
 	fmt.Fprintf(&b, "## Conventions\n\n%s\n\n", strings.TrimSpace(cfg.Conventions))
 	cfg.writeVisible(&b)
 	fmt.Fprintf(&b, "## The whole spec (context)\n\n%s\n\n", strings.TrimSpace(cfg.Spec))
@@ -290,7 +344,7 @@ func (cfg Config) prompt(a Accepted, feedback string) (string, error) {
 	for _, s := range a.Draft.Statements {
 		fmt.Fprintf(&b, "- [%s] %s\n", s.Type, s.Text)
 	}
-	tree, err := goFiles(cfg.Root, a.Entry.File)
+	tree, err := sourceFiles(cfg.Root, a.Entry.File, cfg.lang())
 	if err != nil {
 		return "", err
 	}
@@ -300,12 +354,13 @@ func (cfg Config) prompt(a Accepted, feedback string) (string, error) {
 	if feedback != "" {
 		fmt.Fprintf(&b, "\n## Feedback on your previous attempt\n\n%s\n", feedback)
 	}
-	fmt.Fprintf(&b, "\nAnswer with the complete contents of `%s` in a single ```go block, starting with the package clause. Do not include any line containing \"graft:synth\" or \"sedum:\".\n", a.Entry.File)
+	fmt.Fprintf(&b, "\nAnswer with the complete contents of `%s` in a single ```%s block, %s. Do not include any line containing \"graft:synth\" or \"sedum:\".\n", a.Entry.File, cfg.lang().Fence, cfg.lang().Preamble)
 	return b.String(), nil
 }
 
-// goFiles returns every .go file in root except skip, each in a fenced block.
-func goFiles(root, skip string) (string, error) {
+// sourceFiles returns every source file of the language in root except skip,
+// each in a fenced block.
+func sourceFiles(root, skip string, l lang.Profile) (string, error) {
 	if _, err := os.Stat(root); errors.Is(err, os.ErrNotExist) {
 		return "", nil
 	}
@@ -317,7 +372,7 @@ func goFiles(root, skip string) (string, error) {
 		if d.IsDir() && d.Name() == ".git" {
 			return filepath.SkipDir
 		}
-		if !d.IsDir() && strings.HasSuffix(p, ".go") {
+		if !d.IsDir() && l.IsSource(p) {
 			rel, _ := filepath.Rel(root, p)
 			if filepath.ToSlash(rel) != skip {
 				names = append(names, rel)
@@ -335,7 +390,7 @@ func goFiles(root, skip string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		fmt.Fprintf(&b, "### %s\n\n```go\n%s```\n\n", filepath.ToSlash(n), src)
+		fmt.Fprintf(&b, "### %s\n\n```%s\n%s```\n\n", filepath.ToSlash(n), l.Fence, src)
 	}
 	return b.String(), nil
 }

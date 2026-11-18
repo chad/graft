@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/chad/graft/internal/converge"
+	"github.com/chad/graft/internal/lang"
 	"github.com/chad/graft/internal/recording"
 	"github.com/chad/graft/internal/records"
 	"github.com/chad/graft/internal/render"
@@ -158,7 +159,7 @@ func (cfg Config) renderPrompt(a Accepted, r recording.Region, feedback string) 
 		fmt.Fprintf(&b, "- [%s] %s\n", s.Type, s.Text)
 	}
 	fmt.Fprintf(&b, "\n## Declares: the helpers you must implement, with exactly these signatures\n\n```go\n%s\n```\n", strings.Join(r.Declares, "\n"))
-	tree, err := goFiles(cfg.Root, r.Path)
+	tree, err := sourceFiles(cfg.Root, r.Path, lang.Go)
 	if err != nil {
 		return "", err
 	}
