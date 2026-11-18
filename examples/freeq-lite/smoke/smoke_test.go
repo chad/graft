@@ -2,6 +2,7 @@ package main
 
 import (
 	"os/exec"
+	"regexp"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -35,5 +36,21 @@ func TestOnlyAndJSON(t *testing.T) {
 	out, err := exec.Command("go", "run", self, "-only", "channels.go", "-json", "-bin", bin).Output()
 	if err != nil || strings.TrimSpace(string(out)) != `{"checks":2,"failed":[],"passed":2}` {
 		t.Fatalf("%v %s", err, out)
+	}
+}
+
+// The text summary is parsed by best-of-N's ranker; this pins its format.
+func TestSummaryLineFormatIsStable(t *testing.T) {
+	if testing.Short() {
+		t.Skip("short")
+	}
+	bin := filepath.Join(t.TempDir(), "reference")
+	if out, err := exec.Command("go", "build", "-o", bin, "../reference").CombinedOutput(); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	self, _ := filepath.Abs("smoke.go")
+	out, _ := exec.Command("go", "run", self, "-only", "keepalive.go", "-bin", bin).Output()
+	if !regexp.MustCompile(`(?m)^smoke: \d+/\d+ checks passed$`).Match(out) {
+		t.Fatalf("summary line changed: %q", out)
 	}
 }
