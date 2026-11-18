@@ -68,6 +68,15 @@ happens only in a convergence-layer region, owned and marked like any other.**
   evals derived from the owning record, run against the built artifact.
 - Evals carry a risk tier; the required evidence per tier is policy.
 
+### `graft converge` exit codes
+
+| code | meaning |
+|---|---|
+| 0 | applied (guarantee: checked) |
+| 1 | checked, not applied: a gate failed or the tier is unsatisfied |
+| 2 | refused before checking began (usage, config, record, tier, pin, path, hand edit, sedum overlap, marker in body) |
+| 3 | failed after checking began (a gate could not start, cancelled, tree or record changed); evidence so far is kept |
+
 ## 7. Evidence
 
 - One evidence format for all layers.
@@ -143,5 +152,7 @@ Two directions, one rule:
 - Does A/B/C/D change classification survive as a *pre-regen blast-radius
   estimate* once `gen_hash` gives exact staleness?
 - One log or two: a journal of operations over provenance's content snapshots?
+- Where a record's risk tier lives: provenance records have none, so
+  `graft converge --tier` is caller-supplied today.
 - Anchoring the evidence head outside the log (signed by the owner's DID, or
   committed alongside the records) to make deliberate rollback detectable.

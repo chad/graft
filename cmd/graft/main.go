@@ -10,17 +10,23 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/chad/graft/internal/drafter"
 	"github.com/chad/graft/internal/version"
 )
 
 func main() {
-	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+	os.Exit(run2(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
 }
 
-// run is the testable entry point: it returns the process exit code.
+// run is the testable entry point without stdin.
 func run(args []string, stdout, stderr io.Writer) int {
+	return run2(args, strings.NewReader(""), stdout, stderr)
+}
+
+// run2 is the testable entry point: it returns the process exit code.
+func run2(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		usage(stderr)
 		return 2
@@ -31,6 +37,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	case "draft":
 		return draft(args[1:], stdout, stderr)
+	case "converge":
+		return convergeCmd(args[1:], stdin, stdout, stderr)
 	case "help", "-h", "--help":
 		usage(stdout)
 		return 0
@@ -45,7 +53,8 @@ func usage(w io.Writer) {
 	fmt.Fprint(w, `usage: graft <command>
 
 commands:
-  draft F   propose draft records from a markdown spec (never applies them)
+  draft F     propose draft records from a markdown spec (never applies them)
+  converge    check a synthesized body through gates and tier policy; apply only if satisfied
   version   print graft's version
   help      show this help
 

@@ -49,6 +49,14 @@ var executable = map[evidence.Kind]bool{
 	evidence.TestRun: true, evidence.Eval: true, evidence.StaticAnalysis: true, evidence.Conformance: true,
 }
 
+// Executable reports whether evidence of kind k is produced by running
+// something, and so may be claimed by a gate.
+func Executable(k evidence.Kind) bool { return executable[k] }
+
+// ErrGateKind: a gate claims a non-executable kind (a human sign-off cannot
+// be produced by running a command).
+var ErrGateKind = errors.New("converge: a gate can only produce an executable evidence kind")
+
 // Candidate is a proposed body for one record's synthesis region.
 type Candidate struct {
 	Path     string // file, relative to the tree root
@@ -67,6 +75,10 @@ type Decision struct {
 	Guarantee string // always Guarantee
 	Result    evidence.Result
 	Evidence  []evidence.Evidence // what this run appended
+	// Checked is set when the first gate starts. A failure with Checked
+	// false was a refusal before checking; with Checked true, checking had
+	// begun (even if it was cancelled before any evidence was written).
+	Checked bool
 }
 
 // Converger runs candidates through gates and the evidence policy.
@@ -104,6 +116,9 @@ func (c Converger) Converge(ctx context.Context, cand Candidate) (Decision, erro
 	}
 	gated := map[evidence.Kind]bool{}
 	for _, g := range c.Gates {
+		if !executable[g.Kind()] {
+			return d, fmt.Errorf("%w: gate %s claims %q", ErrGateKind, g.Name(), g.Kind())
+		}
 		gated[g.Kind()] = true
 	}
 	for _, k := range required {
@@ -165,6 +180,7 @@ func (c Converger) Converge(ctx context.Context, cand Candidate) (Decision, erro
 		by = "graft/converge"
 	}
 	verdicts := map[evidence.Kind]evidence.Verdict{}
+	d.Checked = true
 	for _, g := range c.Gates {
 		v, detail, err := g.Run(ctx, scratch)
 		if err != nil {
@@ -426,8 +442,21 @@ func (c Converger) skip() map[string]bool {
 	if c.Log == nil {
 		return s
 	}
-	rel, err := filepath.Rel(c.Root, c.Log.Path())
-	if err != nil || strings.HasPrefix(rel, "..") {
+	// Resolve both: an absolute root with a relative log path (or the
+	// reverse) must still recognise the log as inside the tree.
+	root, err1 := filepath.Abs(c.Root)
+	logp, err2 := filepath.Abs(c.Log.Path())
+	if err1 != nil || err2 != nil {
+		return s
+	}
+	if r, err := filepath.EvalSymlinks(root); err == nil {
+		root = r
+	}
+	if d, err := filepath.EvalSymlinks(filepath.Dir(logp)); err == nil {
+		logp = filepath.Join(d, filepath.Base(logp))
+	}
+	rel, err := filepath.Rel(root, logp)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return s
 	}
 	rel = filepath.ToSlash(rel)

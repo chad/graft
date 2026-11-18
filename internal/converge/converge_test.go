@@ -595,3 +595,59 @@ func TestPlantedLockSymlinkIsRefused(t *testing.T) {
 		t.Fatal("victim modified")
 	}
 }
+
+// Review on #9: a cancelled run kills the gate's process group, records no
+// verdict, and leaves no scratch tree behind.
+func TestCancelKillsGateAndCleansScratch(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+	c, root := setup(t, CommandGate{Label: "sleepy", Argv: []string{"sh", "-c", "sleep 30 & sleep 30; wait"}, As: evidence.TestRun})
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(300*time.Millisecond, cancel)
+	start := time.Now()
+	d, err := c.Converge(ctx, cand("func F() {}"))
+	if err == nil || d.Applied || len(d.Evidence) != 0 || !d.Checked {
+		t.Fatalf("%+v %v", d, err)
+	}
+	if el := time.Since(start); el > 3*time.Second {
+		t.Fatalf("took %s", el)
+	}
+	entries, _ := os.ReadDir(tmp)
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "graft-converge-") && e.IsDir() {
+			t.Fatalf("scratch left behind: %s", e.Name())
+		}
+	}
+	if read(t, root) != "package app\n" {
+		t.Fatal("tree changed")
+	}
+}
+
+func TestNonExecutableGateKindIsRefused(t *testing.T) {
+	c, _ := setup(t, verdictGate{evidence.HumanSignoff, evidence.Pass})
+	k := cand("func F() {}")
+	k.Tier = "high"
+	d, err := c.Converge(context.Background(), k)
+	if !errors.Is(err, ErrGateKind) || d.Checked {
+		t.Fatalf("err = %v checked=%v (a refusal must not count as checking)", err, d.Checked)
+	}
+}
+
+// Review on #9: an absolute root with a relative log path inside it.
+func TestAbsoluteRootRelativeLogInsideTree(t *testing.T) {
+	root := t.TempDir()
+	os.WriteFile(filepath.Join(root, "app.go"), []byte("package app\n"), 0o644)
+	t.Chdir(root)
+	log, err := evidence.Open(filepath.Join(".graft", "evidence.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.MkdirAll(".graft", 0o755)
+	abs, _ := filepath.Abs(root)
+	c := Converger{Root: abs, Log: log, Gates: []Gate{verdictGate{evidence.TestRun, evidence.Pass}},
+		Policy:  evidence.Policy{"low": {evidence.TestRun}},
+		Records: fakeStore{"prov-1": {RecordID: "prov-1", Version: 2, GenHash: "g2"}}}
+	if d, err := c.Converge(context.Background(), cand("func F() {}")); err != nil || !d.Applied {
+		t.Fatalf("%+v %v", d, err)
+	}
+}
