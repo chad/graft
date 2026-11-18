@@ -16,10 +16,16 @@ go build ./cmd/graft && ./graft version
 `graft.json` sets the file extension, code fence, comment prefix, the files a
 fresh tree starts with, and how the program is built and run. That is how
 [`examples/freeq-lite-py`](examples/freeq-lite-py) generates the same server in
-Python. `--render` (sedum skeletons) is Go-only for now.
+Python. `--render` (sedum skeletons) works for any language whose sedum
+generator package declares a `convergence:` block (`go` and `typescript` do):
+graft knows no language there, it reads stubs, helper signatures, seeds, synth
+file names and extensions from `sedum convergence render`. A skeleton may name
+its generator package (`"generator": "typescript"`); it defaults to the
+profile's name. This needs a sedum that has `sedum convergence`.
 
 Examples: [`examples/freeq-lite`](examples/freeq-lite) (Go: spec, smoke suite,
-held-out oracle, bench) and [`examples/freeq-lite-py`](examples/freeq-lite-py)
-(Python).
+held-out oracle, bench), [`examples/freeq-lite-py`](examples/freeq-lite-py)
+(Python) and [`examples/freeq-lite-ts`](examples/freeq-lite-ts) (TypeScript,
+plain and `--render`).
 
 MIT licensed.

@@ -43,6 +43,6 @@ generation in a disposable machine or container if that matters to you.
 `main.py`. That is a difference in what each arm is given, like the visible
 smoke suite.
 
-**Not yet:** `--render` (sedum skeletons) supports only Go for now, and graft
-refuses it for other languages. Moving the declaration split from `go/ast`
-to the generator is the sedum-side half of M10.
+**`--render`:** there is no Python generator package in sedum yet, so a Python
+skeleton cannot be rendered. `../freeq-lite-ts` shows `--render` for a second
+language.
