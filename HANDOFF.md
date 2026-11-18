@@ -27,3 +27,26 @@ See BRIEF-M10b.md (not committed) and DESIGN-M10b.md (approved; read "Orchestrat
 
 ## Open questions
 - sedum version bump and release: who tags it for graft CI?
+
+
+## Session 2 update (sedum-only scope): sedum WIP is pushed
+Branch `m10b-convergence-contract` in livecodelife/sedum, commit ec6527c. **It does not build yet** (WIP, on purpose).
+
+### Done
+- `internal/genpkg/convergence.go`: `Convergence` struct (yaml shape), per-template allowed-value lists, `checkConvergence` (required templates, compiles against the package engine, rejects unknown values, requires the placeholder `graft: not converged` in `seed_decl`), `ConvergenceInfo`. The placeholder is a core constant (`ConvergencePlaceholder`), not a yaml field.
+
+### Contract design (decided while writing; no conditionals/loops in sedum's grammar)
+Templates are inline yaml strings (block scalars), not files. Core pre-computes values and picks variants in Go:
+- `synth_suffix`, `helper` (stem,name,Name,dir,ext), `param`/`arg`/`spread_prefix`/`spread_arg`, `result.{none,one,many}` (by arity), `call.{func,method}`, `body.{void,value}`, `declare.{func,method}`, `note`, `stub.{func,method}` (values incl. pre-joined `params`, `result`, `body`, `doc`), `import`, `import_use` (Go: keep import only if `<base>.` appears in the declares), `seed_decl`, `seed` (package, imports, decls pre-joined; blank runs collapsed), `package.{entry,entry_dirs,default}` (Go: main for "." and cmd/*, else dir name).
+- The seed returned is exactly what graft passes to `converge.Seed` (body ends with `}\n\n`; so seed template ends `{{decls}}\n\n`). graft keeps wrapping it in markers.
+
+### Next (sedum)
+1. Wire it: add `Convergence *Convergence \`yaml:"convergence"\`` to `manifest` (schema.go) and `Convergence *Convergence` to `Package`; set it in `loadPackage` (load.go) and call `checkConvergence(pkg, r)` beside `checkSyntax`. Fix the odd `optionalConvTemplates` entries (`"note": false` is a no-op; `package.default` is checked twice) and the `== false` style in checkConvergence. Confirm no gen/pkg hash changes (run sedum's tests).
+2. Renderer (new file, e.g. internal/genpkg/convergence_render.go or internal/convergence): input `{files:[{path,package?,imports[],stubs[{name,receiver_name,receiver_type,params[{name,type}],results[],doc}]}]}`; output `{package,synth_suffix,placeholder,files:[{path,synth_path,seed,stubs[{name,helper,stub,declare}]}]}`. Doc = user doc lines + note line, each with the package's comment prefix. synth_path = dir/stem+suffix+ext. Imports sorted. Reproduce internal/recording/recording.go (graft `invocations`, `region`, `paramText`, `resultText`) byte for byte.
+3. CLI `internal/cli/convergence.go`: `sedum convergence render --generators D --package P` (JSON stdin/stdout) and `sedum convergence info`; register in root.go (pattern: cli/render.go).
+4. generators/go: add the `convergence:` block to sedum.yaml. Conformance test: copy graft's `examples/freeq-lite/skeleton.json` and `internal/recording/testdata/golden/{recording.json,seed-*}` (graft commit 9ba3040) into sedum testdata; assert stub code equals the golden invocations' `code` and seed bodies equal the golden files minus the marker lines.
+5. generators/typescript per DESIGN §4 (receiver-first method helpers) + conformance tests; CHANGELOG entry; version bump question below.
+6. Run `go vet`, `gofmt -l .`, `go test -race ./...` in sedum; open the PR to livecodelife/sedum main; mention @chad-bot-phoenix in #phoenix; `complete` the handoff.
+
+### Open
+- sedum release/tag for graft CI (pins v0.12.2 in main_test.go): who tags?
