@@ -9,12 +9,13 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"regexp"
+	"reflect"
 	"sort"
 	"strings"
 
 	"github.com/chad/graft/internal/evidence"
 	"github.com/chad/graft/internal/records"
+	"github.com/chad/graft/internal/render"
 )
 
 // Guarantee is what a convergence decision may claim. It is always "checked":
@@ -95,7 +96,7 @@ func (c Converger) Converge(ctx context.Context, cand Candidate) (Decision, erro
 	if len(c.Gates) == 0 {
 		return d, ErrNoGates
 	}
-	if c.Records == nil {
+	if isNil(c.Records) {
 		return d, ErrNoRecords
 	}
 	if err := c.checkPin(cand); err != nil {
@@ -192,6 +193,19 @@ func (c Converger) Converge(ctx context.Context, cand Candidate) (Decision, erro
 	return d, nil
 }
 
+// isNil also catches a typed nil (a nil *T stored in the interface).
+func isNil(s records.Store) bool {
+	if s == nil {
+		return true
+	}
+	v := reflect.ValueOf(s)
+	switch v.Kind() {
+	case reflect.Pointer, reflect.Map, reflect.Slice, reflect.Func, reflect.Interface, reflect.Chan:
+		return v.IsNil()
+	}
+	return false
+}
+
 // checkPin re-reads the record: the candidate's version and gen_hash must be
 // its current ones. Caller-supplied literals are never trusted.
 func (c Converger) checkPin(cand Candidate) error {
@@ -206,11 +220,16 @@ func (c Converger) checkPin(cand Candidate) error {
 	return nil
 }
 
-// sedumMarker matches a sedum open or close marker line: a comment prefix
-// (punctuation only), then sedum: or /sedum:.
-var sedumMarker = regexp.MustCompile(`(?m)^[ \t]*[^\w\s'"` + "`" + `]+[ \t]*/?sedum:`)
-
-func hasSedumMarker(body string) bool { return sedumMarker.MatchString(body) }
+// hasSedumMarker reports whether any body line is a sedum marker, by the
+// render layer's own rules (one definition of what a marker is).
+func hasSedumMarker(body string) bool {
+	for _, l := range strings.Split(body, "\n") {
+		if render.IsMarkerLine(l) {
+			return true
+		}
+	}
+	return false
+}
 
 // decide combines this run's verdicts with fresh log evidence for the
 // non-executable kinds. Every gate must pass, required or not.
@@ -311,7 +330,12 @@ func (c Converger) apply(cand Candidate, target string, before, next []byte, dig
 	if _, err := c.target(rel); err != nil { // re-check: no symlink appeared in the path
 		return err
 	}
-	if err := c.checkPin(cand); err != nil { // the record must not have moved while gates ran
+	// The record must not have moved while gates ran. Residual window: record
+	// writers (provenance) do not take graft's lock, so a record can still
+	// change between this check and the rename below. The evidence written by
+	// this run stays pinned to the version it checked, and goes stale (§7) the
+	// moment gen_hash moves, so a late change is never silently covered.
+	if err := c.checkPin(cand); err != nil {
 		return err
 	}
 	if d, err := treeDigest(c.Root, skip); err != nil {

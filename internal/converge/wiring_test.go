@@ -12,6 +12,7 @@ import (
 
 	"github.com/chad/graft/internal/evidence"
 	"github.com/chad/graft/internal/records"
+	"github.com/chad/graft/internal/render"
 )
 
 func sedumRegion(record, body string) string {
@@ -197,5 +198,51 @@ func TestSedumMarkerInBodyIsRefused(t *testing.T) {
 	// Prose that merely mentions sedum is fine.
 	if d, err := c.Converge(context.Background(), cand(`var s = "see sedum: docs"`)); err != nil || !d.Applied {
 		t.Fatalf("%+v %v", d, err)
+	}
+}
+
+func TestOverlapsBoundaries(t *testing.T) {
+	cases := []struct {
+		a1, a2, b1, b2 int
+		want           bool
+	}{
+		{1, 3, 4, 6, false}, // adjacent below
+		{4, 6, 1, 3, false}, // adjacent above
+		{1, 4, 4, 6, true},  // shared last/first line
+		{4, 6, 1, 4, true},  // shared first/last line
+		{2, 3, 1, 6, true},  // nested
+		{1, 6, 2, 3, true},  // enclosing
+	}
+	for _, c := range cases {
+		if got := overlaps(c.a1, c.a2, c.b1, c.b2); got != c.want {
+			t.Errorf("overlaps(%d,%d,%d,%d) = %v", c.a1, c.a2, c.b1, c.b2, got)
+		}
+	}
+}
+
+func TestBodyMarkerCheckMatchesRenderRules(t *testing.T) {
+	for _, l := range []string{"<!-- sedum:x {} -->", ";; /sedum:x", "-- sedum:x"} {
+		if !hasSedumMarker(l) || !render.IsMarkerLine(l) {
+			t.Errorf("%q not recognised", l)
+		}
+	}
+	for _, l := range []string{"see `sedum:x`", "sedum:x", "// note about sedum: later"} {
+		if hasSedumMarker(l) != render.IsMarkerLine(l) {
+			t.Errorf("%q: converge and render disagree", l)
+		}
+	}
+}
+
+type nilStore struct{}
+
+func (*nilStore) Current(string) (records.Pin, error)  { panic("called on nil") }
+func (*nilStore) Snapshot(string, int) ([]byte, error) { panic("called on nil") }
+
+func TestTypedNilRecordsIsErrNoRecords(t *testing.T) {
+	c, _ := setup(t, verdictGate{evidence.TestRun, evidence.Pass})
+	var s *nilStore
+	c.Records = s
+	if _, err := c.Converge(context.Background(), cand("func F() {}")); !errors.Is(err, ErrNoRecords) {
+		t.Fatalf("err = %v", err)
 	}
 }

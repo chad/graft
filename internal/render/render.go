@@ -238,6 +238,20 @@ func parseFile(rel string, data []byte) ([]Region, error) {
 	return out, nil
 }
 
+// IsMarkerLine reports whether line is a sedum open or close marker by the
+// same rules ParseFile uses (anchor markers included, since sedum reads them).
+func IsMarkerLine(line string) bool {
+	line = strings.TrimRight(line, "\r\n")
+	if _, ok := parseClose(line); ok {
+		return true
+	}
+	if _, ok := afterPrefix(line, "sedum:"); ok {
+		return true
+	}
+	_, ok := afterPrefix(line, " sedum:")
+	return ok
+}
+
 // ParseFile returns the sedum regions in one file's bytes using the same
 // per-file marker rules as ReadMarkers (rel decides Markdown fence handling).
 // Unlike ReadMarkers it does not skip anything by path or content: files under

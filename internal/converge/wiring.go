@@ -43,7 +43,7 @@ func guardSedum(cand Candidate, before, next []byte) error {
 		}
 		b, e := r.begin+1, r.end+1
 		for _, s := range was {
-			if b <= s.End && s.Start <= e {
+			if overlaps(b, e, s.Start, s.End) {
 				return fmt.Errorf("%w: %s lines %d-%d overlap sedum region %d-%d (record %s)",
 					ErrSedumRegion, cand.Path, b, e, s.Start, s.End, s.Owner.RecordID)
 			}
@@ -66,3 +66,6 @@ func guardSedum(cand Candidate, before, next []byte) error {
 	}
 	return nil
 }
+
+// overlaps reports whether closed line ranges [a1,a2] and [b1,b2] share a line.
+func overlaps(a1, a2, b1, b2 int) bool { return a1 <= b2 && b1 <= a2 }
