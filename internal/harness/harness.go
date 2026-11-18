@@ -32,6 +32,8 @@ import (
 	"github.com/chad/graft/internal/evidence"
 	"github.com/chad/graft/internal/model"
 	"github.com/chad/graft/internal/pipeline"
+	"github.com/chad/graft/internal/recording"
+	"github.com/chad/graft/internal/render"
 )
 
 // Case is what every arm is asked to build.
@@ -47,6 +49,8 @@ type Case struct {
 	// and score with OracleArgs appended (e.g. -v2).
 	SpecV2     string
 	OracleArgs []string
+	// graft-render arm: the skeletons for Spec and SpecV2.
+	Skeleton, SkeletonV2 *recording.Skeleton
 }
 
 // Config is one harness run.
@@ -65,6 +69,9 @@ type Config struct {
 	// Transcripts, if set, keeps every prompt and answer under
 	// <Transcripts>/<case>/<arm>/<n>/ so any sample can be audited.
 	Transcripts string
+	// graft-render arm: the sedum binary and its generators directory.
+	Sedum      render.Sedum
+	Generators string
 }
 
 // recorder counts calls and optionally writes each prompt and answer to dir.
@@ -152,6 +159,8 @@ func Sample(ctx context.Context, cfg Config, arm bench.Arm) bench.Sample {
 	switch arm {
 	case bench.ArmGraft:
 		reason = cfg.graftArm(ctx, dir, root)
+	case bench.ArmGraftRender:
+		reason = cfg.graftStep(ctx, filepath.Join(dir, "repo"), root, cfg.Case.Spec, cfg.Case.Skeleton)
 	case bench.ArmBaseline:
 		reason = cfg.oneCall(ctx, root, cfg.baselinePrompt())
 	case bench.ArmIntent:
@@ -176,7 +185,7 @@ func Sample(ctx context.Context, cfg Config, arm bench.Arm) bench.Sample {
 }
 
 func (cfg Config) graftArm(ctx context.Context, dir, root string) string {
-	return cfg.graftStep(ctx, filepath.Join(dir, "repo"), root, cfg.Case.Spec)
+	return cfg.graftStep(ctx, filepath.Join(dir, "repo"), root, cfg.Case.Spec, nil)
 }
 
 func (cfg Config) baselinePrompt() string {
@@ -321,11 +330,15 @@ func EvolveSample(ctx context.Context, cfg Config, arm bench.Arm) bench.Sample {
 	c := cfg
 	c.Model = cm
 	var reason string
-	var preserved, changed *int
+	var preserved, changed, synthChanged *int
 	switch arm {
-	case bench.ArmGraft:
+	case bench.ArmGraft, bench.ArmGraftRender:
 		repo := filepath.Join(dir, "repo")
-		if reason = c.graftStep(ctx, repo, root, c.Case.Spec); reason != "" {
+		skel1, skel2 := (*recording.Skeleton)(nil), (*recording.Skeleton)(nil)
+		if arm == bench.ArmGraftRender {
+			skel1, skel2 = c.Case.Skeleton, c.Case.SkeletonV2
+		}
+		if reason = c.graftStep(ctx, repo, root, c.Case.Spec, skel1); reason != "" {
 			break
 		}
 		before, err := snapshot(root)
@@ -334,7 +347,7 @@ func EvolveSample(ctx context.Context, cfg Config, arm bench.Arm) bench.Sample {
 			break
 		}
 		cm.calls = 0
-		if reason = c.graftStep(ctx, repo, root, c.Case.SpecV2); reason != "" {
+		if reason = c.graftStep(ctx, repo, root, c.Case.SpecV2, skel2); reason != "" {
 			break
 		}
 		after, _ := snapshot(root)
@@ -346,6 +359,10 @@ func EvolveSample(ctx context.Context, cfg Config, arm bench.Arm) bench.Sample {
 		}
 		d := diffLines(before, after)
 		preserved, changed = &n, &d
+		if arm == bench.ArmGraftRender {
+			sd := diffLines(filterSynth(before), filterSynth(after))
+			synthChanged = &sd
+		}
 	case bench.ArmBaseline:
 		if reason = c.oneCall(ctx, root, c.baselinePrompt()); reason != "" {
 			break
@@ -358,7 +375,7 @@ func EvolveSample(ctx context.Context, cfg Config, arm bench.Arm) bench.Sample {
 			changed = &d
 		}
 	default:
-		return bench.Sample{Outcome: bench.Unreachable, Reason: "evolve cases run the graft and baseline arms"}
+		return bench.Sample{Outcome: bench.Unreachable, Reason: "evolve cases run the graft, graft-render and baseline arms"}
 	}
 	calls := cm.calls
 	if reason != "" {
@@ -374,11 +391,16 @@ func EvolveSample(ctx context.Context, cfg Config, arm bench.Arm) bench.Sample {
 		return bench.Sample{Outcome: bench.Broke, Reason: "does not build: " + tail(string(out), 400), ChangeCalls: &calls, Preserved: preserved, DiffLines: changed}
 	}
 	s := cfg.score(ctx, bin)
-	s.ChangeCalls, s.Preserved, s.DiffLines = &calls, preserved, changed
+	s.ChangeCalls, s.Preserved, s.DiffLines, s.SynthDiffLines = &calls, preserved, changed, synthChanged
 	return s
 }
 
-func (cfg Config) graftStep(ctx context.Context, repo, root, spec string) string {
+// graftStep runs the pipeline once. A non-nil skeleton is the graft-render
+// arm: sedum renders the skeleton and the model converges only Body helpers.
+func (cfg Config) graftStep(ctx context.Context, repo, root, spec string, skel *recording.Skeleton) string {
+	if skel != nil && (cfg.Sedum == nil || cfg.Generators == "") {
+		return infraPrefix + "graft-render needs sedum and its generators"
+	}
 	acc, err := pipeline.Accept(repo, drafter.Drafts(spec), "graft bench", time.Now())
 	if err != nil {
 		return "accept: " + err.Error()
@@ -394,6 +416,7 @@ func (cfg Config) graftStep(ctx context.Context, repo, root, spec string) string
 	outs, err := pipeline.Run(ctx, pipeline.Config{
 		Repo: repo, Root: root, Module: cfg.Case.Module, Spec: spec, Conventions: cfg.Case.Conventions,
 		Tier: cfg.Tier, Attempts: cfg.Attempts, Model: cfg.Model, Gates: cfg.Gates, Policy: cfg.Policy, Log: log,
+		Skeleton: skel, Sedum: cfg.Sedum, Generators: cfg.Generators,
 	}, acc)
 	_ = outs
 	if err != nil {
@@ -406,6 +429,17 @@ func (cfg Config) evolvePrompt(current string) string {
 	return "Here is a Go program and its revised spec. Update the program so it satisfies the revised spec.\n\n## Revised spec\n\n" +
 		strings.TrimSpace(cfg.Case.SpecV2) + "\n\n## How it is run\n\n" + strings.TrimSpace(cfg.Case.Contract) +
 		"\n\n## Current main.go\n\n```go\n" + current + "```\n\nAnswer with the complete updated `main.go` in a single ```go block.\n"
+}
+
+// filterSynth keeps only the model-written *_synth.go files of a snapshot.
+func filterSynth(m map[string]string) map[string]string {
+	out := map[string]string{}
+	for f, src := range m {
+		if recording.IsSynthPath(f) {
+			out[f] = src
+		}
+	}
+	return out
 }
 
 // snapshot reads every .go file in root.

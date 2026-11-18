@@ -6,5 +6,12 @@
   "conventions": "conventions.md",
   "config": "graft.json",
   "oracle": "oracle",
-  "evolve": {"spec": "spec-v2/freeq-lite.md", "oracle_args": ["-v2"]}
+  "evolve": {
+    "spec": "spec-v2/freeq-lite.md",
+    "oracle_args": [
+      "-v2"
+    ],
+    "skeleton": "skeleton-v2.json"
+  },
+  "skeleton": "skeleton.json"
 }

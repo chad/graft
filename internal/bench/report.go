@@ -89,14 +89,16 @@ func comparisons(parts []Partition) []string {
 		by[c][p.Arm] = p
 	}
 	var out []string
+	pairs := [][2]Arm{
+		{ArmGraft, ArmBaseline}, {ArmGraft, ArmIntent},
+		{ArmGraftRender, ArmBaseline}, {ArmGraftRender, ArmIntent}, {ArmGraftRender, ArmGraft},
+	}
 	for _, c := range order {
-		g, ok := by[c][ArmGraft]
-		if !ok {
-			continue
-		}
-		for _, ctl := range []Arm{ArmBaseline, ArmIntent} {
-			if p, ok := by[c][ctl]; ok {
-				out = append(out, Compare("graft", g.Works, string(ctl), p.Works))
+		for _, pr := range pairs {
+			a, okA := by[c][pr[0]]
+			b, okB := by[c][pr[1]]
+			if okA && okB {
+				out = append(out, Compare(string(pr[0]), a.Works, string(pr[1]), b.Works))
 			}
 		}
 	}
@@ -111,8 +113,11 @@ func changeCosts(recs []Record, excluded map[int]string) []string {
 		if _, ex := excluded[i]; ex {
 			continue
 		}
-		var calls, kept, bytes []string
+		var calls, kept, bytes, synth []string
 		for _, s := range r.Samples {
+			if s.SynthDiffLines != nil {
+				synth = append(synth, fmt.Sprint(*s.SynthDiffLines))
+			}
 			if s.DiffLines != nil {
 				bytes = append(bytes, fmt.Sprint(*s.DiffLines))
 			}
@@ -129,6 +134,9 @@ func changeCosts(recs []Record, excluded map[int]string) []string {
 		line := fmt.Sprintf("%s @%.12s: model calls for the change [%s]", r.Arm, r.Commit, strings.Join(calls, " "))
 		if len(bytes) > 0 {
 			line += fmt.Sprintf("; lines changed (added+removed, same measure for every arm) [%s]", strings.Join(bytes, " "))
+		}
+		if len(synth) > 0 {
+			line += fmt.Sprintf("; of which model-written (*_synth.go) [%s]", strings.Join(synth, " "))
 		}
 		if len(kept) > 0 {
 			line += fmt.Sprintf("; pre-change files left byte-identical [%s]", strings.Join(kept, " "))

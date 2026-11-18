@@ -24,6 +24,9 @@ const (
 	ArmGraft    Arm = "graft"    // the full pipeline
 	ArmBaseline Arm = "baseline" // same intent, same model, one call, no pipeline
 	ArmIntent   Arm = "intent"   // one sentence and the runtime contract
+	// ArmGraftRender is the pipeline with sedum rendering the skeleton: the
+	// model writes only the Body helpers in *_synth.go files.
+	ArmGraftRender Arm = "graft-render"
 )
 
 // Resolution is the question a run's sample size answers.
@@ -106,6 +109,9 @@ type Sample struct {
 	// DiffLines is the size of the change, measured identically for every
 	// arm: lines added plus removed across the tree's .go files.
 	DiffLines *int `json:"diff_lines,omitempty"`
+	// SynthDiffLines is the part of DiffLines in model-written *_synth.go
+	// files (graft-render only); the rest was rendered by sedum.
+	SynthDiffLines *int `json:"synth_diff_lines,omitempty"`
 }
 
 // Attribution says which layer(s) one failed sample's failure came from.
@@ -189,7 +195,7 @@ func (s Store) Append(r Record) (Record, error) {
 		return r, err
 	}
 	switch r.Arm {
-	case ArmGraft, ArmBaseline, ArmIntent:
+	case ArmGraft, ArmBaseline, ArmIntent, ArmGraftRender:
 	default:
 		return r, fmt.Errorf("bench: unknown arm %q", r.Arm)
 	}

@@ -418,3 +418,23 @@ func TestLoadedAttributionFromAnotherSchemaIsIgnored(t *testing.T) {
 		t.Fatalf("%+v", p)
 	}
 }
+
+func TestGraftRenderArmIsComparedWithEachOther(t *testing.T) {
+	recs := []Record{
+		rec(ArmGraft, "c1", Coarse, five(Works)...),
+		rec(ArmGraftRender, "c1", Coarse, five(Works)...),
+		rec(ArmBaseline, "c1", Coarse, five(Works)...),
+	}
+	var b bytes.Buffer
+	if err := Report(&b, "todo", recs, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"graft-render 5/5", "from graft 5/5", "from baseline 5/5"} {
+		if !strings.Contains(b.String(), want) {
+			t.Errorf("report lacks %q:\n%s", want, b.String())
+		}
+	}
+	if _, err := (Store{Dir: t.TempDir()}).Append(rec(ArmGraftRender, "c1", Coarse, five(Works)...)); err != nil {
+		t.Fatalf("graft-render arm refused: %v", err)
+	}
+}
