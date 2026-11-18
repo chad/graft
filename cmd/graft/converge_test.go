@@ -221,3 +221,38 @@ func TestGateArgsRelativeToConfig(t *testing.T) {
 		t.Fatalf("%v", argv)
 	}
 }
+
+// Review on #19, finding 3 and nits: the run CLI loads the skeleton strictly.
+func TestRunRenderSkeletonStrictAndFlagChecks(t *testing.T) {
+	d := t.TempDir()
+	w := func(n, s string) string {
+		p := filepath.Join(d, n)
+		os.WriteFile(p, []byte(s), 0o644)
+		return p
+	}
+	cfg := w("graft.json", `{"policy":{"low":["test_run"]},"gates":[],"model":{"argv":["true"],"timeout_sec":5},"tier":"low","conventions":"conv.md"}`)
+	w("conv.md", "c\n")
+	spec := w("spec.md", "# App\n\n## Sec\n\nThe system shall do a thing.\n")
+	base := []string{"run", "--config", cfg, "--spec", spec, "--repo", filepath.Join(d, "repo"), "--root", filepath.Join(d, "app")}
+	for name, tc := range map[string]struct{ skel, want string }{
+		"misspelled key": {`{"files":[],"bogus":1}`, "unknown field"},
+		"empty":          {`{"files":[]}`, "no files"},
+	} {
+		sk := w("skeleton.json", tc.skel)
+		code, _, errs := runWith("", append(append([]string{}, base...), "--accept", "--render", "--skeleton", sk))
+		if code != 2 || !strings.Contains(errs, tc.want) {
+			t.Errorf("%s: exit %d, stderr %q, want %q", name, code, errs, tc.want)
+		}
+	}
+	code, _, errs := runWith("", append(append([]string{}, base...), "--skeleton", w("s2.json", "{}")))
+	if code != 2 || !strings.Contains(errs, "without --render") {
+		t.Errorf("--skeleton alone: exit %d, %q", code, errs)
+	}
+	// "skeleton" in a converge config is refused, not ignored.
+	root, _, logp := convergeSetup(t, "true")
+	cc := w("conv.json", `{"policy":{"low":["test_run"]},"gates":[],"skeleton":"x.json"}`)
+	code, _, errs = runWith("func F() {}\n", convergeArgs(root, cc, logp, "-"))
+	if code != 2 || !strings.Contains(errs, "skeleton") {
+		t.Errorf("converge with skeleton: exit %d, %q", code, errs)
+	}
+}

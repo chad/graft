@@ -189,6 +189,10 @@ func convergeCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "graft: %v\n", err)
 		return 2
 	}
+	if cfg.Skeleton != "" {
+		fmt.Fprintln(stderr, "graft: config \"skeleton\" only applies to `graft run --render`; remove it for converge")
+		return 2
+	}
 	store, err := records.OpenDir(*recDir)
 	if err != nil {
 		fmt.Fprintf(stderr, "graft: %v\n", err)

@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -54,6 +53,10 @@ func runCmd(args []string, stdout, stderr io.Writer) int {
 	}
 	if *specPath == "" || *repo == "" || *root == "" || fs.NArg() != 0 {
 		fmt.Fprint(stderr, runUsage)
+		return 2
+	}
+	if !*renderOn && *skelPath != "" {
+		fmt.Fprintln(stderr, "graft: --skeleton has no effect without --render")
 		return 2
 	}
 	cfg, gates, err := loadConvergeConfig(*cfgPath)
@@ -109,8 +112,8 @@ func runCmd(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "graft: skeleton: %v\n", err)
 			return 2
 		}
-		var sk recording.Skeleton
-		if err := json.Unmarshal(sb, &sk); err != nil {
+		sk, err := recording.LoadSkeleton(sb)
+		if err != nil {
 			fmt.Fprintf(stderr, "graft: skeleton %s: %v\n", sp, err)
 			return 2
 		}
