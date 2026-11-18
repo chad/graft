@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/chad/graft/internal/converge"
 	"github.com/chad/graft/internal/recording"
 	"github.com/chad/graft/internal/records"
 	"github.com/chad/graft/internal/render"
@@ -66,13 +67,13 @@ func (cfg Config) renderTree(ctx context.Context, store records.Store, acc []Acc
 		return nil, nil, fmt.Errorf("pipeline: --render: grow --check after render: %w", err)
 	}
 	by := map[string]recording.Region{}
-	pending := map[string]bool{}
 	for _, r := range planned.Regions {
+		if !recording.IsSynthPath(r.Path) {
+			return nil, nil, fmt.Errorf("pipeline: --render: region path %s is not a _synth.go file", r.Path)
+		}
 		by[r.Owner.RecordID] = r
 		p := filepath.Join(cfg.Root, filepath.FromSlash(r.Path))
-		if have, err := os.ReadFile(p); err == nil {
-			// An untouched seed is still a placeholder: it must be converged.
-			pending[r.Owner.RecordID] = bytes.Equal(have, r.Seed)
+		if _, err := os.Stat(p); err == nil {
 			continue
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return nil, nil, err
@@ -83,14 +84,35 @@ func (cfg Config) renderTree(ctx context.Context, store records.Store, acc []Acc
 		if err := os.WriteFile(p, r.Seed, 0o644); err != nil {
 			return nil, nil, err
 		}
-		pending[r.Owner.RecordID] = true
+	}
+	// Pending is decided from the region body, never from the whole file: a
+	// seed written under another tier or pin differs in its marker only.
+	regions, err := converge.ReadRegions(cfg.Root)
+	if err != nil {
+		return nil, nil, err
+	}
+	pending := map[string]bool{}
+	for _, r := range planned.Regions {
+		pending[r.Owner.RecordID] = true // no region found: treat as unconverged
+		for _, g := range regions {
+			if g.Path == r.Path && g.Owner.Record == r.Owner.RecordID {
+				body, err := converge.RegionBody(cfg.Root, g)
+				if err != nil {
+					return nil, nil, err
+				}
+				pending[r.Owner.RecordID] = hasPlaceholder(body)
+			}
+		}
 	}
 	return by, pending, nil
 }
 
+// hasPlaceholder reports whether a body still holds a seeded stub.
+func hasPlaceholder(body string) bool { return strings.Contains(body, recording.Placeholder) }
+
 // sedumEnv gives sedum what it expects beside the tree: its generators and the
 // records directory. Both are removed again, so the tree holds only code (the
-// generators are not Go packages and would break `go build ./...`).
+// generators have their own go.mod and stay out of the committed tree).
 func (cfg Config) sedumEnv() (func(), error) {
 	root := cfg.Root
 	gen := filepath.Join(root, "generators")
@@ -100,8 +122,17 @@ func (cfg Config) sedumEnv() (func(), error) {
 			return nil, fmt.Errorf("pipeline: --render: %s already exists in the tree", filepath.Base(p))
 		}
 	}
-	if out, err := exec.Command("cp", "-r", cfg.Generators, gen).CombinedOutput(); err != nil {
+	// Copy under a temporary name and rename into place, so a failed or killed
+	// copy never leaves a partial generators/ that blocks every later run.
+	part := gen + ".partial"
+	os.RemoveAll(part)
+	if out, err := exec.Command("cp", "-r", cfg.Generators, part).CombinedOutput(); err != nil {
+		os.RemoveAll(part)
 		return nil, fmt.Errorf("pipeline: copy generators: %v: %s", err, strings.TrimSpace(string(out)))
+	}
+	if err := os.Rename(part, gen); err != nil {
+		os.RemoveAll(part)
+		return nil, err
 	}
 	abs, err := filepath.Abs(filepath.Join(cfg.Repo, "provenance"))
 	if err != nil {

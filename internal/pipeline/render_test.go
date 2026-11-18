@@ -49,7 +49,9 @@ func (m *echoModel) Complete(_ context.Context, prompt string) (string, error) {
 			keep = append(keep, l)
 		}
 	}
-	return "```go\n" + strings.Join(keep, "\n") + "\n// converged\n```\n", nil
+	// The placeholder itself is refused; a different panic stands in for a real body.
+	code := strings.ReplaceAll(strings.Join(keep, "\n"), recording.Placeholder, "echo body")
+	return "```go\n" + code + "\n// converged\n```\n", nil
 }
 
 func renderSetup(t *testing.T, skeleton, specFile string) (Config, *echoModel, string) {
@@ -159,8 +161,10 @@ func TestRunRenderFakeModel(t *testing.T) {
 			t.Fatalf("missing %s", f)
 		}
 	}
-	if _, ok := files["generators/go"]; ok {
-		t.Fatal("generators left in the tree")
+	for _, n := range []string{"generators", "provenance", "generators.partial"} {
+		if _, err := os.Lstat(filepath.Join(cfg.Root, n)); err == nil {
+			t.Fatalf("%s left in the tree", n)
+		}
 	}
 	if b, err := exec.Command("go", "build", "-C", cfg.Root, "./...").CombinedOutput(); err != nil {
 		t.Fatalf("go build: %v\n%s", err, b)
@@ -251,4 +255,135 @@ func TestRunRenderRefusesHandEditOfSedumFile(t *testing.T) {
 	if got, _ := os.ReadFile(p); string(got) != edited {
 		t.Fatal("hand edit not preserved")
 	}
+}
+
+// failModel is a model command that always fails (infrastructure error).
+type failModel struct{ calls int }
+
+func (m *failModel) Complete(context.Context, string) (string, error) {
+	m.calls++
+	return "", errors.New("down")
+}
+
+// placeholderModel answers with the seeded placeholder, as if it did nothing.
+type placeholderModel struct{ calls int }
+
+func (m *placeholderModel) Complete(_ context.Context, p string) (string, error) {
+	m.calls++
+	return "```go\npackage main\n\nfunc x() { panic(\"" + recording.Placeholder + "\") }\n```\n", nil
+}
+
+func synthFiles(t *testing.T, root string) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	for k, v := range snapshot(t, root) {
+		if recording.IsSynthPath(k) {
+			out[k] = v
+		}
+	}
+	return out
+}
+
+// Review on #19, finding 1: seeds left by a failed run must stay pending when
+// the tier changes (the seed marker differs, the body does not).
+func TestRunRenderTierChangeKeepsSeedsPending(t *testing.T) {
+	cfg, _, spec := renderSetup(t, "skeleton.json", "spec/freeq-lite.md")
+	acc := accept(t, cfg, spec)
+	down := &failModel{}
+	cfg.Model = down
+	if _, err := Run(context.Background(), cfg, acc); !errors.Is(err, ErrModel) {
+		t.Fatalf("run 1: %v, want ErrModel", err)
+	}
+	seeds := synthFiles(t, cfg.Root)
+	if len(seeds) == 0 {
+		t.Fatal("no seeds left after the failed run")
+	}
+	cfg2 := cfg
+	cfg2.Tier = "medium"
+	cfg2.Policy = evidence.Policy{"low": {evidence.StaticAnalysis}, "medium": {evidence.StaticAnalysis}}
+	// Still down: the seeds must not be accepted as converged.
+	down2 := &failModel{}
+	cfg2.Model = down2
+	if _, err := Run(context.Background(), cfg2, acc); !errors.Is(err, ErrModel) {
+		t.Fatalf("run 2 with the model down: %v, want ErrModel (seed accepted without a call?)", err)
+	}
+	if down2.calls == 0 {
+		t.Fatal("run 2 made no model call")
+	}
+	// Model back: every region is really converged.
+	m := &echoModel{root: cfg.Root}
+	cfg2.Model = m
+	out, err := Run(context.Background(), cfg2, acc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, o := range out {
+		if !o.Applied {
+			t.Fatalf("not applied: %+v", o)
+		}
+	}
+	if len(m.prompts) == 0 {
+		t.Fatal("no model calls after the tier change")
+	}
+	for k, v := range synthFiles(t, cfg.Root) {
+		if strings.Contains(v, recording.Placeholder) {
+			t.Fatalf("%s still holds the placeholder", k)
+		}
+	}
+}
+
+// A model that answers with the placeholder never converges; nothing is written.
+func TestRunRenderRefusesPlaceholderAnswer(t *testing.T) {
+	cfg, _, spec := renderSetup(t, "skeleton.json", "spec/freeq-lite.md")
+	acc := accept(t, cfg, spec)
+	pm := &placeholderModel{}
+	cfg.Model = pm
+	out, err := Run(context.Background(), cfg, acc)
+	if err == nil || !strings.Contains(err.Error(), "did not converge") {
+		t.Fatalf("err = %v, want did-not-converge", err)
+	}
+	if pm.calls != 3 {
+		t.Fatalf("calls = %d, want 3 attempts", pm.calls)
+	}
+	if len(out) == 0 || out[len(out)-1].Applied {
+		t.Fatalf("outcome %+v", out)
+	}
+	if n := len(evidenceLines(t, cfg)); n != 0 {
+		t.Fatalf("%d evidence entries written for a placeholder", n)
+	}
+}
+
+func evidenceLines(t *testing.T, cfg Config) []string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(cfg.Repo, ".graft", "evidence.jsonl"))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Fields(string(b))
+}
+
+// Review on #19, finding 5: a failed generators copy leaves nothing behind.
+func TestSedumEnvFailedCopyLeavesNoPartial(t *testing.T) {
+	cfg := Config{Root: t.TempDir(), Repo: t.TempDir(), Generators: filepath.Join(t.TempDir(), "missing")}
+	if _, err := cfg.sedumEnv(); err == nil {
+		t.Fatal("want an error for a missing generators dir")
+	}
+	for _, n := range []string{"generators", "generators.partial", "provenance"} {
+		if _, err := os.Lstat(filepath.Join(cfg.Root, n)); err == nil {
+			t.Fatalf("%s left behind", n)
+		}
+	}
+	// A stale partial from a killed run does not block the next one.
+	gens := t.TempDir()
+	os.WriteFile(filepath.Join(gens, "x"), []byte("x"), 0o644)
+	cfg.Generators = gens
+	os.MkdirAll(filepath.Join(cfg.Root, "generators.partial"), 0o755)
+	cleanup, err := cfg.sedumEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanup()
 }

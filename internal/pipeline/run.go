@@ -142,7 +142,15 @@ func Run(ctx context.Context, cfg Config, acc []Accepted) ([]Outcome, error) {
 				}
 				return out, fmt.Errorf("%w: %v", ErrModel, err)
 			}
-			cand, err := converge.NewCandidate(store, a.ID, file, cfg.Tier, model.ExtractCode(resp, "go"))
+			code := model.ExtractCode(resp, "go")
+			if cfg.Skeleton != nil && hasPlaceholder(code) {
+				// The seed is a placeholder, not an answer: refuse before any check runs.
+				o.LastFailure = "the answer still contains the placeholder panic (" + recording.Placeholder + ")"
+				feedback = "Your previous answer was refused before checking: " + o.LastFailure + "; write the real bodies"
+				cfg.say("  not applied: %s\n", o.LastFailure)
+				continue
+			}
+			cand, err := converge.NewCandidate(store, a.ID, file, cfg.Tier, code)
 			if err != nil {
 				return out, err
 			}
