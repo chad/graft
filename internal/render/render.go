@@ -89,7 +89,8 @@ func parseOpen(line string) (key string, a attrs, verifiable, ok bool, err error
 	}
 	label, encoded, _ := strings.Cut(rest, " ")
 	label = strings.TrimSpace(label)
-	if label == "" || label == "anchor" || strings.HasPrefix(label, "/") {
+	action, _, _ := strings.Cut(label, ":")
+	if action == "" || action == "anchor" || strings.HasPrefix(label, "/") {
 		return "", a, false, false, nil
 	}
 	encoded = strings.TrimSpace(encoded)
@@ -143,8 +144,20 @@ func hashBody(b string) string {
 // action, because its extent is unknown.
 func parseFile(rel string, data []byte) ([]Region, error) {
 	lines := strings.SplitAfter(string(data), "\n")
+	markdown := strings.HasSuffix(rel, ".md") || strings.HasSuffix(rel, ".markdown")
+	inFence := false
 	var out []Region
 	for i := 0; i < len(lines); i++ {
+		if markdown {
+			// Fenced code blocks in docs show example markers; they are not regions.
+			if strings.HasPrefix(strings.TrimSpace(lines[i]), "```") {
+				inFence = !inFence
+				continue
+			}
+			if inFence {
+				continue
+			}
+		}
 		key, a, verifiable, ok, err := parseOpen(strings.TrimRight(lines[i], "\r\n"))
 		if err != nil {
 			return nil, fmt.Errorf("file %s: %w", rel, err)
@@ -202,6 +215,11 @@ func ReadMarkers(root string) ([]Region, error) {
 		data, err := os.ReadFile(p)
 		if err != nil {
 			return err
+		}
+		if ext := filepath.Ext(p); ext == ".yml" || ext == ".yaml" {
+			// Provenance records and configs quote example markers in prose;
+			// they are never render targets.
+			return nil
 		}
 		if !bytes.Contains(data, []byte("sedum:")) || bytes.IndexByte(data, 0) >= 0 {
 			return nil

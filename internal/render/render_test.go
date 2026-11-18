@@ -136,3 +136,91 @@ func TestExecAgainstRealSedum(t *testing.T) {
 		t.Fatal("expected error for missing recording")
 	}
 }
+
+func readOne(t *testing.T, content string) Region {
+	t.Helper()
+	root := t.TempDir()
+	write(t, root, "a.go", content)
+	rs, err := ReadMarkers(root)
+	if err != nil || len(rs) != 1 {
+		t.Fatalf("rs=%v err=%v", rs, err)
+	}
+	return rs[0]
+}
+
+func TestUnverifiableMarkersAreNotEdited(t *testing.T) {
+	cases := map[string]string{
+		"v1":      "// sedum:setFunction {\"tier\":\"owned\",\"record\":\"r\",\"kwargs\":{\"a\":1}}\nbody\n// /sedum:setFunction\n",
+		"no-body": "// sedum:setFunction {\"v\":2,\"tier\":\"owned\",\"record\":\"r\",\"gen\":\"sha256:a\"}\nbody\n// /sedum:setFunction\n",
+		"unknown": "// sedum:setFunction {\"v\":3,\"tier\":\"owned\",\"record\":\"r\",\"body\":\"sha256:zz\"}\nbody\n// /sedum:setFunction\n",
+	}
+	for name, content := range cases {
+		t.Run(name, func(t *testing.T) {
+			r := readOne(t, content)
+			if !r.Unverifiable() || r.Edited() {
+				t.Fatalf("want unverifiable, not edited: %+v", r)
+			}
+			root := t.TempDir()
+			write(t, root, "a.go", content)
+			f := &fakeSedum{}
+			if err := Render(context.Background(), f, root, "r.json"); err != nil || f.executed != 1 {
+				t.Fatalf("err=%v executed=%d", err, f.executed)
+			}
+		})
+	}
+}
+
+func TestVerifiedRegionIsNotUnverifiable(t *testing.T) {
+	r := readOne(t, region("owned", "r", "setFunction", "x\n", ""))
+	if r.Unverifiable() {
+		t.Fatal("v2 region with body hash must be verifiable")
+	}
+}
+
+func TestReadMarkersErrorsOnUnterminatedRegion(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, "a.go", "// sedum:setFunction {\"v\":2,\"body\":\"sha256:x\"}\nbody\n")
+	if _, err := ReadMarkers(root); err == nil || !strings.Contains(err.Error(), "never closed") {
+		t.Fatalf("err = %v", err)
+	}
+	f := &fakeSedum{}
+	if err := Render(context.Background(), f, root, "r.json"); err == nil || f.executed != 0 {
+		t.Fatalf("Render must fail without calling sedum: err=%v executed=%d", err, f.executed)
+	}
+}
+
+func TestReadMarkersErrorsOnMismatchedClose(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, "a.go", "// sedum:setFunction {\"v\":2,\"body\":\"sha256:x\"}\nbody\n// /sedum:other\n")
+	if _, err := ReadMarkers(root); err == nil || !strings.Contains(err.Error(), "closed by marker") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestProseMentioningSedumIsNotAMarker(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, "README.md", "Use `// sedum:setFunction {\"v\":2}` to mark.\nSee sedum:setFunction in the docs.\nWe say sedum: hello\n")
+	rs, err := ReadMarkers(root)
+	if err != nil || len(rs) != 0 {
+		t.Fatalf("rs=%v err=%v", rs, err)
+	}
+}
+
+func TestCRLFBodyIsNormalised(t *testing.T) {
+	// The marker hash was computed over LF text; the checkout has CRLF.
+	content := region("owned", "r", "setFunction", "line1\nline2\n", "")
+	content = strings.ReplaceAll(content, "\n", "\r\n")
+	r := readOne(t, content)
+	if r.Edited() {
+		t.Fatalf("CRLF checkout read as hand edit: %+v", r)
+	}
+}
+
+func TestMarkdownFencedExampleIsNotAMarker(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, "DOC.md", "Example:\n\n```\n// sedum:setFunction {\"v\":2,\"body\":\"sha256:x\"}\nbody\n```\n")
+	rs, err := ReadMarkers(root)
+	if err != nil || len(rs) != 0 {
+		t.Fatalf("rs=%v err=%v", rs, err)
+	}
+}
