@@ -7,6 +7,7 @@ identity, no media.
 | Path | What | Who may see it |
 |---|---|---|
 | `spec/freeq-lite.md` | the intent: the only input to generation | graft, models, everyone |
+| `smoke/` | a small **visible** smoke suite (11 checks, a few per section), written from the spec alone | the model, and a gate during generation |
 | `oracle/` | the behaviour suite (47 checks over TCP) | the bench only, never a model |
 | `reference/` | a hand-written server that exists to validate the oracle | nobody but the oracle's own test |
 
@@ -194,3 +195,17 @@ first attempt with no gate retries, and the 47-check oracle scored it 47/47.
 Three of chad-bot's trees generated before the convention existed each fail
 the dead-function gate on one unused helper, which in those runs would have
 cost a retry; livecodelife's agent reports a Haiku tree that passes it.
+
+## The visible smoke suite
+
+`smoke/smoke.go` is a handful of behaviour checks per spec section (11 in
+all), written from the spec alone with its own scenarios. Unlike the oracle it
+is **shown to the model** (`"visible"` in `graft.json`) and **runs as a gate**
+(kind `eval`): each region's gate checks its own section and every section
+generated before it, so a region that drops a rule its section's smoke checks
+cover cannot land. It is deliberately small and **never a score**: the
+held-out oracle stays the only measure. It must pass 11/11 on the reference
+(v1 and v2), which its own test checks.
+
+One run with the smoke gate (claude sonnet, n=1, an anecdote): 7/7 regions
+converged on the first attempt, and the held-out oracle scored it 47/47.

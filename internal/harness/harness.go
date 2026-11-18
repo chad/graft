@@ -74,6 +74,8 @@ type Config struct {
 	Sedum        render.Sedum
 	Generators   string
 	SedumVersion string
+	// Visible checks shown to the graft arm's model (never the oracle).
+	Visible map[string]string
 }
 
 // recorder counts calls and optionally writes each prompt and answer to dir.
@@ -428,6 +430,7 @@ func (cfg Config) graftStep(ctx context.Context, repo, root, spec string, skel *
 		Repo: repo, Root: root, Module: cfg.Case.Module, Spec: spec, Conventions: cfg.Case.Conventions,
 		Tier: cfg.Tier, Attempts: cfg.Attempts, Model: cfg.Model, Gates: cfg.Gates, Policy: cfg.Policy, Log: log,
 		Skeleton: skel, Sedum: cfg.Sedum, Generators: cfg.Generators,
+		Visible: cfg.Visible,
 	}, acc)
 	_ = outs
 	if err != nil {

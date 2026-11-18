@@ -151,6 +151,7 @@ func (cfg Config) renderPrompt(a Accepted, r recording.Region, feedback string) 
 	var b strings.Builder
 	fmt.Fprintf(&b, "You are writing the function bodies for one part of a Go program. A deterministic layer has already rendered the program's skeleton (types, imports, stubs, the contracts between files); you write only the helper functions the stubs delegate to.\n\n")
 	fmt.Fprintf(&b, "## Conventions\n\n%s\n\n", strings.TrimSpace(cfg.Conventions))
+	cfg.writeVisible(&b)
 	fmt.Fprintf(&b, "## The whole spec (context)\n\n%s\n\n", strings.TrimSpace(cfg.Spec))
 	fmt.Fprintf(&b, "## Your section: %s\n\nThe region file is `%s`. Its helpers must together satisfy every statement below:\n\n", a.Entry.Section, r.Path)
 	for _, s := range a.Draft.Statements {

@@ -149,6 +149,11 @@ func benchRun(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "graft: config: %v (needs model)\n", err)
 		return 2
 	}
+	visible, err := loadVisible(filepath.Join(base, cf.Config), cfg)
+	if err != nil {
+		fmt.Fprintf(stderr, "graft: %v\n", err)
+		return 2
+	}
 	oracleSrc, err := dirSource(filepath.Join(base, cf.Oracle))
 	if err != nil {
 		fmt.Fprintf(stderr, "graft: oracle: %v\n", err)
@@ -262,6 +267,7 @@ func benchRun(args []string, stdout, stderr io.Writer) int {
 		ModelName: modelName, Gates: gates, Policy: evidence.Policy(cfg.Policy), Tier: cfg.Tier, Attempts: cfg.Attempts,
 		OracleArgv: []string{oracleBin}, Commit: commit, Dirty: dirty, Progress: stdout, Transcripts: *transcripts,
 		Sedum: sedum, Generators: gens, SedumVersion: sedumVer,
+		Visible: visible,
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

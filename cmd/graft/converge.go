@@ -27,11 +27,12 @@ type convergeConfig struct {
 		Argv       []string `json:"argv"`
 		TimeoutSec int      `json:"timeout_sec"`
 	} `json:"model"`
-	Conventions string `json:"conventions"` // path, relative to the config file
-	Tier        string `json:"tier"`
-	Attempts    int    `json:"attempts"`
-	Module      string `json:"module"`
-	Skeleton    string `json:"skeleton"` // path, relative to the config file (graft run --render)
+	Conventions string   `json:"conventions"` // path, relative to the config file
+	Visible     []string `json:"visible"`     // files shown to the model as checks it must pass, relative to the config
+	Tier        string   `json:"tier"`
+	Attempts    int      `json:"attempts"`
+	Module      string   `json:"module"`
+	Skeleton    string   `json:"skeleton"` // path, relative to the config file (graft run --render)
 
 	Policy map[string][]evidence.Kind `json:"policy"`
 	Gates  []struct {
@@ -51,7 +52,7 @@ func loadConvergeConfig(path string) (convergeConfig, []converge.Gate, error) {
 	// encoding/json alone is not strict: it matches keys case-insensitively,
 	// lets a duplicate key win silently, accepts null and ignores trailing data.
 	if err := strictCheck(b, map[string][]string{
-		"":        {"policy", "gates", "model", "conventions", "tier", "attempts", "module", "skeleton"},
+		"":        {"policy", "gates", "model", "conventions", "visible", "tier", "attempts", "module", "skeleton"},
 		"gates[]": {"label", "argv", "kind", "timeout_sec"},
 		"model":   {"argv", "timeout_sec"},
 	}); err != nil {
@@ -130,6 +131,19 @@ exit codes:
      cancelled, or the tree or record changed during the gates;
      any evidence recorded so far is kept
 `
+
+// loadVisible reads the config's "visible" files (relative to the config).
+func loadVisible(cfgPath string, c convergeConfig) (map[string]string, error) {
+	out := map[string]string{}
+	for _, rel := range c.Visible {
+		b, err := os.ReadFile(filepath.Join(filepath.Dir(cfgPath), rel))
+		if err != nil {
+			return nil, fmt.Errorf("visible %s: %w", rel, err)
+		}
+		out[filepath.ToSlash(rel)] = string(b)
+	}
+	return out, nil
+}
 
 // knownKind: any evidence kind a policy may require.
 func knownKind(k evidence.Kind) bool {
