@@ -97,82 +97,112 @@ type Converger struct {
 // executable kind the tier requires came from this run, every other required
 // kind has fresh passing evidence, and the tree is unchanged since the copy.
 func (c Converger) Converge(ctx context.Context, cand Candidate) (Decision, error) {
-	d := Decision{Guarantee: Guarantee}
+	t, err := c.Check(ctx, cand)
+	if err != nil {
+		return t.Decision, err
+	}
+	if !t.Decision.Result.Satisfied {
+		return t.Decision, nil
+	}
+	return c.Commit(t)
+}
+
+// ErrNotSatisfied: Commit was given a Trial whose policy was not satisfied.
+var ErrNotSatisfied = errors.New("converge: trial did not satisfy the policy; not applied")
+
+// Trial is a checked candidate: the gates ran and their evidence is in the
+// log, but nothing has reached the tree. Commit applies a satisfied Trial.
+type Trial struct {
+	Decision Decision
+	Next     []byte             // the rendered file the gates checked
+	Digest   string             // tree digest the gates ran against
+	Verdicts []evidence.Verdict // per gate, in gate order
+
+	cand   Candidate
+	target string
+	before []byte
+	skip   map[string]bool
+}
+
+// Check does everything Converge does up to and including the gates and the
+// evidence append (losers get evidence too), and applies nothing.
+func (c Converger) Check(ctx context.Context, cand Candidate) (Trial, error) {
+	t := Trial{Decision: Decision{Guarantee: Guarantee}}
 	if cand.Comment == "" {
 		cand.Comment = "//"
 	}
 	required, ok := c.Policy[cand.Tier]
 	if !ok {
-		return d, fmt.Errorf("%w: %q", evidence.ErrUnknownTier, cand.Tier)
+		return t, fmt.Errorf("%w: %q", evidence.ErrUnknownTier, cand.Tier)
 	}
 	if len(c.Gates) == 0 {
-		return d, ErrNoGates
+		return t, ErrNoGates
 	}
 	if isNil(c.Records) {
-		return d, ErrNoRecords
+		return t, ErrNoRecords
 	}
 	if err := c.checkPin(cand); err != nil {
-		return d, err
+		return t, err
 	}
 	gated := map[evidence.Kind]bool{}
 	for _, g := range c.Gates {
 		if !executable[g.Kind()] {
-			return d, fmt.Errorf("%w: gate %s claims %q", ErrGateKind, g.Name(), g.Kind())
+			return t, fmt.Errorf("%w: gate %s claims %q", ErrGateKind, g.Name(), g.Kind())
 		}
 		gated[g.Kind()] = true
 	}
 	for _, k := range required {
 		if executable[k] && !gated[k] {
-			return d, fmt.Errorf("%w: tier %q requires %s", ErrUncovered, cand.Tier, k)
+			return t, fmt.Errorf("%w: tier %q requires %s", ErrUncovered, cand.Tier, k)
 		}
 	}
 	if strings.Contains(cand.Body, beginTag) || strings.Contains(cand.Body, endTag) || hasSedumMarker(cand.Body) {
-		return d, ErrMarkerInBody
+		return t, ErrMarkerInBody
 	}
 	target, err := c.target(cand.Path)
 	if err != nil {
-		return d, err
+		return t, err
 	}
 	before, err := readOptional(target)
 	if err != nil {
-		return d, err
+		return t, err
 	}
 	if err := refuseHandEdits(cand, before); err != nil {
-		return d, err
+		return t, err
 	}
 	owner := Owner{Record: cand.RecordID, Version: cand.Version, Gen: cand.GenHash, Tier: cand.Tier}
 	next, err := renderRegion(cand.Path, before, cand.Comment, owner, cand.Body)
 	if err != nil {
-		return d, err
+		return t, err
 	}
 	pin := evidence.Pin{RecordID: cand.RecordID, Version: cand.Version, GenHash: cand.GenHash,
 		RegionHash: HashBody(normalizeBody(cand.Body)), SpecHash: cand.SpecHash}
 	if err := checkRendered(cand, next, pin.RegionHash); err != nil {
-		return d, err
+		return t, err
 	}
 	if err := guardSedum(cand, before, next); err != nil {
-		return d, err
+		return t, err
 	}
 
 	skip := c.skip()
 	digest, err := treeDigest(c.Root, skip)
 	if err != nil {
-		return d, err
+		return t, err
 	}
 	scratch, err := os.MkdirTemp("", "graft-converge-*")
 	if err != nil {
-		return d, err
+		return t, err
 	}
 	defer os.RemoveAll(scratch)
 	if err := copyTree(c.Root, scratch, skip); err != nil {
-		return d, err
+		return t, err
 	}
 	st := filepath.Join(scratch, filepath.FromSlash(cand.Path))
 	if err := os.MkdirAll(filepath.Dir(st), 0o755); err != nil {
-		return d, err
+		return t, err
 	}
 	if err := os.WriteFile(st, next, 0o644); err != nil {
-		return d, err
+		return t, err
 	}
 
 	by := c.By
@@ -180,29 +210,39 @@ func (c Converger) Converge(ctx context.Context, cand Candidate) (Decision, erro
 		by = "graft/converge"
 	}
 	verdicts := map[evidence.Kind]evidence.Verdict{}
-	d.Checked = true
+	t.Decision.Checked = true
 	for _, g := range c.Gates {
 		v, detail, err := g.Run(ctx, scratch)
 		if err != nil {
-			return d, err // the gate could not run: no verdict, nothing applied
+			return t, err // the gate could not run: no verdict, nothing applied
 		}
 		e, err := c.Log.Append(evidence.Evidence{Kind: g.Kind(), Verdict: v, Pin: pin, By: by,
 			Detail: fmt.Sprintf("%s: %s", g.Name(), detail)})
 		if err != nil {
-			return d, err
+			return t, err
 		}
-		d.Evidence = append(d.Evidence, e)
+		t.Decision.Evidence = append(t.Decision.Evidence, e)
+		t.Verdicts = append(t.Verdicts, v)
 		if prev, seen := verdicts[g.Kind()]; !seen || prev == evidence.Pass {
 			verdicts[g.Kind()] = v // any non-pass of a kind wins: no masking
 		}
 	}
-	if d.Result, err = c.decide(required, verdicts, pin); err != nil {
-		return d, err
+	if t.Decision.Result, err = c.decide(required, verdicts, pin); err != nil {
+		return t, err
 	}
+	t.cand, t.target, t.before, t.Next, t.Digest, t.skip = cand, target, before, next, digest, skip
+	return t, nil
+}
+
+// Commit applies a satisfied Trial. It refuses an unsatisfied one, and keeps
+// the apply-time guards: the record pin, the tree digest and the target's
+// bytes must be unchanged since Check.
+func (c Converger) Commit(t Trial) (Decision, error) {
+	d := t.Decision
 	if !d.Result.Satisfied {
-		return d, nil
+		return d, ErrNotSatisfied
 	}
-	if err := c.apply(cand, target, before, next, digest, skip); err != nil {
+	if err := c.apply(t.cand, t.target, t.before, t.Next, t.Digest, t.skip); err != nil {
 		return d, err
 	}
 	d.Applied = true

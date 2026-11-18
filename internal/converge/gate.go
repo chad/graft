@@ -55,7 +55,9 @@ func (g CommandGate) Run(ctx context.Context, dir string) (evidence.Verdict, str
 	err := cmd.Run()
 	detail := out.String()
 	if len(detail) > 2000 {
-		detail = "…" + detail[len(detail)-2000:]
+		// Keep the head as well as the tail: a gate that prints its summary
+		// line first (smoke: X/Y) must not lose it when many checks fail.
+		detail = detail[:600] + "\n…\n" + detail[len(detail)-1400:]
 	}
 	var exit *exec.ExitError
 	switch {
