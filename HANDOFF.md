@@ -1,19 +1,35 @@
-# HANDOFF: M7 records → sedum recordings (branch m7-recordings)
+# HANDOFF: M7 review fixes on PR #15 (branch m7-recordings)
 
 ## Goal
-Deterministic `Plan(records) → sedum recording` in `internal/recording`, laying out the Go skeleton with sedum's `go` generator. No model calls. `Write(w, Recording)` emits sedum's on-disk JSON. Brief: BRIEF-M7-recordings.md (uncommitted, in the project folder).
+Fix every finding in the orchestrator's review of PR #15 (latest comment). Handoff 01M7PDF8ET1Y9ZSJYX0FR7ZBJH.
 
 ## Definition of done
-The 6 tests from the brief, plus gofmt / vet / `go test -race ./...` clean, a sedum install step in CI (not there yet), a PR to chad/graft main, a mention of chad-bot-phoenix in #phoenix, and `complete` on freeq handoff 01M7PDF8ET1Y9ZSJYX0FR7ZBJH.
+Review findings all fixed; gofmt, vet, `go test -race ./...` clean with SEDUM_GENERATORS=~/sedum/generators; `git rm HANDOFF.md` (notes go in the PR body); push; say in #phoenix what changed; `complete` the handoff. Do NOT touch .github/workflows.
 
-## Done (this WIP commit)
-- `internal/recording/recording.go`: `Plan(Input{Pins, Skeleton}) (Planned{Recording, Regions}, error)`, `Write`, `LoadSkeleton`. Deterministic: records are sorted by id, imports are sorted, and map keys are sorted by the JSON encoder.
-- **Design decision taken (option A from the old handoff; nobody ruled on it, so revisit if the orchestrator or chad-bot disagrees):** sedum renders fixed decls (type/var/const/func) from the skeleton. Each open-bodied function is a *stub* that only delegates to `<file stem><Name>Body`, and `Planned.Regions` lists those helper signatures per file/record. Converge must declare them in its synth region. Converge is untouched.
-- `internal/recording/testdata/freeqlite.skeleton.json`: a 7-file freeq-lite skeleton (running.go owns Server/Client/Message/handlers/main plus stubs; six other files each hold an `init()` stub). I could not get the 7 drafted blueprints (they were never committed on any branch), so the test uses 7 synthetic real provenance records that it writes itself.
-- `internal/recording/recording_test.go`: the 6 brief tests plus a bad-input test. The tests copy sedum's generators from `$SEDUM_GENERATORS` or `~/sedum/generators` (the release binary does not carry them; they skip locally if absent, and fail under `CI`).
-- Found with real sedum: a fixed `func` decl is action `setFunction` (fixed).
+## Done (WIP commit, production code only; recording tests are STALE and fail)
+- `internal/records/records.go`: Pin now carries Type, Status, AffectedScope.
+- `internal/converge/region.go`: added exported `Seed(comment, Owner, body)` (wraps renderRegion; additive, converge behaviour unchanged).
+- `internal/recording/recording.go`: rewritten Plan.
+  - Each region is its own `<stem>_synth.go`, whole file = one graft:synth region (package clause, imports, helpers), seeded up front with `panic("graft: not converged")` Body helpers (`Region.Seed`, `Region.Path`, `Region.Tier`). Imports in the seed are the file's imports whose package name appears in the helper signatures.
+  - `Input.Tier` is required (written into the marker).
+  - Imprints only (type imprint; status open or implemented); `affected_scope` must equal the planned files (sorted); every record needs a file; `Complete: true` in the recording.
+  - `File.Record` (id) or `File.Section`, exactly one; `File.Package` override; `Stub.Doc` becomes the stub's doc comment.
+  - `validateSkeleton`: duplicate paths, bad/duplicate imports, decl code parsed with go/parser (kind, name, receiver must match), duplicate decl/stub/helper names per dir (init exempt), receiver_name/receiver_type both-or-neither, `_synth.go` collisions.
+- `examples/freeq-lite/skeleton.json`: `fallback.go` -> `everything_else.go`; `const serverName`; `Client.conn net.Conn`; doc contracts on stubs: Prefix returns `nick!user@freeq-lite` WITHOUT the leading ':' and every sender adds it; Reply builds the full `:freeq-lite CODE target :text` line (target `*` before a nick); Send only appends CRLF; Disconnect closes c.conn.
 
-## Update (orchestrator confirmed option A; fixtures now from the drafter)
-- Skeleton is `examples/freeq-lite/skeleton.json` (files keyed by spec *section*); records come from running `internal/drafter` on `internal/recording/testdata/freeq-lite.md` (a copy of PR #11's spec) inside the test: 7 valid blueprints written as real provenance records, ids derived from section.
-- All tests pass locally with `-race`; gofmt and vet clean; CI NEEDS a sedum install step but my token lacks `workflow` scope so I could not push it: someone with scope must add, before the gofmt step: install sedum 0.12.2 slim (`curl -fsSL https://raw.githubusercontent.com/livecodelife/sedum/main/install.sh | SEDUM_VERSION=0.12.2 SEDUM_INSTALL_DIR=$RUNNER_TEMP/bin sh -s -- --no-model`, add to GITHUB_PATH), `git clone --depth 1 --branch v0.12.2 https://github.com/livecodelife/sedum $RUNNER_TEMP/sedum`, and set `SEDUM_GENERATORS=$RUNNER_TEMP/sedum/generators`. Until then the sedum tests skip in CI (they fail only if `CI` is set; GitHub sets it, so CI will fail on them until the step exists).
-- Remaining: oracle half of TestFreeqLiteBlueprintsPlan skips until PR #11 merges (oracle is not on main). Then rebase, build the skeleton and run the oracle: connect must work (exit 0 or 1, not 2). When #12 lands, move skeleton.json beside its conventions.md (already examples/freeq-lite/).
+## Next (all in internal/recording/recording_test.go)
+1. `writeRecords`: write fixtures as `type: imprint`, `implements: <some parent id>`, `status: open`, `affected_scope: [<the file path whose section matches>]` (read the skeleton to map section -> path). Check the records store accepts an imprint without a real parent; if not, write a parent blueprint too. Set `Input.Tier` (use a tier name from the test policy, e.g. "low").
+2. Replace `fill` with: write each `Region.Seed` to `Region.Path` (package must build BEFORE any fill: add a `go build` assertion right after grow + seed), then fill via `converge.Seed` or, better, the real `converge.Converger` with a `go build` CommandGate per region (see converge_test.go for Policy/Log/Records setup). Then assert `grow --check` and a regrow still exit 0 after fill, gofmt clean.
+3. Tighten `TestHandlerBodiesAreConvergenceRegions`: every stub (not any one) is a pure delegation; Region.Path is `<stem>_synth.go`, not a sedum-owned file; seed is a single region owned by the record.
+4. `TestGrowCheckCleanAfterGrow`: with scope set it must report N current, and a hand edit to a sedum file must make it fail.
+5. Tests for the new validation (imprint-only, scope mismatch, record with no file, dup names, decl name/kind mismatch, stub receiver half-set).
+6. Oracle half of TestFreeqLiteBlueprintsPlan still skips (PR #11 not merged); read the spec from examples/ once #11 lands instead of the testdata copy.
+7. PR body: say version isn't checked in TestRegionsOwnedByRecords (v2 markers carry no version, render.go:28); list the design (separate synth file) and the sedum CI step still needed from chad-bot. `git rm HANDOFF.md`, push, post in #phoenix, `complete`.
+
+## Open questions
+- Tier source: I made it a required `Input.Tier`; a per-record tier may be wanted later.
+- Status accepted: open and implemented only.
+
+## Gotchas
+- Local run needs `SEDUM_GENERATORS=~/sedum/generators`.
+- `go test ./internal/recording` currently fails ("Input.Tier is required") because tests are not updated yet.

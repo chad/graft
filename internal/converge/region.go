@@ -204,3 +204,11 @@ func renderRegion(rel string, data []byte, comment string, o Owner, body string)
 	}
 	return []byte(out + begin + body + end), nil
 }
+
+// Seed returns a file that consists of one synthesis region owned by o, with
+// body between its markers (the marker records body's hash). It is how graft
+// lays down a region's placeholder before any synthesis has run; converge
+// replaces the body later exactly as it replaces any other.
+func Seed(comment string, o Owner, body string) ([]byte, error) {
+	return renderRegion("", nil, comment, o, body)
+}

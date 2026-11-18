@@ -10,6 +10,11 @@
       ],
       "decls": [
         {
+          "kind": "const",
+          "name": "serverName",
+          "code": "const serverName = \"freeq-lite\""
+        },
+        {
           "kind": "type",
           "name": "Server",
           "code": "type Server struct {\n\tmu       sync.Mutex\n\tclients  map[string]*Client\n\tchannels map[string]*channel\n}"
@@ -22,7 +27,7 @@
         {
           "kind": "type",
           "name": "Client",
-          "code": "type Client struct {\n\tNick       string\n\tUser       string\n\tRegistered bool\n\tchannels   map[string]bool\n\tout        chan string\n}"
+          "code": "type Client struct {\n\tNick       string\n\tUser       string\n\tRegistered bool\n\tchannels   map[string]bool\n\tconn       net.Conn\n\tout        chan string\n}"
         },
         {
           "kind": "type",
@@ -50,7 +55,8 @@
               "name": "conn",
               "type": "net.Conn"
             }
-          ]
+          ],
+          "doc": "serve runs one connection: it sets c.conn, reads CRLF or bare-LF lines, dispatches through handlers, and calls Disconnect when the connection ends."
         },
         {
           "name": "Send",
@@ -61,7 +67,8 @@
               "name": "line",
               "type": "string"
             }
-          ]
+          ],
+          "doc": "Send queues one protocol line for c. line carries no trailing CRLF and is already complete, including any leading ':'; Send only appends CRLF."
         },
         {
           "name": "Reply",
@@ -80,7 +87,8 @@
               "name": "text",
               "type": "string"
             }
-          ]
+          ],
+          "doc": "Reply sends c a line from the server itself, built in full: \":\" + serverName + \" \" + code + \" \" + target + \" :\" + text, where target is c.Nick, or \"*\" before c has a nick."
         },
         {
           "name": "Prefix",
@@ -88,7 +96,8 @@
           "receiver_type": "*Client",
           "results": [
             "string"
-          ]
+          ],
+          "doc": "Prefix returns c's prefix, nick!user@freeq-lite, WITHOUT the leading ':'. Every sender of a prefixed line adds the ':' itself (\":\" + c.Prefix() + \" JOIN ...\"), including QUIT."
         },
         {
           "name": "Disconnect",
@@ -103,7 +112,8 @@
               "name": "reason",
               "type": "string"
             }
-          ]
+          ],
+          "doc": "Disconnect removes c from the server and from every channel, tells the channel peers \":\" + c.Prefix() + \" QUIT :\" + reason (once each), then closes c.conn."
         }
       ],
       "section": "freeq-lite › Running"
@@ -154,7 +164,7 @@
       "section": "freeq-lite › Leaving"
     },
     {
-      "path": "fallback.go",
+      "path": "everything_else.go",
       "stubs": [
         {
           "name": "init"
