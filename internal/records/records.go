@@ -213,6 +213,9 @@ func (d *dirStore) Snapshot(id string, version int) ([]byte, error) {
 //
 // Stale never reads spec files: a deleted or unreadable spec does not make
 // generation staleness unanswerable (specs verify output; they do not drive it).
+// That holds for stores from OpenDir. Any other Store implementation is asked
+// via Current, so its own Current must not fail on specs if Stale is to be
+// spec-independent.
 func Stale(s Store, p Pin) (bool, error) {
 	var cur Pin
 	var err error
