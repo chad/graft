@@ -37,6 +37,8 @@ func run2(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 0
 	case "draft":
 		return draft(args[1:], stdout, stderr)
+	case "run":
+		return runCmd(args[1:], stdout, stderr)
 	case "converge":
 		return convergeCmd(args[1:], stdin, stdout, stderr)
 	case "help", "-h", "--help":
@@ -54,6 +56,7 @@ func usage(w io.Writer) {
 
 commands:
   draft F     propose draft records from a markdown spec (never applies them)
+  run         spec → accepted records → one generated, gated region per record
   converge    check a synthesized body through gates and tier policy; apply only if satisfied
   version   print graft's version
   help      show this help

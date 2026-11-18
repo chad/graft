@@ -21,6 +21,16 @@ import (
 
 // convergeConfig is graft.json: the tier policy and the gates every candidate runs.
 type convergeConfig struct {
+	// graft run only (ignored by graft converge):
+	Model *struct {
+		Argv       []string `json:"argv"`
+		TimeoutSec int      `json:"timeout_sec"`
+	} `json:"model"`
+	Conventions string `json:"conventions"` // path, relative to the config file
+	Tier        string `json:"tier"`
+	Attempts    int    `json:"attempts"`
+	Module      string `json:"module"`
+
 	Policy map[string][]evidence.Kind `json:"policy"`
 	Gates  []struct {
 		Label      string        `json:"label"`
@@ -39,8 +49,9 @@ func loadConvergeConfig(path string) (convergeConfig, []converge.Gate, error) {
 	// encoding/json alone is not strict: it matches keys case-insensitively,
 	// lets a duplicate key win silently, accepts null and ignores trailing data.
 	if err := strictCheck(b, map[string][]string{
-		"":        {"policy", "gates"},
+		"":        {"policy", "gates", "model", "conventions", "tier", "attempts", "module"},
 		"gates[]": {"label", "argv", "kind", "timeout_sec"},
+		"model":   {"argv", "timeout_sec"},
 	}); err != nil {
 		return c, nil, fmt.Errorf("%s: %w", path, err)
 	}

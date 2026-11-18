@@ -40,3 +40,37 @@ longer exists"): the ported rubric does not recognise declarative bounds. The
 drafter printed them as *not drafted* rather than dropping them silently, and
 the spec was reworded ("A nick must be…"). Teaching the rubric these shapes is
 a follow-up.
+
+## Generating it
+
+```sh
+go build -o graft ./cmd/graft
+graft run --config examples/freeq-lite/graft.json \
+  --spec examples/freeq-lite/spec/freeq-lite.md \
+  --repo /tmp/fl/repo --root /tmp/fl/app --accept
+(cd /tmp/fl/app && go build -o ../server .)
+go run ./examples/freeq-lite/oracle -bin /tmp/fl/server
+```
+
+`graft run` drafts the spec, accepts the 7 drafts as provenance imprints in
+`--repo`, and converges one region per record into `--root` (`running.go`,
+`registration.go`, … `everything_else.go`). The model command
+(`claude -p --tools "" --strict-mcp-config` in `graft.json`) runs in an empty directory
+**with its tools disabled**, so it sees only the prompt (the conventions, the
+spec, its section's statements and the files already written) and cannot read
+the oracle or the reference from disk. It does inherit graft's environment,
+which it needs for its API key. A region lands only if `go build` and
+`go vet` pass; evidence for each is pinned to the record's gen_hash and the
+region's hash. Re-running with an unchanged spec regenerates nothing, but
+re-verifies every region under the current gates (no model call), so a changed
+gate is never skipped.
+
+Runs so far (claude sonnet, **one sample each: anecdotes, not measurements**):
+
+| spec / oracle | regions converged | lines | oracle |
+|---|---|---|---|
+| first wording, 32-check oracle | 7/7, all first attempt | 617 | 31/32 (the PRIVMSG-nick ambiguity) |
+| clarified spec, 38-check oracle | 7/7, all first attempt | 608 | **38/38** |
+
+Measurement means the bench arms (graft / one-call baseline / intent-only) at
+n≥5 with Wilson intervals; that is the next step.

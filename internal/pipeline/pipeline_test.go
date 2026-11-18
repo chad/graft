@@ -1,0 +1,219 @@
+package pipeline
+
+import (
+	"context"
+	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/chad/graft/internal/converge"
+	"github.com/chad/graft/internal/drafter"
+	"github.com/chad/graft/internal/evidence"
+)
+
+const spec = `# Tiny
+
+## Core
+
+- The program must print "hello" when run
+
+## Extra
+
+- The program must also define a function Twice that returns twice its argument
+`
+
+// scripted answers by the file named in the prompt; bad ones first if asked.
+type scripted struct {
+	bodies map[string][]string
+	calls  map[string]int
+}
+
+func (s *scripted) Complete(_ context.Context, prompt string) (string, error) {
+	for file, answers := range s.bodies {
+		if strings.Contains(prompt, "Write the complete file `"+file+"`") {
+			i := s.calls[file]
+			s.calls[file]++
+			if i >= len(answers) {
+				i = len(answers) - 1
+			}
+			return "Here it is:\n```go\n" + answers[i] + "```\n", nil
+		}
+	}
+	return "```go\npackage main\n```\n", nil
+}
+
+func setup(t *testing.T) (Config, string) {
+	t.Helper()
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("needs go")
+	}
+	repo, root := t.TempDir(), filepath.Join(t.TempDir(), "app")
+	log, err := evidence.Open(filepath.Join(repo, ".graft", "evidence.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.MkdirAll(filepath.Join(repo, ".graft"), 0o755)
+	return Config{
+		Repo: repo, Root: root, Module: "tiny", Spec: spec, Conventions: "package main, standard library only", Tier: "low",
+		Gates:  []converge.Gate{converge.CommandGate{Label: "go build", Argv: []string{"go", "build", "./..."}, As: evidence.TestRun, Timeout: time.Minute}},
+		Policy: evidence.Policy{"low": {evidence.TestRun}},
+		Log:    log,
+	}, root
+}
+
+func TestAcceptIsIdempotentAndIdsAreStable(t *testing.T) {
+	repo := t.TempDir()
+	now := time.Date(2026, 11, 18, 0, 0, 0, 0, time.UTC)
+	a1, err := Accept(repo, drafter.Drafts(spec), "test", now)
+	if err != nil || len(a1) != 2 || !a1[0].Created {
+		t.Fatalf("%v %+v", err, a1)
+	}
+	a2, err := Accept(repo, drafter.Drafts(spec), "test", now)
+	if err != nil || len(a2) != 2 || a2[0].Created || a2[0].ID != a1[0].ID || a2[1].ID != a1[1].ID {
+		t.Fatalf("re-accept changed identity: %v %+v", err, a2)
+	}
+	vs, _ := filepath.Glob(filepath.Join(repo, "provenance", ".versions", a1[0].ID, "*"))
+	if len(vs) != 1 {
+		t.Fatalf("unchanged re-accept minted versions: %v", vs)
+	}
+	if a1[0].Entry.File != "core.go" || a1[1].Entry.File != "extra.go" {
+		t.Fatalf("files %s %s", a1[0].Entry.File, a1[1].Entry.File)
+	}
+}
+
+func TestAcceptRefusesUndecided(t *testing.T) {
+	bad := "# T\n\n## A\n\n- Users can add a book\n- Two books must never share an ISBN; a repeat is a conflict\n"
+	if _, err := Accept(t.TempDir(), drafter.Drafts(bad), "test", time.Now()); err == nil {
+		t.Fatal("accepted a draft with no confident proposal")
+	}
+}
+
+func TestRunConvergesWithFeedbackAndIsUpToDateOnRerun(t *testing.T) {
+	cfg, root := setup(t)
+	acc, err := Accept(cfg.Repo, drafter.Drafts(spec), "test", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := &scripted{calls: map[string]int{}, bodies: map[string][]string{
+		"core.go":  {"package main\n\nimport \"fmt\"\n\nfunc main() { fmt.Println(\"hello\") }\n"},
+		"extra.go": {"package main\n\nfunc Twice(x int) int { return x * }\n", "package main\n\nfunc Twice(x int) int { return x * 2 }\n"},
+	}}
+	cfg.Model = m
+	out, err := Run(context.Background(), cfg, acc)
+	if err != nil {
+		t.Fatalf("%v %+v", err, out)
+	}
+	if !out[0].Applied || out[0].Attempts != 1 || !out[1].Applied || out[1].Attempts != 2 {
+		t.Fatalf("%+v", out)
+	}
+	cmd := exec.Command("go", "run", ".")
+	cmd.Dir = root
+	if b, err := cmd.CombinedOutput(); err != nil || strings.TrimSpace(string(b)) != "hello" {
+		t.Fatalf("%q %v", b, err)
+	}
+	// Re-run: nothing changed, so no model calls (regions are re-verified only).
+	calls := m.calls["core.go"] + m.calls["extra.go"]
+	out2, err := Run(context.Background(), cfg, acc)
+	if err != nil || out2[0].Attempts != 0 || out2[1].Attempts != 0 || m.calls["core.go"]+m.calls["extra.go"] != calls {
+		t.Fatalf("re-run regenerated: %v %+v", err, out2)
+	}
+}
+
+func TestRunStopsWhenARegionNeverConverges(t *testing.T) {
+	cfg, _ := setup(t)
+	acc, _ := Accept(cfg.Repo, drafter.Drafts(spec), "test", time.Now())
+	cfg.Model = &scripted{calls: map[string]int{}, bodies: map[string][]string{"core.go": {"package main\n\nfunc main() { broken( }\n"}}}
+	cfg.Attempts = 2
+	out, err := Run(context.Background(), cfg, acc)
+	if err == nil || len(out) != 1 || out[0].Applied || out[0].Attempts != 2 {
+		t.Fatalf("%v %+v", err, out)
+	}
+}
+
+func TestPromptNeverShowsTheOracle(t *testing.T) {
+	cfg, _ := setup(t)
+	acc, _ := Accept(cfg.Repo, drafter.Drafts(spec), "test", time.Now())
+	p, err := cfg.prompt(acc[0], "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, banned := range []string{"oracle", "reference"} {
+		if strings.Contains(strings.ToLower(p), banned) {
+			t.Fatalf("prompt mentions %q", banned)
+		}
+	}
+	if !strings.Contains(p, "The program must print \"hello\" when run") {
+		t.Fatal("prompt lacks the section's statements")
+	}
+}
+
+// Review on #12: "up to date" must not skip a changed gate. The existing body
+// is re-verified under the current gates; if that fails, the region is
+// regenerated, and a gate that rejects everything stops the run.
+func TestUpToDateIsReverifiedUnderCurrentGates(t *testing.T) {
+	cfg, _ := setup(t)
+	acc, _ := Accept(cfg.Repo, drafter.Drafts(spec), "test", time.Now())
+	m := &scripted{calls: map[string]int{}, bodies: map[string][]string{
+		"core.go":  {"package main\n\nimport \"fmt\"\n\nfunc main() { fmt.Println(\"hello\") }\n"},
+		"extra.go": {"package main\n\nfunc Twice(x int) int { return x * 2 }\n"},
+	}}
+	cfg.Model = m
+	if _, err := Run(context.Background(), cfg, acc); err != nil {
+		t.Fatal(err)
+	}
+	before := len(cfg.Log.All())
+	// Same gates: re-verified (evidence appended), no model calls.
+	calls := m.calls["core.go"] + m.calls["extra.go"]
+	if _, err := Run(context.Background(), cfg, acc); err != nil {
+		t.Fatal(err)
+	}
+	if m.calls["core.go"]+m.calls["extra.go"] != calls {
+		t.Fatal("re-verification called the model")
+	}
+	if len(cfg.Log.All()) <= before {
+		t.Fatal("up-to-date regions were not re-verified (no evidence appended)")
+	}
+	// A new gate that rejects everything: the old evidence must not stand in for it.
+	cfg.Gates = append(cfg.Gates, converge.CommandGate{Label: "always fails", Argv: []string{"false"}, As: evidence.Eval})
+	cfg.Policy = evidence.Policy{"low": {evidence.TestRun, evidence.Eval}}
+	out, err := Run(context.Background(), cfg, acc)
+	if err == nil || out[0].Applied {
+		t.Fatalf("a failing new gate was skipped: %v %+v", err, out)
+	}
+	if m.calls["core.go"] == 1 {
+		t.Fatal("a region failing re-verification was not regenerated")
+	}
+}
+
+func TestHandEditRefusedBeforeAnyModelCall(t *testing.T) {
+	cfg, root := setup(t)
+	acc, _ := Accept(cfg.Repo, drafter.Drafts(spec), "test", time.Now())
+	m := &scripted{calls: map[string]int{}, bodies: map[string][]string{
+		"core.go":  {"package main\n\nimport \"fmt\"\n\nfunc main() { fmt.Println(\"hello\") }\n"},
+		"extra.go": {"package main\n\nfunc Twice(x int) int { return x * 2 }\n"},
+	}}
+	cfg.Model = m
+	if _, err := Run(context.Background(), cfg, acc); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(root, "core.go")
+	b, _ := os.ReadFile(p)
+	edited := strings.Replace(string(b), `"hello"`, `"hello, edited"`, 1)
+	os.WriteFile(p, []byte(edited), 0o644)
+	// Make the record need regeneration too, so only the pre-check can stop the call.
+	calls := m.calls["core.go"]
+	_, err := Run(context.Background(), cfg, acc)
+	if !errors.Is(err, converge.ErrHandEdited) {
+		t.Fatalf("err = %v", err)
+	}
+	if m.calls["core.go"] != calls {
+		t.Fatal("a model call was made for a hand-edited region")
+	}
+	if got, _ := os.ReadFile(p); string(got) != edited {
+		t.Fatal("hand edit not preserved")
+	}
+}
