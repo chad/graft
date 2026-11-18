@@ -261,7 +261,7 @@ func benchRun(args []string, stdout, stderr io.Writer) int {
 
 	hc := harness.Config{
 		Case: harness.Case{Name: name, Spec: spec, Intent: cf.Intent, Contract: cf.Contract, Conventions: conv,
-			Module: cfg.Module, Fixture: harness.Digest(spec, cf.Intent, cf.Contract, oracleSrc, fixtureExtra, skeletonSrc),
+			Module: cfg.Module, Fixture: harness.Digest(spec, cf.Intent, cf.Contract, oracleSrc, fixtureExtra, skeletonSrc, visibleSrc(visible)),
 			SpecV2: specV2, OracleArgs: oracleArgs, Skeleton: skel1, SkeletonV2: skel2},
 		Model:     model.Command{Argv: cfg.Model.Argv, Timeout: time.Duration(cfg.Model.TimeoutSec) * time.Second},
 		ModelName: modelName, Gates: gates, Policy: evidence.Policy(cfg.Policy), Tier: cfg.Tier, Attempts: cfg.Attempts,
@@ -296,6 +296,21 @@ func evolveSkeleton(cf caseFile, evolve bool) string {
 		return ""
 	}
 	return cf.Evolve.Skeleton
+}
+
+// visibleSrc flattens the visible checks (sorted by name) for the fixture
+// digest: what the graft arms are shown is part of the question they answer.
+func visibleSrc(v map[string]string) string {
+	names := make([]string, 0, len(v))
+	for n := range v {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	var b strings.Builder
+	for _, n := range names {
+		b.WriteString(n + "\x00" + v[n] + "\x00")
+	}
+	return b.String()
 }
 
 func firstErr(errs ...error) error {

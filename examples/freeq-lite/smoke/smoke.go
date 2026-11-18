@@ -39,6 +39,22 @@ type check struct {
 }
 
 var checks = []check{
+	{"running.go", "an over-long line is ignored and the connection stays open", func(a string) error {
+		c, err := dial(a)
+		if err != nil {
+			return err
+		}
+		defer c.close()
+		c.send(strings.Repeat("Q", 600))
+		if err := c.quiet(); err != nil {
+			return err
+		}
+		// Still open: a write after the long line must not fail.
+		if _, err := c.c.Write([]byte("\r\n")); err != nil {
+			return fmt.Errorf("connection closed after an over-long line: %w", err)
+		}
+		return nil
+	}},
 	{"registration.go", "register and get welcome", func(a string) error {
 		c, err := reg(a, nick("rua"))
 		if err == nil {
@@ -171,6 +187,9 @@ var checks = []check{
 		c.send("WIBBLE now")
 		return c.want(":freeq-lite 421 " + n + " WIBBLE :Unknown command")
 	}},
+	// Only for a spec with a Topics section (spec-v2). Under the v1 spec there
+	// is no Topics section, TOPIC is an unknown command (421), and this check
+	// never runs, because no topics.go is generated.
 	{"topics.go", "topic is set, broadcast and queried", func(a string) error {
 		n, ch := nick("bo"), "#tp"+fmt.Sprint(seq.Add(1))
 		c, err := reg(a, n)
@@ -341,7 +360,13 @@ func main() {
 		defer os.RemoveAll(dir)
 		server = filepath.Join(dir, "server")
 		if out, err := exec.Command("go", "build", "-o", server, ".").CombinedOutput(); err != nil {
-			fail("smoke: the server does not build:\n" + string(out))
+			// Same summary shape as a run, so a ranker can read it: nothing passed.
+			if *asJSON {
+				fmt.Printf("{\"checks\":%d,\"passed\":0,\"failed\":[\"the server does not build\"]}\n", len(run))
+			} else {
+				fmt.Printf("smoke: 0/%d checks passed\nthe server does not build:\n%s", len(run), out)
+			}
+			os.Exit(1)
 		}
 	}
 	l, err := net.Listen("tcp", "127.0.0.1:0")
