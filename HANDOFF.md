@@ -1,24 +1,23 @@
 # HANDOFF: M8 graft run --render (branch m8-run-render)
 
 ## Goal
-`graft run --render`: sedum lays out the skeleton, the model converges only each record's `<stem>_synth.go` Body helpers. Full brief: BRIEF-M8-run-render.md (not committed, in the project folder).
+`graft run --render`: sedum lays out the skeleton, the model converges only each record's `<stem>_synth.go` Body helpers. Brief: BRIEF-M8-run-render.md (not committed; read only its last section, which now includes an Addendum: do the real run with BOTH sonnet and haiku, report each as n=1).
 
 ## Definition of done
-Tests TestRunRenderFakeModel, TestRunRenderRerunNoop, TestRunRenderEvolve, TestRunRenderRefusesHandEditOfSedumFile; one real Sonnet run scored by the oracle, recorded in examples/freeq-lite/README.md as an anecdote (n=1: score, model calls, attempts, model lines vs sedum lines); gofmt/vet/`go test -race ./...` clean; PR to chad/graft main; tell chad-bot-phoenix in #phoenix and the orchestrator; `complete` freeq handoff 01M7PPP58N0FM5HQ80HAMJSYVE. `git rm HANDOFF.md` before the PR is final.
+Four tests (done); real runs with Sonnet AND Haiku scored by the oracle, recorded in examples/freeq-lite/README.md as anecdotes (n=1 each: score, model calls, attempts, model lines vs sedum lines); gofmt/vet/`go test -race ./...` clean; `git rm HANDOFF.md`; PR to chad/graft main (`gh pr create --repo chad/graft --base main`); tell chad-bot-phoenix in #phoenix and the orchestrator; `complete` freeq handoff 01M7PPP58N0FM5HQ80HAMJSYVE.
 
-## Done (WIP commit on this branch; see `git log`)
-- internal/pipeline/render.go: `RenderConfig{Skeleton, Sedum, Generators}`, `Config.renderTree` (Plan -> write recording to a temp dir -> render.Render -> GrowCheck -> seed _synth.go only if missing), `sedumEnv` (copies generators + symlinks repo/provenance into root for the sedum calls, removes both after), `renderPrompt` (Declares signatures + read-only tree, region-file-only answer).
-- internal/pipeline/run.go: `Config.Render *RenderConfig`; when set, renders before ReadRegions, then converges each record on its region path (`file`) instead of Entry.File; records with no region are skipped. `current()` takes the file. Non-render path unchanged; existing pipeline tests pass.
+## Done
+- ae87918: Config.Skeleton/Sedum/Generators, recording.IsSynthPath, sedum version in Progress, `--render`/`--skeleton` flags (graft.json "skeleton" key), examples/freeq-lite/skeleton-v2.json (v1 + topics.go; chosen because Plan rejects a skeleton section with no record).
+- 6d68ba1: seeded placeholders stay "pending" until converged (previously a seed looked current, so no model call was made); internal/pipeline/render_test.go (4 tests, use an echo fake model, skip without sedum/SEDUM_GENERATORS) and main_test.go (CI provisioning). Full `go test -race ./...` passed with SEDUM_GENERATORS=~/sedum/generators.
 
 ## Next
-1. Interface changes agreed with chad-bot (brief's last section): replace `RenderConfig` with `Config.Skeleton *recording.Skeleton` and `Config.Sedum render.Sedum` (nil = whole-file path). Generators dir then needs a home (e.g. `Config.Generators` or a field on the Sedum value). Export `recording.IsSynthPath(p string) bool` (suffix `_synth.go`, internal `synthPath` already builds it) and use it in the pipeline. Add `Version(ctx)` use: record the sedum version in Progress output.
-2. cmd/graft/run.go: `--render`, `--skeleton PATH` (default skeleton.json beside graft.json; graft.json `"skeleton"` key in convergeConfig in cmd/graft/converge.go), locate sedum on PATH, generators from `SEDUM_GENERATORS` or ~/sedum/generators.
-3. examples/freeq-lite/skeleton-v2.json: v1 skeleton plus a topics.go file (section "freeq-lite › Topics", one `init` stub, like keepalive.go). Plan rejects a skeleton section with no record, so v1 cannot use a superset skeleton; that is why a second file is needed.
-4. The four tests (skip when sedum is absent unless CI; reuse the TestMain provisioning pattern from internal/recording/main_test.go, copy it into internal/pipeline).
-5. Real run + README anecdote (generate outside the repo).
+1. First real run (sonnet) failed on the Running region: `registry ownership` gate reports `running_synth.go:80: handlers may only be used as handlers["CMD"] = ... outside running.go`. The serve body legitimately dispatches via `handlers` and lives in running_synth.go. Fix: make examples/freeq-lite/gates/registry.go treat `<declarer stem>_synth.go` (running_synth.go) as part of the declaring file (see `declarer` and the check at ~line 59); add/adjust its test in examples/freeq-lite/gates. Also note in conventions.md that the Running region may read `handlers`. Re-run gates tests.
+2. Rerun: `go build -o $SCRATCH/graft ./cmd/graft`; `SEDUM_GENERATORS=~/sedum/generators graft run --render --config examples/freeq-lite/graft.json --spec examples/freeq-lite/spec/freeq-lite.md --repo $W/repo --root $W/app --accept` with W outside the repo. Build `$W/app` to `$W/server`, score with `go run ./examples/freeq-lite/oracle -bin $W/server`. For haiku, copy graft.json to $W with `--model haiku` and a conventions copy (or sed the argv) and pass that --config.
+3. Count: model calls/attempts (progress output "attempt N"), lines in *_synth.go (model) vs other .go (sedum).
+4. README anecdotes (sonnet + haiku, n=1 each), plus a short `--render` usage section; also run the v1 -> v2 evolve once if cheap (skeleton-v2.json + spec-v2) and note which synth region regenerated.
+5. gofmt -l ., go vet ./..., go test -race ./..., `git rm HANDOFF.md`, push, PR, announce in #phoenix, complete handoff.
 
-## Open questions / gotchas
-- Not yet run against real sedum at all: confirm GrowCheck passes with the provenance symlink in root, and that Render's ReadMarkers is happy with generators/ present.
-- Accept sets affected_scope to `fileFor(section)` (one file); Plan requires scope == planned skeleton files, so skeleton file paths must equal fileFor(section) (they do for freeq-lite: running.go, registration.go, ...).
-- A changed record leaves the old synth body in place and its owner pin stale; Run's `current()` then regenerates it (existing behaviour). The render prompt does not show the old body yet.
-- Tests for hand-edit refusal: render.Render already refuses with ErrHandEdited before any model call; assert that error text.
+## Gotchas
+- sedum appends to .sedum/run.log every run (tests exclude it from byte-identical comparisons).
+- sedumEnv temporarily copies generators/ and symlinks provenance into the root, removed after each render; graft's GrowCheck in tests needs the same (growCheck helper).
+- Haiku can pass all gates yet fail the oracle (orchestrator note); that is expected data, not a bug.
