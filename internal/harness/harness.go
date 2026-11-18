@@ -365,6 +365,9 @@ func EvolveSample(ctx context.Context, cfg Config, arm bench.Arm) bench.Sample {
 	}
 	calls := cm.calls
 	if reason != "" {
+		if strings.HasPrefix(reason, infraPrefix) {
+			return bench.Sample{Outcome: bench.Unreachable, Reason: strings.TrimPrefix(reason, infraPrefix), ChangeCalls: &calls}
+		}
 		return bench.Sample{Outcome: bench.Broke, Reason: reason, ChangeCalls: &calls, Preserved: preserved, ChangeBytes: changed}
 	}
 	bin := filepath.Join(dir, "server")
