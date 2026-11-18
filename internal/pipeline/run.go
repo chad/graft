@@ -41,7 +41,12 @@ type Outcome struct {
 }
 
 // Run converges one region per accepted record, in spec order. A record whose
-// region already holds a body that still satisfies its pin is left alone.
+// region already holds an unedited body written for its current pin is not
+// regenerated, but it is re-verified: its existing body is run through the
+// CURRENT gates and policy (no model call), so a changed gate cannot be
+// skipped. Only if that re-check fails is the region regenerated. Changing the
+// model or the conventions does not, by itself, regenerate anything: intent
+// did not change.
 func Run(ctx context.Context, cfg Config, acc []Accepted) ([]Outcome, error) {
 	if cfg.Attempts == 0 {
 		cfg.Attempts = 3
@@ -62,13 +67,25 @@ func Run(ctx context.Context, cfg Config, acc []Accepted) ([]Outcome, error) {
 	}
 	for _, a := range acc {
 		o := Outcome{ID: a.ID, Section: a.Entry.Section, File: a.Entry.File}
-		if current(store, regions, a) {
-			o.Applied = true
-			cfg.say("%s (%s): up to date\n", a.Entry.Section, a.Entry.File)
-			out = append(out, o)
-			continue
-		}
 		feedback := ""
+		if body, ok := current(store, regions, a, cfg.Root); ok {
+			cand, err := converge.NewCandidate(store, a.ID, a.Entry.File, cfg.Tier, body)
+			if err != nil {
+				return out, err
+			}
+			d, err := c.Converge(ctx, cand)
+			if err != nil {
+				return out, fmt.Errorf("%s: re-verify: %w", a.Entry.Section, err)
+			}
+			if d.Applied {
+				o.Applied = true
+				cfg.say("%s (%s): up to date, re-verified under the current gates\n", a.Entry.Section, a.Entry.File)
+				out = append(out, o)
+				continue
+			}
+			feedback = "The existing file no longer passes these checks; fix it:\n" + failing(d)
+			cfg.say("%s (%s): current body fails the current gates; regenerating\n", a.Entry.Section, a.Entry.File)
+		}
 		for o.Attempts < cfg.Attempts && !o.Applied {
 			o.Attempts++
 			cfg.say("%s (%s): attempt %d\n", a.Entry.Section, a.Entry.File, o.Attempts)
@@ -94,14 +111,8 @@ func Run(ctx context.Context, cfg Config, acc []Accepted) ([]Outcome, error) {
 				o.Applied = true
 				cfg.say("  applied (guarantee: %s)\n", d.Guarantee)
 			default:
-				var details []string
-				for _, e := range d.Evidence {
-					if e.Verdict != evidence.Pass {
-						details = append(details, e.Detail)
-					}
-				}
-				feedback = "Your previous answer failed these checks; fix it:\n" + strings.Join(details, "\n")
-				o.LastFailure = strings.Join(details, "\n")
+				o.LastFailure = failing(d)
+				feedback = "Your previous answer failed these checks; fix it:\n" + o.LastFailure
 				cfg.say("  not applied: %s\n", firstLine(o.LastFailure))
 			}
 		}
@@ -114,19 +125,36 @@ func Run(ctx context.Context, cfg Config, acc []Accepted) ([]Outcome, error) {
 	return out, nil
 }
 
+func failing(d converge.Decision) string {
+	var details []string
+	for _, e := range d.Evidence {
+		if e.Verdict != evidence.Pass {
+			details = append(details, e.Detail)
+		}
+	}
+	for _, k := range d.Result.Missing {
+		details = append(details, "missing evidence: "+string(k))
+	}
+	return strings.Join(details, "\n")
+}
+
 // current reports whether the record's region already holds an unedited body
-// written for the record's current version and gen_hash: nothing to redo.
-func current(store records.Store, regions []converge.Region, a Accepted) bool {
+// written for the record's current version and gen_hash, and returns that body.
+func current(store records.Store, regions []converge.Region, a Accepted, root string) (string, bool) {
 	p, err := store.Current(a.ID)
 	if err != nil {
-		return false
+		return "", false
 	}
 	for _, r := range regions {
 		if r.Path == a.Entry.File && r.Owner.Record == a.ID {
-			return r.Owner.Version == p.Version && r.Owner.Gen == p.GenHash && !r.Edited()
+			if r.Owner.Version != p.Version || r.Owner.Gen != p.GenHash || r.Edited() {
+				return "", false
+			}
+			body, err := converge.RegionBody(root, r)
+			return body, err == nil
 		}
 	}
-	return false
+	return "", false
 }
 
 func (cfg Config) say(f string, a ...any) {

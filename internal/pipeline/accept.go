@@ -141,9 +141,15 @@ func Accept(repo string, drafts []drafter.Draft, author string, now time.Time) (
 		}
 		e := Entry{Section: d.Section, File: file, DerivedFrom: d.DerivedFrom, Anchor: d.Anchor, Order: i}
 		idx.Records[id] = e
+		// Save after every record: a failure part-way leaves the index naming
+		// exactly the records that were written, so a re-run revises them
+		// instead of minting duplicates.
+		if err := idx.save(repo); err != nil {
+			return nil, err
+		}
 		out = append(out, Accepted{ID: id, Entry: e, Draft: d, Created: created})
 	}
-	return out, idx.save(repo)
+	return out, nil
 }
 
 func newID(now time.Time) string {

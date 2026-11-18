@@ -3,10 +3,10 @@
   "tier": "low",
   "attempts": 3,
   "conventions": "conventions.md",
-  "model": {"argv": ["claude", "-p", "--model", "sonnet"], "timeout_sec": 600},
-  "policy": {"low": ["test_run", "static_analysis"]},
+  "model": {"argv": ["claude", "-p", "--bare", "--tools", "", "--model", "sonnet"], "timeout_sec": 600},
+  "policy": {"low": ["static_analysis"]},
   "gates": [
-    {"label": "go build", "argv": ["go", "build", "./..."], "kind": "test_run", "timeout_sec": 300},
+    {"label": "go build", "argv": ["go", "build", "./..."], "kind": "static_analysis", "timeout_sec": 300},
     {"label": "go vet", "argv": ["go", "vet", "./..."], "kind": "static_analysis", "timeout_sec": 300}
   ]
 }

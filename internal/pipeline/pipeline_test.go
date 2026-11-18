@@ -114,7 +114,7 @@ func TestRunConvergesWithFeedbackAndIsUpToDateOnRerun(t *testing.T) {
 	if b, err := cmd.CombinedOutput(); err != nil || strings.TrimSpace(string(b)) != "hello" {
 		t.Fatalf("%q %v", b, err)
 	}
-	// Re-run: nothing changed, so no model calls.
+	// Re-run: nothing changed, so no model calls (regions are re-verified only).
 	calls := m.calls["core.go"] + m.calls["extra.go"]
 	out2, err := Run(context.Background(), cfg, acc)
 	if err != nil || out2[0].Attempts != 0 || out2[1].Attempts != 0 || m.calls["core.go"]+m.calls["extra.go"] != calls {
@@ -147,5 +147,43 @@ func TestPromptNeverShowsTheOracle(t *testing.T) {
 	}
 	if !strings.Contains(p, "The program must print \"hello\" when run") {
 		t.Fatal("prompt lacks the section's statements")
+	}
+}
+
+// Review on #12: "up to date" must not skip a changed gate. The existing body
+// is re-verified under the current gates; if that fails, the region is
+// regenerated, and a gate that rejects everything stops the run.
+func TestUpToDateIsReverifiedUnderCurrentGates(t *testing.T) {
+	cfg, _ := setup(t)
+	acc, _ := Accept(cfg.Repo, drafter.Drafts(spec), "test", time.Now())
+	m := &scripted{calls: map[string]int{}, bodies: map[string][]string{
+		"core.go":  {"package main\n\nimport \"fmt\"\n\nfunc main() { fmt.Println(\"hello\") }\n"},
+		"extra.go": {"package main\n\nfunc Twice(x int) int { return x * 2 }\n"},
+	}}
+	cfg.Model = m
+	if _, err := Run(context.Background(), cfg, acc); err != nil {
+		t.Fatal(err)
+	}
+	before := len(cfg.Log.All())
+	// Same gates: re-verified (evidence appended), no model calls.
+	calls := m.calls["core.go"] + m.calls["extra.go"]
+	if _, err := Run(context.Background(), cfg, acc); err != nil {
+		t.Fatal(err)
+	}
+	if m.calls["core.go"]+m.calls["extra.go"] != calls {
+		t.Fatal("re-verification called the model")
+	}
+	if len(cfg.Log.All()) <= before {
+		t.Fatal("up-to-date regions were not re-verified (no evidence appended)")
+	}
+	// A new gate that rejects everything: the old evidence must not stand in for it.
+	cfg.Gates = append(cfg.Gates, converge.CommandGate{Label: "always fails", Argv: []string{"false"}, As: evidence.Eval})
+	cfg.Policy = evidence.Policy{"low": {evidence.TestRun, evidence.Eval}}
+	out, err := Run(context.Background(), cfg, acc)
+	if err == nil || out[0].Applied {
+		t.Fatalf("a failing new gate was skipped: %v %+v", err, out)
+	}
+	if m.calls["core.go"] == 1 {
+		t.Fatal("a region failing re-verification was not regenerated")
 	}
 }

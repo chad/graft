@@ -54,12 +54,16 @@ go run ./examples/freeq-lite/oracle -bin /tmp/fl/server
 
 `graft run` drafts the spec, accepts the 7 drafts as provenance imprints in
 `--repo`, and converges one region per record into `--root` (`running.go`,
-`registration.go`, … `everything_else.go`). The model command (`claude -p`
-in `graft.json`) runs in an empty directory: it sees only the prompt (the
-conventions, the spec, its section's statements and the files already written),
-never the oracle or the reference. A region lands only if `go build` and
+`registration.go`, … `everything_else.go`). The model command
+(`claude -p --bare --tools ""` in `graft.json`) runs in an empty directory
+**with its tools disabled**, so it sees only the prompt (the conventions, the
+spec, its section's statements and the files already written) and cannot read
+the oracle or the reference from disk. It does inherit graft's environment,
+which it needs for its API key. A region lands only if `go build` and
 `go vet` pass; evidence for each is pinned to the record's gen_hash and the
-region's hash. Re-running with an unchanged spec regenerates nothing.
+region's hash. Re-running with an unchanged spec regenerates nothing, but
+re-verifies every region under the current gates (no model call), so a changed
+gate is never skipped.
 
 Runs so far (claude sonnet, **one sample each: anecdotes, not measurements**):
 

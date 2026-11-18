@@ -212,3 +212,20 @@ func renderRegion(rel string, data []byte, comment string, o Owner, body string)
 func Seed(comment string, o Owner, body string) ([]byte, error) {
 	return renderRegion("", nil, comment, o, body)
 }
+
+// RegionBody returns the bytes between a region's markers, as read from root.
+func RegionBody(root string, r Region) (string, error) {
+	b, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(r.Path)))
+	if err != nil {
+		return "", err
+	}
+	lines := splitLines(b)
+	if r.end > len(lines) || r.begin+1 > r.end {
+		return "", fmt.Errorf("converge: region %s moved", r.Path)
+	}
+	body := strings.Join(lines[r.begin+1:r.end], "")
+	if HashBody(body) != r.Actual {
+		return "", fmt.Errorf("converge: region %s changed since it was read", r.Path)
+	}
+	return body, nil
+}
