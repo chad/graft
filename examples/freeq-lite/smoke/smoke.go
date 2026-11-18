@@ -15,7 +15,10 @@
 //	go run <path>/smoke.go -only channels.go -json   # one section, machine-readable
 //
 // Stable interface (best-of-N ranks on it): exit 0 when every selected check
-// passes, 1 otherwise; -json prints {"checks":N,"passed":M,"failed":[...]}.
+// passes, 1 otherwise; the text form prints "smoke: X/Y checks passed" first
+// and, when anything failed, again as the very last line (so it survives a
+// gate keeping only the output's tail); -json prints
+// {"checks":N,"passed":M,"failed":[...]}.
 package main
 
 import (
@@ -364,7 +367,7 @@ func main() {
 			if *asJSON {
 				fmt.Printf("{\"checks\":%d,\"passed\":0,\"failed\":[\"the server does not build\"]}\n", len(run))
 			} else {
-				fmt.Printf("smoke: 0/%d checks passed\nthe server does not build:\n%s", len(run), out)
+				fmt.Printf("smoke: 0/%d checks passed\nthe server does not build:\n%s\nsmoke: 0/%d checks passed\n", len(run), out, len(run))
 			}
 			os.Exit(1)
 		}
@@ -408,6 +411,9 @@ func main() {
 	if len(failed) > 0 {
 		if !*asJSON {
 			fmt.Println(strings.Join(failed, "\n"))
+			// Repeat the summary last: a gate keeps only the tail of long
+			// output, and a ranker reads the summary from it.
+			fmt.Printf("smoke: %d/%d checks passed\n", len(run)-len(failed), len(run))
 		}
 		srv.Process.Kill()
 		srv.Wait()

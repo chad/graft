@@ -67,7 +67,8 @@ func TestBuildFailureReportsZero(t *testing.T) {
 	cmd := exec.Command("go", "run", self)
 	cmd.Dir = dir
 	out, err := cmd.Output()
-	if err == nil || !strings.HasPrefix(string(out), "smoke: 0/1 checks passed") {
-		t.Fatalf("%v %q", err, out)
+	if err == nil || !strings.HasPrefix(string(out), "smoke: 0/1 checks passed") ||
+		!strings.HasSuffix(strings.TrimRight(string(out), "\n"), "smoke: 0/1 checks passed") {
+		t.Fatalf("summary must be first and last: %v %q", err, out)
 	}
 }
