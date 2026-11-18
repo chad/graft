@@ -56,3 +56,24 @@ func TestNonLiteralKeyAndDeleteFail(t *testing.T) {
 		}
 	}
 }
+
+// Review on #14: the gate must not be bypassed by indirect forms.
+func TestIndirectRegistryUseFails(t *testing.T) {
+	for name, src := range map[string]string{
+		"alias":      "package main\n\nfunc init() { h := handlers; h[\"JOIN\"] = func() {} }\n",
+		"paren":      "package main\n\nfunc init() { (handlers)[\"JOIN\"] = func() {} }\n",
+		"passed":     "package main\n\nimport \"fmt\"\n\nfunc init() { fmt.Println(handlers) }\n",
+		"reassigned": "package main\n\nfunc init() { handlers = map[string]func(){} }\n",
+		"read in fn": "package main\n\nfunc topicsWrap() { _ = handlers[\"JOIN\"] }\n",
+	} {
+		out, ok := runGate(t, map[string]string{"running.go": core, "topics.go": src})
+		if ok {
+			t.Errorf("%s passed:\n%s", name, out)
+		}
+	}
+	// The declaring file may read the registry (its dispatcher does).
+	disp := core + "\nfunc dispatch(c string) { if h, ok := handlers[c]; ok { h() } }\n"
+	if out, ok := runGate(t, map[string]string{"running.go": disp}); !ok {
+		t.Fatalf("dispatcher refused:\n%s", out)
+	}
+}

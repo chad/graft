@@ -125,3 +125,20 @@ cover changes whose behaviour stays inside the edited sections.
 The v1 reference is the v1 spec exactly: it implements Topics only with `-v2`,
 and answers `TOPIC` with 421 otherwise. The oracle's own test checks the v1
 reference against every v1 check, and the v2 reference against all 51.
+
+## Gates beyond build and vet
+
+`graft.json` runs two structural gates written for this architecture:
+
+- `gates/registry.go`: a file may register only its own commands, and outside
+  the declaring file `handlers` may only appear as `handlers["CMD"] = ...`.
+- `gates/unused`: every package-level function must be reachable from
+  `main`, `init`, start-up initializers or tests, using a type-checked call
+  graph. Its limits are listed in its header.
+
+`conventions.md` tells the model about the dead-function rule. One run with
+both gates (claude sonnet, **n=1, an anecdote**) converged 7/7 regions on the
+first attempt with no gate retries, and the 47-check oracle scored it 47/47.
+Three of chad-bot's trees generated before the convention existed each fail
+the dead-function gate on one unused helper, which in those runs would have
+cost a retry; livecodelife's agent reports a Haiku tree that passes it.

@@ -165,5 +165,9 @@ Two directions, one rule:
   revised statement, which existing record's behaviour it constrains; it
   returns an answer with a receipt, and accepting it copies the statement into
   the owner's draft, which revises that record and regenerates its region.
+  **Today a dropped rule still reports success** ("8/8 applied", exit 0).
+  freeq-lite's dead-function gate catches the form seen in the probe (a helper
+  written for another file to call, never called), but a rule dropped with no
+  code at all still passes every gate.
 - Anchoring the evidence head outside the log (signed by the owner's DID, or
   committed alongside the records) to make deliberate rollback detectable.
