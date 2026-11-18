@@ -34,6 +34,13 @@ var mutants = []mutant{
 	{"nick_change_to_everyone", "for peer := range h.peers(c) {\n\t\t\t\th.send(peer, msg)", "for _, peer := range h.nicks {\n\t\t\t\th.send(peer, msg)", "nick_change_not_sent_to_strangers"},
 	{"private_message_echoed", "h.send(to, \":\"+c.prefix()+\" PRIVMSG \"+to.nick+\" :\"+text)", "h.send(to, \":\"+c.prefix()+\" PRIVMSG \"+to.nick+\" :\"+text)\n\t\th.send(c, \":\"+c.prefix()+\" PRIVMSG \"+to.nick+\" :\"+text)", "privmsg_nick_not_echoed"},
 	{"quit_to_everyone", "for p := range h.peers(c) {\n\t\t\th.send(p, \":\"+c.prefix()+\" QUIT :\"+reason)", "for _, p := range h.nicks {\n\t\t\th.send(p, \":\"+c.prefix()+\" QUIT :\"+reason)", "quit_not_sent_to_strangers"},
+	{"privmsg_to_self_delivered", "if to == c {\n\t\t\treturn true // the sender never receives their own message back\n\t\t}", "", "privmsg_to_self_not_delivered"},
+	{"no_nick_revalidation", "if !nickRE.MatchString(n) {", "if !c.registered && !nickRE.MatchString(n) {", "nick_change_revalidated_432"},
+	{"channel_limit_31", "len(c) > 32", "len(c) > 31", "channel_name_boundaries"},
+	{"control_chars_allowed", "r < 0x20 || ", "", "channel_name_boundaries"},
+	{"empty_text_delivered", "if len(p) < 2 || p[1] == \"\" {", "if len(p) < 2 {", "privmsg_empty_text_412"},
+	{"451_only_for_join", "\tif !c.registered {\n\t\th.send(c, fmt.Sprintf(\":%s 451 * :You have not registered\", server))", "\tif !c.registered && cmd == \"JOIN\" {\n\t\th.send(c, fmt.Sprintf(\":%s 451 * :You have not registered\", server))", "unregistered_451_for_every_command"},
+	{"no_line_limit_to_peer", "if len(line) > 510 {", "if false {", "overlong_line_ignored"},
 	{"delivered_nick_as_typed", "h.send(to, \":\"+c.prefix()+\" PRIVMSG \"+to.nick+\" :\"+text)", "h.send(to, \":\"+c.prefix()+\" PRIVMSG \"+target+\" :\"+text)", "privmsg_nick_ignoring_case"},
 }
 

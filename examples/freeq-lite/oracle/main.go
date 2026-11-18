@@ -635,15 +635,88 @@ var checks = []check{
 		return k.expect(":freeq-lite 421 " + n + " FrObNiCaTe :Unknown command")
 	}},
 	{"overlong_line_ignored", func(a string) error {
-		n := uniq("kai")
+		na, nb := uniq("kai"), uniq("lev")
+		ka, err := register(a, na)
+		if err != nil {
+			return err
+		}
+		defer ka.close()
+		kb, err := register(a, nb)
+		if err != nil {
+			return err
+		}
+		defer kb.close()
+		// Sent to a second user, so a server with no limit visibly delivers it.
+		ka.send("PRIVMSG " + nb + " :" + strings.Repeat("x", 600))
+		ka.send("PING still-here")
+		return first(ka.expect(":freeq-lite PONG freeq-lite :still-here"), kb.silent(400*time.Millisecond))
+	}},
+	{"privmsg_to_self_not_delivered", func(a string) error {
+		n := uniq("mae")
 		k, err := register(a, n)
 		if err != nil {
 			return err
 		}
 		defer k.close()
-		k.send("PRIVMSG " + n + " :" + strings.Repeat("x", 600))
-		k.send("PING still-here")
-		return k.expect(":freeq-lite PONG freeq-lite :still-here")
+		k.send("PRIVMSG "+n+" :note to self", "PING after")
+		return k.expect(":freeq-lite PONG freeq-lite :after")
+	}},
+	{"nick_change_revalidated_432", func(a string) error {
+		n := uniq("neo")
+		k, err := register(a, n)
+		if err != nil {
+			return err
+		}
+		defer k.close()
+		k.send("NICK 1bad")
+		return k.expect(":freeq-lite 432 * 1bad :Erroneous nickname")
+	}},
+	{"channel_name_boundaries", func(a string) error {
+		n := uniq("ora")
+		k, err := register(a, n)
+		if err != nil {
+			return err
+		}
+		defer k.close()
+		ch := "#" + strings.Repeat("c", 26) + fmt.Sprintf("%05d", seq.Add(1)%100000) // exactly 32
+		k.send("JOIN " + ch)
+		if err := k.expect(":" + pfx(n) + " JOIN " + ch); err != nil {
+			return fmt.Errorf("a 32-character channel was refused: %w", err)
+		}
+		k.expect(":freeq-lite 353 " + n + " = " + ch + " :" + n)
+		k.expect(":freeq-lite 366 " + n + " " + ch + " :End of /NAMES list")
+		bad := "#bell\x07ring"
+		k.send("JOIN " + bad)
+		return k.expect(":freeq-lite 403 " + n + " " + bad + " :No such channel")
+	}},
+	{"privmsg_empty_text_412", func(a string) error {
+		na, nb := uniq("pax"), uniq("quo")
+		ka, err := register(a, na)
+		if err != nil {
+			return err
+		}
+		defer ka.close()
+		kb, err := register(a, nb)
+		if err != nil {
+			return err
+		}
+		defer kb.close()
+		ka.send("PRIVMSG " + nb + " :")
+		return first(ka.expect(":freeq-lite 412 "+na+" :No text to send"), kb.silent(300*time.Millisecond))
+	}},
+	{"unregistered_451_for_every_command", func(a string) error {
+		k, err := dial(a)
+		if err != nil {
+			return err
+		}
+		defer k.close()
+		for _, line := range []string{"PRIVMSG someone :hi", "PART #x", "NAMES #x", "WHATEVER"} {
+			k.send(line)
+			if err := k.expect(":freeq-lite 451 * :You have not registered"); err != nil {
+				return fmt.Errorf("%s: %w", line, err)
+			}
+		}
+		return nil
 	}},
 	{"nick_boundary_and_charset_accepted", func(a string) error {
 		// 16 characters, and '_' and '-' after the first letter, are all valid.

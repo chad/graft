@@ -7,16 +7,17 @@ identity, no media.
 | Path | What | Who may see it |
 |---|---|---|
 | `spec/freeq-lite.md` | the intent: the only input to generation | graft, models, everyone |
-| `oracle/` | the behaviour suite (38 checks over TCP) | the bench only, never a model |
+| `oracle/` | the behaviour suite (43 checks over TCP) | the bench only, never a model |
 | `reference/` | a hand-written server that exists to validate the oracle | nobody but the oracle's own test |
 
 The oracle was written from the spec **before any code was generated**, imports
-nothing from any implementation, and must score the reference 38/38
-(`go test ./examples/freeq-lite/oracle`). **Fourteen committed mutants** of the
+nothing from any implementation, and must score the reference 43/43
+(`go test ./examples/freeq-lite/oracle`). **Twenty-one committed mutants** of the
 reference (`oracle/mutants_test.go`) must each fail their named check, so "the
-oracle has teeth" is something anyone can re-run. Six of them are bugs
-livecodelife's agent wrote that escaped the first, 32-check oracle; each now
-has a check.
+oracle has teeth" is something anyone can re-run. Eleven of them are bugs
+livecodelife's agent wrote that escaped earlier versions of the oracle (six
+against the 32-check oracle, five more against the 38-check one); each now has
+a check.
 
 **Keeping the yardstick out of reach.** Generate into a `--root` and `--repo`
 *outside* this repository. The model command runs in an empty directory and
@@ -25,7 +26,7 @@ graft reads `oracle/` or `reference/` except the oracle's own tests.
 
 ```sh
 go run ./cmd/graft draft examples/freeq-lite/spec/freeq-lite.md   # 7 drafts, 36 statements, all receipts valid
-go run ./examples/freeq-lite/oracle -bin ./path/to/server          # {"checks":38,"passed":…}
+go run ./examples/freeq-lite/oracle -bin ./path/to/server          # {"checks":43,"passed":…}
 ```
 
 **Spec clarification (before any measurement).** Review found one ambiguity:

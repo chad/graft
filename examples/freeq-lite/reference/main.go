@@ -291,6 +291,9 @@ func (h *hub) handle(c *client, line string) bool {
 			h.reply(c, "401", target+" :No such nick/channel")
 			return true
 		}
+		if to == c {
+			return true // the sender never receives their own message back
+		}
 		h.send(to, ":"+c.prefix()+" PRIVMSG "+to.nick+" :"+text)
 	default:
 		h.reply(c, "421", raw+" :Unknown command")
