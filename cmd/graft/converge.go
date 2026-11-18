@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"strings"
 
 	"flag"
 	"fmt"
@@ -70,6 +71,24 @@ func loadConvergeConfig(path string) (convergeConfig, []converge.Gate, error) {
 		for _, k := range kinds {
 			if !knownKind(k) {
 				return c, nil, fmt.Errorf("%s: tier %q requires unknown kind %q", path, tier, k)
+			}
+		}
+	}
+	// An argument starting with ./ or ../ that names an existing file next to
+	// the config is resolved against the config's directory (gates run inside
+	// a scratch copy of the tree, not next to it). Anything else, such as the
+	// Go pattern "./...", is passed through untouched.
+	base := filepath.Dir(path)
+	for i := range c.Gates {
+		for j, a := range c.Gates[i].Argv {
+			if !strings.HasPrefix(a, "./") && !strings.HasPrefix(a, "../") {
+				continue
+			}
+			p := filepath.Join(base, a)
+			if fi, err := os.Stat(p); err == nil && fi.Mode().IsRegular() {
+				if abs, err := filepath.Abs(p); err == nil {
+					c.Gates[i].Argv[j] = abs
+				}
 			}
 		}
 	}

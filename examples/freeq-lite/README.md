@@ -96,7 +96,32 @@ First run (claude sonnet, n=1, an anecdote; scored by the oracle as it was then,
 | v2 oracle, v1 server | 38/42 (the 4 topic checks fail, as they should) |
 | v2 oracle, v2 server | **42/42** |
 
-A one-call baseline has to regenerate the whole program for the same change,
-and nothing guarantees the other 38 behaviours survive it. With graft the
-unchanged regions are not touched at all: their bytes, records and evidence
-stay exactly as they were.
+**What this does and does not show.** Topics is an *additive* change: a new
+section whose behaviour lives in a new file. For such a change the seven
+untouched files are byte-identical **by construction**, since their records did
+not change, so graft never rewrites them. It is guaranteed, not earned. Their
+evidence is not simply trusted either: every run re-verifies each up-to-date
+region under the current gates (#12).
+
+**A change that spans regions is not handled yet.** livecodelife's agent
+probed this by adding one line to Topics: "a joiner receives 332 before 353".
+That behaviour belongs to JOIN, which `channels.go` owns. With only build and
+vet as gates, the model wrapped `handlers["JOIN"]` from `topics.go` and
+re-implemented JOIN, against the conventions, and nothing flagged it. The
+config now has a third gate, `gates/registry.go`, which refuses any file that
+registers a command another file owns. Re-running the probe:
+
+1. Attempt 1 wrapped JOIN again, and the registry gate refused it, naming
+   `channels.go`.
+2. Attempt 2 then converged by **leaving the JOIN rule out**.
+
+So absorption is now blocked, but a cross-region requirement can still be
+dropped silently. Catching that needs either the drafter to notice that a
+statement concerns another section's command, so a human can move it into
+Channels (whose record would then be revised and regenerated), or per-record
+behavioural evals (SPEC §6). Both are open. Until then, graft's change claims
+cover changes whose behaviour stays inside the edited sections.
+
+The v1 reference is the v1 spec exactly: it implements Topics only with `-v2`,
+and answers `TOPIC` with 421 otherwise. The oracle's own test checks the v1
+reference against every v1 check, and the v2 reference against all 47.

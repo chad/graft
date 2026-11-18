@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os/exec"
 	"path/filepath"
 	"testing"
@@ -16,9 +17,9 @@ func TestOracleScoresReferenceFully(t *testing.T) {
 	if out, err := exec.Command("go", "build", "-o", bin, "../reference").CombinedOutput(); err != nil {
 		t.Fatalf("build reference: %v\n%s", err, out)
 	}
-	for _, c := range append(append([]check{}, checks...), v2Checks...) {
-		t.Run(c.name, func(t *testing.T) {
-			addr, stop, err := start(bin)
+	run := func(c check, extra ...string) {
+		t.Run(c.name+fmt.Sprint(extra), func(t *testing.T) {
+			addr, stop, err := start(bin, extra...)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -27,5 +28,13 @@ func TestOracleScoresReferenceFully(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	}
+	// v1 reference: every v1 check. v2 reference: every v1 and v2 check.
+	for _, c := range checks {
+		run(c)
+		run(c, "-v2")
+	}
+	for _, c := range v2Checks {
+		run(c, "-v2")
 	}
 }

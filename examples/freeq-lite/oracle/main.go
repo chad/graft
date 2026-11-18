@@ -914,14 +914,14 @@ var v2Checks = []check{
 }
 
 // start launches bin on a free port and waits until it accepts connections.
-func start(bin string) (string, func(), error) {
+func start(bin string, extra ...string) (string, func(), error) {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return "", nil, err
 	}
 	addr := l.Addr().String()
 	l.Close()
-	cmd := exec.Command(bin, "-addr", addr)
+	cmd := exec.Command(bin, append([]string{"-addr", addr}, extra...)...)
 	if err := cmd.Start(); err != nil {
 		return "", nil, err
 	}

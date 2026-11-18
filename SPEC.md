@@ -155,5 +155,9 @@ Two directions, one rule:
 - One log or two: a journal of operations over provenance's content snapshots?
 - Where a record's risk tier lives: provenance records have none, so
   `graft converge --tier` is caller-supplied today.
+- Cross-region requirements: a new statement in one section can concern a
+  command another section owns. The drafter should flag it so the owning
+  record is revised, rather than letting the change be dropped or absorbed
+  into the new region (freeq-lite probe, #14).
 - Anchoring the evidence head outside the log (signed by the owner's DID, or
   committed alongside the records) to make deliberate rollback detectable.

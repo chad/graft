@@ -17,6 +17,9 @@ import (
 
 const server = "freeq-lite"
 
+// v2 selects the spec revision: without it this is exactly the v1 reference.
+var v2 bool
+
 var (
 	nickRE = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]{0,15}$`)
 )
@@ -259,7 +262,11 @@ func (h *hub) handle(c *client, line string) bool {
 			delete(h.display, key)
 			delete(h.topics, key)
 		}
-	case "TOPIC": // v2
+	case "TOPIC": // v2 only: under the v1 spec TOPIC is an unknown command
+		if !v2 {
+			h.reply(c, "421", raw+" :Unknown command")
+			return true
+		}
 		if len(p) == 0 {
 			return true
 		}
@@ -375,6 +382,7 @@ func (h *hub) serve(conn net.Conn) {
 
 func main() {
 	addr := flag.String("addr", ":6667", "listen address")
+	flag.BoolVar(&v2, "v2", false, "implement the v2 spec (Topics)")
 	flag.Parse()
 	ln, err := net.Listen("tcp", *addr)
 	if err != nil {
