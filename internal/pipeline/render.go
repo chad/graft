@@ -15,24 +15,18 @@ import (
 	"github.com/chad/graft/internal/render"
 )
 
-// RenderConfig turns on `graft run --render`: sedum lays out the skeleton and
-// the model converges only each record's Body helpers.
-type RenderConfig struct {
-	Skeleton   recording.Skeleton
-	Sedum      render.Sedum
-	Generators string // sedum's generators directory (contains go/)
-}
-
 // renderTree plans the recording from the accepted records and the skeleton,
 // renders it with sedum into cfg.Root, and seeds each region's _synth.go file
 // if it does not exist yet (a converged body is never clobbered). It returns
 // the regions by owning record id. It makes no model call.
 func (cfg Config) renderTree(ctx context.Context, store records.Store, acc []Accepted) (map[string]recording.Region, error) {
-	rc := cfg.Render
-	if rc.Sedum == nil || rc.Generators == "" {
+	if cfg.Sedum == nil || cfg.Generators == "" {
 		return nil, errors.New("pipeline: --render needs sedum and its generators")
 	}
-	in := recording.Input{Skeleton: rc.Skeleton, Tier: cfg.Tier}
+	if v, err := cfg.Sedum.Version(ctx); err == nil {
+		cfg.say("sedum %s\n", v)
+	}
+	in := recording.Input{Skeleton: *cfg.Skeleton, Tier: cfg.Tier}
 	for _, a := range acc {
 		p, err := store.Current(a.ID)
 		if err != nil {
@@ -62,13 +56,13 @@ func (cfg Config) renderTree(ctx context.Context, store records.Store, acc []Acc
 		return nil, err
 	}
 	defer cleanup()
-	if err := render.Render(ctx, rc.Sedum, cfg.Root, recPath); err != nil {
+	if err := render.Render(ctx, cfg.Sedum, cfg.Root, recPath); err != nil {
 		if errors.Is(err, render.ErrHandEdited) {
 			return nil, fmt.Errorf("pipeline: refusing to render before any model call: %w (restore the file, or revise the record)", err)
 		}
 		return nil, fmt.Errorf("pipeline: --render: %w", err)
 	}
-	if err := rc.Sedum.GrowCheck(ctx, cfg.Root); err != nil {
+	if err := cfg.Sedum.GrowCheck(ctx, cfg.Root); err != nil {
 		return nil, fmt.Errorf("pipeline: --render: grow --check after render: %w", err)
 	}
 	by := map[string]recording.Region{}
@@ -102,7 +96,7 @@ func (cfg Config) sedumEnv() (func(), error) {
 			return nil, fmt.Errorf("pipeline: --render: %s already exists in the tree", filepath.Base(p))
 		}
 	}
-	if out, err := exec.Command("cp", "-r", cfg.Render.Generators, gen).CombinedOutput(); err != nil {
+	if out, err := exec.Command("cp", "-r", cfg.Generators, gen).CombinedOutput(); err != nil {
 		return nil, fmt.Errorf("pipeline: copy generators: %v: %s", err, strings.TrimSpace(string(out)))
 	}
 	abs, err := filepath.Abs(filepath.Join(cfg.Repo, "provenance"))

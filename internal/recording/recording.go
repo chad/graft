@@ -274,6 +274,10 @@ func stemOf(p string) string { return strings.TrimSuffix(path.Base(p), ".go") }
 // synthPath is the file that holds a skeleton file's convergence region.
 func synthPath(p string) string { return path.Join(path.Dir(p), stemOf(p)+"_synth.go") }
 
+// IsSynthPath reports whether p is a model-written synthesis file; everything
+// else a render produces comes from sedum.
+func IsSynthPath(p string) bool { return strings.HasSuffix(p, "_synth.go") }
+
 func helperName(f File, s Stub) string { return stemOf(f.Path) + upperFirst(s.Name) + "Body" }
 
 func packageName(f File) string {

@@ -15,6 +15,7 @@ import (
 	"github.com/chad/graft/internal/model"
 	"github.com/chad/graft/internal/recording"
 	"github.com/chad/graft/internal/records"
+	"github.com/chad/graft/internal/render"
 )
 
 // ErrModel: the model command failed (timeout, CLI error, empty answer). That
@@ -34,8 +35,10 @@ type Config struct {
 	Gates       []converge.Gate
 	Policy      evidence.Policy
 	Log         *evidence.Log
-	Progress    io.Writer     // nil for silence
-	Render      *RenderConfig // non-nil: sedum skeleton, model writes only Body helpers
+	Progress    io.Writer           // nil for silence
+	Skeleton    *recording.Skeleton // non-nil (with Sedum): sedum lays out the tree, the model writes only Body helpers
+	Sedum       render.Sedum
+	Generators  string // sedum's generators directory (contains go/); needed with Skeleton
 }
 
 // Outcome is what happened to one record.
@@ -66,7 +69,7 @@ func Run(ctx context.Context, cfg Config, acc []Accepted) ([]Outcome, error) {
 	}
 	sort.Slice(acc, func(i, j int) bool { return acc[i].Entry.Order < acc[j].Entry.Order })
 	var byRec map[string]recording.Region
-	if cfg.Render != nil {
+	if cfg.Skeleton != nil {
 		if byRec, err = cfg.renderTree(ctx, store, acc); err != nil {
 			return nil, err
 		}
@@ -81,7 +84,7 @@ func Run(ctx context.Context, cfg Config, acc []Accepted) ([]Outcome, error) {
 		o := Outcome{ID: a.ID, Section: a.Entry.Section, File: a.Entry.File}
 		file := a.Entry.File
 		reg, hasReg := byRec[a.ID]
-		if cfg.Render != nil {
+		if cfg.Skeleton != nil {
 			if !hasReg {
 				// The skeleton fixes everything for this record: nothing to converge.
 				o.Applied = true
@@ -122,7 +125,7 @@ func Run(ctx context.Context, cfg Config, acc []Accepted) ([]Outcome, error) {
 			cfg.say("%s (%s): attempt %d\n", a.Entry.Section, file, o.Attempts)
 			var prompt string
 			var err error
-			if cfg.Render != nil {
+			if cfg.Skeleton != nil {
 				prompt, err = cfg.renderPrompt(a, reg, feedback)
 			} else {
 				prompt, err = cfg.prompt(a, feedback)
