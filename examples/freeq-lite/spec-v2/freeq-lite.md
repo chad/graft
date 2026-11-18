@@ -9,7 +9,7 @@ No federation, no identity, no media: just people, nicks and channels.
 - Every message is one line ending in CRLF; a line ending in a bare LF is also accepted
 - A line longer than 512 bytes is ignored
 - Commands are case-insensitive; `nick`, `NICK` and `Nick` are the same command
-- The server's name is `freeq-lite`, and every reply the server itself sends starts with `:freeq-lite`
+- The server's name is `freeq-lite`, and every reply the server itself sends starts with `:freeq-lite`, except the `ERROR` line it sends when closing a connection
 
 ## Registration
 
@@ -29,6 +29,7 @@ No federation, no identity, no media: just people, nicks and channels.
 ## Channels
 
 - A channel name must start with `#`, be 2 to 32 characters long, and contain no spaces, commas or control characters
+- Channel names are matched ignoring case: `#Room` and `#room` are the same channel, which keeps the name it was created with
 - `JOIN <channel>` adds the user to the channel, creating it if it does not exist
 - When a user joins, `:<prefix> JOIN <channel>` is sent to every member of the channel, including the user who joined
 - After joining, the joiner receives `:freeq-lite 353 <nick> = <channel> :<names>` followed by `:freeq-lite 366 <nick> <channel> :End of /NAMES list`, where names are the members' nicks sorted alphabetically and separated by single spaces
@@ -45,7 +46,7 @@ No federation, no identity, no media: just people, nicks and channels.
 - `PRIVMSG <channel> :<text>` sends `:<prefix> PRIVMSG <channel> :<text>` to every member of the channel except the sender
 - Only members may send to a channel; anyone else is answered with `:freeq-lite 404 <nick> <channel> :Cannot send to channel`
 - `PRIVMSG <nick> :<text>` sends `:<prefix> PRIVMSG <nick> :<text>` to that user, where `<nick>` in the delivered line is the recipient's nick as they registered it; nick matching ignores case
-- The sender of a `PRIVMSG` never receives their own message back
+- The sender of a `PRIVMSG` never receives their own message back; a `PRIVMSG` to one's own nick is accepted and delivered to no one
 - A message to a nick or channel that does not exist is answered with `:freeq-lite 401 <nick> <target> :No such nick/channel`
 - A `PRIVMSG` with no text is answered with `:freeq-lite 412 <nick> :No text to send`
 

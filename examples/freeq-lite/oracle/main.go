@@ -343,14 +343,28 @@ var checks = []check{
 		}
 		defer kb.close()
 		ka.send("JOIN " + ch)
-		ka.expect(":" + pfx(na) + " JOIN " + ch)
-		ka.expect(":freeq-lite 353 " + na + " = " + ch + " :" + na)
-		ka.expect(":freeq-lite 366 " + na + " " + ch + " :End of /NAMES list")
+		if err := ka.expect(":" + pfx(na) + " JOIN " + ch); err != nil {
+			return err
+		}
+		if err := ka.expect(":freeq-lite 353 " + na + " = " + ch + " :" + na); err != nil {
+			return err
+		}
+		if err := ka.expect(":freeq-lite 366 " + na + " " + ch + " :End of /NAMES list"); err != nil {
+			return err
+		}
 		kb.send("JOIN " + ch)
-		ka.expect(":" + pfx(nb) + " JOIN " + ch)
-		kb.expect(":" + pfx(nb) + " JOIN " + ch)
-		kb.expect(":freeq-lite 353 " + nb + " = " + ch + " :" + na + " " + nb)
-		kb.expect(":freeq-lite 366 " + nb + " " + ch + " :End of /NAMES list")
+		if err := ka.expect(":" + pfx(nb) + " JOIN " + ch); err != nil {
+			return err
+		}
+		if err := kb.expect(":" + pfx(nb) + " JOIN " + ch); err != nil {
+			return err
+		}
+		if err := kb.expect(":freeq-lite 353 " + nb + " = " + ch + " :" + na + " " + nb); err != nil {
+			return err
+		}
+		if err := kb.expect(":freeq-lite 366 " + nb + " " + ch + " :End of /NAMES list"); err != nil {
+			return err
+		}
 		kb.send("PART " + ch)
 		return first(ka.expect(":"+pfx(nb)+" PART "+ch), kb.expect(":"+pfx(nb)+" PART "+ch))
 	}},
@@ -363,9 +377,15 @@ var checks = []check{
 		}
 		defer k.close()
 		k.send("JOIN " + ch)
-		k.expect(":" + pfx(n) + " JOIN " + ch)
-		k.expect(":freeq-lite 353 " + n + " = " + ch + " :" + n)
-		k.expect(":freeq-lite 366 " + n + " " + ch + " :End of /NAMES list")
+		if err := k.expect(":" + pfx(n) + " JOIN " + ch); err != nil {
+			return err
+		}
+		if err := k.expect(":freeq-lite 353 " + n + " = " + ch + " :" + n); err != nil {
+			return err
+		}
+		if err := k.expect(":freeq-lite 366 " + n + " " + ch + " :End of /NAMES list"); err != nil {
+			return err
+		}
 		k.send("PART " + ch + " :gone fishing")
 		return k.expect(":" + pfx(n) + " PART " + ch + " :gone fishing")
 	}},
@@ -389,9 +409,15 @@ var checks = []check{
 		}
 		defer k.close()
 		k.send("JOIN " + ch)
-		k.expect(":" + pfx(n) + " JOIN " + ch)
-		k.expect(":freeq-lite 353 " + n + " = " + ch + " :" + n)
-		k.expect(":freeq-lite 366 " + n + " " + ch + " :End of /NAMES list")
+		if err := k.expect(":" + pfx(n) + " JOIN " + ch); err != nil {
+			return err
+		}
+		if err := k.expect(":freeq-lite 353 " + n + " = " + ch + " :" + n); err != nil {
+			return err
+		}
+		if err := k.expect(":freeq-lite 366 " + n + " " + ch + " :End of /NAMES list"); err != nil {
+			return err
+		}
 		k.send("PART "+ch, "NAMES "+ch)
 		return first(k.expect(":"+pfx(n)+" PART "+ch), k.expect(":freeq-lite 366 "+n+" "+ch+" :End of /NAMES list"))
 	}},
@@ -572,8 +598,12 @@ var checks = []check{
 			return err
 		}
 		k1.send("QUIT")
-		k1.expect("ERROR :Closing link")
-		k1.closed()
+		if err := k1.expect("ERROR :Closing link"); err != nil {
+			return err
+		}
+		if err := k1.closed(); err != nil {
+			return err
+		}
 		k1.close()
 		time.Sleep(200 * time.Millisecond)
 		k2, err := register(a, n)
@@ -683,8 +713,12 @@ var checks = []check{
 		if err := k.expect(":" + pfx(n) + " JOIN " + ch); err != nil {
 			return fmt.Errorf("a 32-character channel was refused: %w", err)
 		}
-		k.expect(":freeq-lite 353 " + n + " = " + ch + " :" + n)
-		k.expect(":freeq-lite 366 " + n + " " + ch + " :End of /NAMES list")
+		if err := k.expect(":freeq-lite 353 " + n + " = " + ch + " :" + n); err != nil {
+			return err
+		}
+		if err := k.expect(":freeq-lite 366 " + n + " " + ch + " :End of /NAMES list"); err != nil {
+			return err
+		}
 		bad := "#bell\x07ring"
 		k.send("JOIN " + bad)
 		return k.expect(":freeq-lite 403 " + n + " " + bad + " :No such channel")
@@ -719,19 +753,15 @@ var checks = []check{
 		return nil
 	}},
 	{"nick_boundary_and_charset_accepted", func(a string) error {
-		// 16 characters, and '_' and '-' after the first letter, are all valid.
-		for _, base := range []string{"abcdefghijklmn", "a_b-c"} {
-			n := base + fmt.Sprint(seq.Add(1)%10)
-			if len(n) > 16 {
-				n = n[:16]
-			}
+		// '_' and '-' after the first letter are valid; so is exactly 16 characters.
+		for _, n := range []string{fmt.Sprintf("a_b-c%d", seq.Add(1)), fmt.Sprintf("x-y_%d", seq.Add(1))} {
 			k, err := register(a, n)
 			if err != nil {
 				return fmt.Errorf("valid nick %q: %w", n, err)
 			}
 			k.close()
 		}
-		n := "p" + strings.Repeat("q", 14) + fmt.Sprint(seq.Add(1)%10) // exactly 16
+		n := fmt.Sprintf("p%015d", seq.Add(1)) // exactly 16, unique per check
 		k, err := register(a, n)
 		if err != nil {
 			return fmt.Errorf("16-character nick %q: %w", n, err)
@@ -827,6 +857,84 @@ var checks = []check{
 		ka.send("QUIT :bye")
 		ka.close()
 		return kc.silent(500 * time.Millisecond)
+	}},
+	{"channel_names_ignore_case", func(a string) error {
+		base := uniq("#Room")
+		na, nb := uniq("ali"), uniq("bea")
+		ka, err := register(a, na)
+		if err != nil {
+			return err
+		}
+		defer ka.close()
+		ka.send("JOIN " + base)
+		if err := first(ka.expect(":"+pfx(na)+" JOIN "+base),
+			ka.expect(":freeq-lite 353 "+na+" = "+base+" :"+na),
+			ka.expect(":freeq-lite 366 "+na+" "+base+" :End of /NAMES list")); err != nil {
+			return err
+		}
+		kb, err := register(a, nb)
+		if err != nil {
+			return err
+		}
+		defer kb.close()
+		lower := strings.ToLower(base)
+		kb.send("JOIN " + lower)
+		// Same channel, shown with the name it was created with.
+		return first(ka.expect(":"+pfx(nb)+" JOIN "+base), kb.expect(":"+pfx(nb)+" JOIN "+base),
+			kb.expect(":freeq-lite 353 "+nb+" = "+base+" :"+na+" "+nb))
+	}},
+	{"part_reason_reaches_members", func(a string) error {
+		ch := uniq("#bye")
+		na, nb := uniq("cid"), uniq("dot")
+		ka, err := register(a, na)
+		if err != nil {
+			return err
+		}
+		defer ka.close()
+		kb, err := register(a, nb)
+		if err != nil {
+			return err
+		}
+		defer kb.close()
+		ka.send("JOIN " + ch)
+		if err := ka.drainUntil(":freeq-lite 366 " + na + " " + ch + " :End of /NAMES list"); err != nil {
+			return err
+		}
+		kb.send("JOIN " + ch)
+		if err := ka.drainUntil(":" + pfx(nb) + " JOIN " + ch); err != nil {
+			return err
+		}
+		kb.send("PART " + ch + " :see you")
+		return ka.expect(":" + pfx(nb) + " PART " + ch + " :see you")
+	}},
+	{"quit_removes_from_channels", func(a string) error {
+		ch := uniq("#stay")
+		na, nb := uniq("eli"), uniq("fox")
+		ka, err := register(a, na)
+		if err != nil {
+			return err
+		}
+		kb, err := register(a, nb)
+		if err != nil {
+			return err
+		}
+		defer kb.close()
+		ka.send("JOIN " + ch)
+		if err := ka.drainUntil(":freeq-lite 366 " + na + " " + ch + " :End of /NAMES list"); err != nil {
+			return err
+		}
+		kb.send("JOIN " + ch)
+		if err := kb.drainUntil(":freeq-lite 366 " + nb + " " + ch + " :End of /NAMES list"); err != nil {
+			return err
+		}
+		ka.send("QUIT :done")
+		if err := kb.drainUntil(":" + pfx(na) + " QUIT :done"); err != nil {
+			return err
+		}
+		ka.close()
+		kb.send("NAMES " + ch)
+		return first(kb.expect(":freeq-lite 353 "+nb+" = "+ch+" :"+nb),
+			kb.expect(":freeq-lite 366 "+nb+" "+ch+" :End of /NAMES list"))
 	}},
 }
 

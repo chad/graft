@@ -42,6 +42,9 @@ var mutants = []mutant{
 	{"451_only_for_join", "\tif !c.registered {\n\t\th.send(c, fmt.Sprintf(\":%s 451 * :You have not registered\", server))", "\tif !c.registered && cmd == \"JOIN\" {\n\t\th.send(c, fmt.Sprintf(\":%s 451 * :You have not registered\", server))", "unregistered_451_for_every_command"},
 	{"no_line_limit_to_peer", "if len(line) > 510 {", "if false {", "overlong_line_ignored"},
 	{"topic_kept_after_channel_forgotten", "delete(h.display, key)\n\t\t\tdelete(h.topics, key)", "delete(h.display, key)", "topic_forgotten_with_channel"},
+	{"channel_case_sensitive", "key := strings.ToLower(ch)\n\t\tif c.channels[key] {", "key := ch\n\t\tif c.channels[key] {", "channel_names_ignore_case"},
+	{"part_reason_only_to_parter", "msg := \":\" + c.prefix() + \" PART \" + h.display[key]\n\t\tif len(p) > 1 {\n\t\t\tmsg += \" :\" + p[1]\n\t\t}\n\t\tfor m := range h.channels[key] {\n\t\t\th.send(m, msg)\n\t\t}", "msg := \":\" + c.prefix() + \" PART \" + h.display[key]\n\t\tfor m := range h.channels[key] {\n\t\t\tif m == c && len(p) > 1 {\n\t\t\t\th.send(m, msg+\" :\"+p[1])\n\t\t\t\tcontinue\n\t\t\t}\n\t\t\th.send(m, msg)\n\t\t}", "part_reason_reaches_members"},
+	{"quit_keeps_channel_membership", "for ch := range c.channels {\n\t\tdelete(h.channels[ch], c)", "for ch := range c.channels {\n\t\tif reason == \"Connection closed\" {\n\t\t\tdelete(h.channels[ch], c)\n\t\t}", "quit_removes_from_channels"},
 	{"delivered_nick_as_typed", "h.send(to, \":\"+c.prefix()+\" PRIVMSG \"+to.nick+\" :\"+text)", "h.send(to, \":\"+c.prefix()+\" PRIVMSG \"+target+\" :\"+text)", "privmsg_nick_ignoring_case"},
 }
 
@@ -59,8 +62,12 @@ func TestMutantsAreCaught(t *testing.T) {
 				t.Fatalf("mutation anchor not found in the reference: %q", m.from)
 			}
 			dir := t.TempDir()
-			os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module mutant\n\ngo 1.22\n"), 0o644)
-			os.WriteFile(filepath.Join(dir, "main.go"), []byte(strings.Replace(string(src), m.from, m.to, 1)), 0o644)
+			if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module mutant\n\ngo 1.22\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte(strings.Replace(string(src), m.from, m.to, 1)), 0o644); err != nil {
+				t.Fatal(err)
+			}
 			bin := filepath.Join(dir, "server")
 			cmd := exec.Command("go", "build", "-o", bin, ".")
 			cmd.Dir = dir
