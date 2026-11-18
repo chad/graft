@@ -12,10 +12,15 @@
 //	go run <path>/smoke.go          # checks for the sections present
 //	go run <path>/smoke.go -all     # every check (used against the reference)
 //	go run <path>/smoke.go -bin S   # test an existing server binary
+//	go run <path>/smoke.go -only channels.go -json   # one section, machine-readable
+//
+// Stable interface (best-of-N ranks on it): exit 0 when every selected check
+// passes, 1 otherwise; -json prints {"checks":N,"passed":M,"failed":[...]}.
 package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"net"
@@ -305,14 +310,25 @@ func main() {
 	every := flag.Bool("all", false, "run every check, whatever has been generated")
 	bin := flag.String("bin", "", "server binary to test (default: build the tree in the current directory)")
 	extra := flag.String("server-args", "", "extra arguments for the server, space-separated (e.g. -v2 for the reference)")
+	only := flag.String("only", "", "run only the checks of this section file (e.g. channels.go)")
+	asJSON := flag.Bool("json", false, `print {"checks":N,"passed":M,"failed":[...]} instead of text`)
 	flag.Parse()
 	var run []check
 	for _, c := range checks {
-		if *every || generated(c.file) {
+		switch {
+		case *only != "":
+			if c.file == *only {
+				run = append(run, c)
+			}
+		case *every || generated(c.file):
 			run = append(run, c)
 		}
 	}
 	if len(run) == 0 {
+		if *asJSON {
+			fmt.Println(`{"checks":0,"passed":0,"failed":[]}`)
+			return
+		}
 		fmt.Println("smoke: no sections generated yet; nothing to check")
 		return
 	}
@@ -358,13 +374,27 @@ func main() {
 			failed = append(failed, fmt.Sprintf("[%s] %s: %v", c.file, c.name, err))
 		}
 	}
-	fmt.Printf("smoke: %d/%d checks passed\n", len(run)-len(failed), len(run))
+	if *asJSON {
+		b, _ := json.Marshal(map[string]any{"checks": len(run), "passed": len(run) - len(failed), "failed": nonNil(failed)})
+		fmt.Println(string(b))
+	} else {
+		fmt.Printf("smoke: %d/%d checks passed\n", len(run)-len(failed), len(run))
+	}
 	if len(failed) > 0 {
-		fmt.Println(strings.Join(failed, "\n"))
+		if !*asJSON {
+			fmt.Println(strings.Join(failed, "\n"))
+		}
 		srv.Process.Kill()
 		srv.Wait()
 		os.Exit(1)
 	}
+}
+
+func nonNil(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
 }
 
 func fail(msg string) {
