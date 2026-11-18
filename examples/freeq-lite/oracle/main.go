@@ -956,6 +956,25 @@ var checks = []check{
 		return first(kb.expect(":freeq-lite 353 "+nb+" = "+ch+" :"+nb),
 			kb.expect(":freeq-lite 366 "+nb+" "+ch+" :End of /NAMES list"))
 	}},
+	{"forgotten_channel_takes_new_name", func(a string) error {
+		// A channel forgotten when its last member left is new when joined
+		// again, and takes the name it is created with this time.
+		first1 := uniq("#Phoenix")
+		again := strings.ToUpper(first1)
+		n := uniq("gil")
+		k, err := register(a, n)
+		if err != nil {
+			return err
+		}
+		defer k.close()
+		k.send("JOIN "+first1, "PART "+first1)
+		if err := k.drainUntil(":" + pfx(n) + " PART " + first1); err != nil {
+			return err
+		}
+		k.send("JOIN " + again)
+		return first(k.expect(":"+pfx(n)+" JOIN "+again),
+			k.expect(":freeq-lite 353 "+n+" = "+again+" :"+n))
+	}},
 }
 
 // v2Checks are the Topics revision of the spec (spec-v2/), run with -v2.
