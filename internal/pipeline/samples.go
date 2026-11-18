@@ -33,8 +33,8 @@ type sample struct {
 func (s sample) satisfied() bool { return s.checked && s.trial.Decision.Result.Satisfied }
 
 // attemptSamples runs one attempt with cfg.Samples concurrent model calls for
-// the same prompt, checks every answer, and commits only the smallest-diff
-// satisfied one (ties: lowest sample index, so the choice is deterministic).
+// the same prompt, checks every answer, and commits one satisfied answer
+// (see pick: smallest diff for an existing region, lowest index for a new one).
 // If none is satisfied, o.LastFailure and *feedback come from the closest
 // candidate, which is diagnosis only and is never applied. It reports whether
 // a candidate was applied.
@@ -114,17 +114,7 @@ func (cfg Config) attemptSamples(ctx context.Context, c converge.Converger, stor
 		all = append(all, s)
 	}
 
-	var win *sample
-	satisfied := 0
-	for i := range all {
-		if !all[i].satisfied() {
-			continue
-		}
-		satisfied++
-		if win == nil || all[i].diff < win.diff { // strict: ties keep the lower index
-			win = &all[i]
-		}
-	}
+	win, satisfied := pick(all, base == "")
 	if win != nil {
 		d, err := c.Commit(win.trial)
 		if err != nil {
@@ -150,6 +140,26 @@ func (cfg Config) attemptSamples(ctx context.Context, c converge.Converger, stor
 	}
 	cfg.say("  sampled %d, 0 satisfied; closest #%d: %s\n", n, best.idx, firstLine(o.LastFailure))
 	return false, nil
+}
+
+// pick chooses among satisfied samples: the smallest diff against the
+// region's current body, ties to the lowest index. For a region with no body
+// yet (fresh) the "diff" is just the answer's length, and preferring the
+// shortest passing answer prefers the one most likely to have dropped a rule
+// no gate covers (SPEC §12), so a fresh region takes the lowest index.
+func pick(all []sample, fresh bool) (*sample, int) {
+	var win *sample
+	satisfied := 0
+	for i := range all {
+		if !all[i].satisfied() {
+			continue
+		}
+		satisfied++
+		if win == nil || (!fresh && all[i].diff < win.diff) { // strict: ties keep the lower index
+			win = &all[i]
+		}
+	}
+	return win, satisfied
 }
 
 // smokeRe matches the eval gate's "smoke: X/Y checks passed" detail line.

@@ -227,8 +227,11 @@ converged on the first attempt, and the held-out oracle scored it 47/47
 ## Cost: Haiku best-of-N vs Sonnet
 
 `graft run --samples N` draws N candidates per region in one round and keeps
-the passing candidate with the smallest diff against the region's current
-body (ties: lowest sample index). When none passes, the closest miss (most
+one passing candidate: for a region that already has a body, the one with the
+smallest diff against it (ties: lowest sample index); for a new region, the
+lowest sample index, because there "smallest diff" would mean "shortest
+answer", the one most likely to have dropped a rule no gate covers. (The
+runs below predate that rule and used smallest diff everywhere.) When none passes, the closest miss (most
 gates passed, then most smoke checks passed) supplies the feedback for the
 next attempt and is never applied. At most 4 model calls run at once. The
 question measured here: can Haiku with `--samples 3` (arm B) match Sonnet with
@@ -237,6 +240,20 @@ the spec into a fresh tree; the oracle (held out, never shown to the model) is
 run on the result. Cost is the sum of `total_cost_usd` over every model call.
 Smoke checks are a gate and a hint, never a score.
 
+**Headline, post-smoke: did graft converge (every region applied)?**
+Sonnet x1 **3/3**, Haiku x3 **2/3**. The oracle score is secondary, and for a
+run that did not converge it is a score of a partial tree graft refused to
+finish.
+
+**Reproducing.** `cost/` holds the scripts that produced these numbers
+(`prep.sh` builds graft and the oracle and copies freeq-lite without the oracle
+or the reference; `arm.sh <name> <model> <samples> <run#>` does one run;
+`claudecost.sh` wraps the model call to log its cost). They ran outside
+`graft bench`, so there are **no per-run jsonl records and no intervals**:
+these tables are the only record. `arm.sh` now also logs graft's exit code;
+the runs below predate that, and B-1's non-convergence is from its log line.
+Each run costs real money (about $1 for Sonnet x1, $0.19 for Haiku x3).
+
 **Post-smoke (current main, visible smoke gate on), n=3 per arm:**
 
 | run | oracle /47 | calls | region attempts | cost USD | wall |
@@ -244,7 +261,7 @@ Smoke checks are a gate and a hint, never a score.
 | A-1 Sonnet x1 | 47 | 7 | 7 | 1.041 | 118s |
 | A-2 Sonnet x1 | 47 | 7 | 7 | 1.002 | 92s |
 | A-3 Sonnet x1 | 47 | 7 | 7 | 0.991 | 137s |
-| B-1 Haiku x3 | 40 (run failed) | 24 | 9 | 0.212 | 403s |
+| B-1 Haiku x3 | did not converge (partial tree: 40) | 24 | 9 | 0.212 | 403s |
 | B-2 Haiku x3 | 47 | 21 | 7 | 0.186 | 285s |
 | B-3 Haiku x3 | 47 | 21 | 7 | 0.189 | 223s |
 
