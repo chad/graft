@@ -35,9 +35,18 @@ import (
 	"strings"
 )
 
+// interfaceMethods are names of methods in common standard-library interfaces
+// (fmt, error, errors, io, sort, container/heap, net/http, encoding/*,
+// database/sql); a method with one of these names may be called through the
+// interface, which static selection cannot see.
 var interfaceMethods = map[string]bool{
-	"String": true, "Error": true, "Read": true, "Write": true, "Close": true, "ServeHTTP": true,
-	"Len": true, "Less": true, "Swap": true, "MarshalJSON": true, "UnmarshalJSON": true,
+	"String": true, "GoString": true, "Format": true, "Error": true, "Unwrap": true, "Is": true, "As": true,
+	"Read": true, "Write": true, "Close": true, "Seek": true, "ReadFrom": true, "WriteTo": true,
+	"ReadByte": true, "WriteByte": true, "ReadRune": true, "WriteString": true, "Flush": true,
+	"Len": true, "Less": true, "Swap": true, "Push": true, "Pop": true,
+	"ServeHTTP": true, "RoundTrip": true,
+	"MarshalJSON": true, "UnmarshalJSON": true, "MarshalText": true, "UnmarshalText": true,
+	"MarshalBinary": true, "UnmarshalBinary": true, "Scan": true, "Value": true,
 }
 
 func main() {

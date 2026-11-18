@@ -88,6 +88,15 @@ func TestReviewCases(t *testing.T) {
 		"through a String method": {map[string]string{
 			"a.go": "package main\n\nimport \"fmt\"\n\ntype T struct{}\n\nfunc (T) String() string { return helper() }\n\nfunc main() { fmt.Println(T{}) }\n\nfunc helper() string { return \"\" }\n",
 		}, true},
+		"through sort.Interface": {map[string]string{
+			"a.go": "package main\n\nimport \"sort\"\n\ntype byLen []string\n\nfunc (b byLen) Len() int { return len(b) }\nfunc (b byLen) Less(i, j int) bool { return less(b[i], b[j]) }\nfunc (b byLen) Swap(i, j int) { b[i], b[j] = b[j], b[i] }\n\nfunc main() { sort.Sort(byLen{\"a\"}) }\n\nfunc less(a, b string) bool { return len(a) < len(b) }\n",
+		}, true},
+		"promoted method": {map[string]string{
+			"a.go": "package main\n\ntype base struct{}\n\nfunc (base) Hello() { helper() }\n\ntype outer struct{ base }\n\nfunc main() { outer{}.Hello() }\n\nfunc helper() {}\n",
+		}, true},
+		"goroutine-only": {map[string]string{
+			"a.go": "package main\n\nfunc main() { go worker() }\n\nfunc worker() {}\n",
+		}, true},
 		"_ = (f)": {map[string]string{
 			"a.go": "package main\n\nfunc main() { _ = (helper) }\n\nfunc helper() {}\n",
 		}, false},
