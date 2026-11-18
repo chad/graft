@@ -3,6 +3,7 @@ package converge
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/chad/graft/internal/records"
 	"github.com/chad/graft/internal/render"
@@ -55,9 +56,11 @@ func guardSedum(cand Candidate, before, next []byte) error {
 	if len(now) != len(was) {
 		return fmt.Errorf("%w: %d sedum regions before, %d after", ErrSedumRegion, len(was), len(now))
 	}
+	bl, nl := splitLines(before), splitLines(next)
 	for i := range was {
 		a, b := was[i], now[i]
-		if a.Owner != b.Owner || a.BodyHash != b.BodyHash || a.Actual != b.Actual || a.Seeded != b.Seeded {
+		// Byte-identical, marker lines included (kwargs, ids, comment suffixes, CRLF).
+		if strings.Join(bl[a.Start-1:a.End], "") != strings.Join(nl[b.Start-1:b.End], "") {
 			return fmt.Errorf("%w: sedum region for %s at line %d would change", ErrSedumRegion, a.Owner.RecordID, a.Start)
 		}
 	}

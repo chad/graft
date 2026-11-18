@@ -103,3 +103,16 @@ func TestNewCandidateOverRealFixture(t *testing.T) {
 	}
 	t.Skip("no usable fixture record")
 }
+
+func TestSedumRegionBytesIncludingMarkersAndCRLFArePreserved(t *testing.T) {
+	c, root := setup(t, verdictGate{evidence.TestRun, evidence.Pass})
+	sr := strings.ReplaceAll(sedumRegion("prov-sedum", "func A() {}\n"), "\n", "\r\n")
+	src := "package app\n\n" + sr
+	os.WriteFile(filepath.Join(root, "app.go"), []byte(src), 0o644)
+	if d, err := c.Converge(context.Background(), cand("func F() {}")); err != nil || !d.Applied {
+		t.Fatalf("%+v %v", d, err)
+	}
+	if !strings.Contains(read(t, root), sr) {
+		t.Fatal("sedum region bytes changed")
+	}
+}
