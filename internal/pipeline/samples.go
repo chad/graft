@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -19,6 +21,7 @@ type sample struct {
 	idx     int
 	diff    int    // changed lines against the region's current body
 	gates   int    // gates passed
+	smoke   int    // smoke checks passed, parsed from the eval gate detail; -1 if none printed
 	checked bool   // false: refused before any gate ran
 	failure string // feedback text when not satisfied
 	trial   converge.Trial
@@ -68,7 +71,7 @@ func (cfg Config) attemptSamples(ctx context.Context, c converge.Converger, stor
 			continue // a failed call is not a candidate
 		}
 		code := model.ExtractCode(resps[i], "go")
-		s := sample{idx: i, diff: diffLines(base, code)}
+		s := sample{idx: i, diff: diffLines(base, code), smoke: -1}
 		if cfg.Skeleton != nil && hasPlaceholder(code) {
 			s.failure = "the answer still contains the placeholder panic (" + recording.Placeholder + ")"
 			all = append(all, s)
@@ -86,6 +89,7 @@ func (cfg Config) attemptSamples(ctx context.Context, c converge.Converger, stor
 			return false, fmt.Errorf("%s: %w", a.Entry.Section, err)
 		default:
 			s.checked, s.trial = true, t
+			s.smoke = smokePassed(t.Decision)
 			for _, v := range t.Verdicts {
 				if v == evidence.Pass {
 					s.gates++
@@ -136,13 +140,29 @@ func (cfg Config) attemptSamples(ctx context.Context, c converge.Converger, stor
 	return false, nil
 }
 
+// smokeRe matches the eval gate's "smoke: X/Y checks passed" detail line.
+var smokeRe = regexp.MustCompile(`smoke: (\d+)/\d+ checks passed`)
+
+// smokePassed returns the smoke checks passed, or -1 when no evidence prints a count.
+func smokePassed(d converge.Decision) int {
+	for _, e := range d.Evidence {
+		if m := smokeRe.FindStringSubmatch(e.Detail); m != nil {
+			n, _ := strconv.Atoi(m[1])
+			return n
+		}
+	}
+	return -1
+}
+
 // closer reports whether a is a closer miss than b: most gates passed, then
-// (TODO: most smoke checks passed, once the eval gate's detail prints a count;
-// parse it from the evidence Detail here), then checked over refused, then the
-// smallest diff. Ties keep the lower index (a is only ever the later sample).
+// most smoke checks passed (only when both print a count), then checked over
+// refused, then the smallest diff. Ties keep the lower index (a is only ever the later sample).
 func closer(a, b sample) bool {
 	if a.gates != b.gates {
 		return a.gates > b.gates
+	}
+	if a.smoke >= 0 && b.smoke >= 0 && a.smoke != b.smoke {
+		return a.smoke > b.smoke
 	}
 	if a.checked != b.checked {
 		return a.checked

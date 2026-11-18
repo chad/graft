@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -31,6 +32,11 @@ func (g subGate) Run(_ context.Context, dir string) (evidence.Verdict, string, e
 	}
 	return evidence.Fail, g.detail, nil
 }
+
+// Record ids are random per setup; blank them before comparing runs.
+var recID = regexp.MustCompile(`prov-\d+-[0-9a-f]+`)
+
+func normIDs(s string) string { return recID.ReplaceAllString(s, "prov-X") }
 
 const coreBody = "package main\n\nfunc main() {}\n"
 
@@ -159,13 +165,13 @@ func TestRunSamplesOneIsUnchanged(t *testing.T) {
 			t.Fatalf("%v %+v", err, out)
 		}
 		tree, _ := os.ReadFile(filepath.Join(root, "extra.go"))
-		return m.prompts, out[1].Calls, string(tree)
+		return m.prompts, out[1].Calls, normIDs(string(tree))
 	}
 	p0, c0, t0 := run(0)
 	p1, c1, t1 := run(1)
-	if c0 != 2 || c1 != 2 || t0 != t1 || strings.Join(p0, "\x00") != strings.Join(p1, "\x00") {
+	if c0 != 2 || c1 != 2 || t0 != t1 || normIDs(strings.Join(p0, "\x00")) != normIDs(strings.Join(p1, "\x00")) {
 		t.Fatalf("Samples 0 and 1 differ: calls %d %d, prompts equal %v, trees equal %v",
-			c0, c1, strings.Join(p0, "\x00") == strings.Join(p1, "\x00"), t0 == t1)
+			c0, c1, normIDs(strings.Join(p0, "\x00")) == normIDs(strings.Join(p1, "\x00")), t0 == t1)
 	}
 }
 
@@ -185,9 +191,9 @@ func TestRunSamplesDeterministic(t *testing.T) {
 			t.Fatalf("round %d: wrong choice:\n%s", round, got)
 		}
 		if round == 0 {
-			first = string(got)
-		} else if string(got) != first {
-			t.Fatalf("round %d: tree differs", round)
+			first = normIDs(string(got))
+		} else if normIDs(string(got)) != first {
+			t.Fatalf("round %d: tree differs\n%s\n---\n%s", round, first, normIDs(string(got)))
 		}
 	}
 }

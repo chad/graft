@@ -143,6 +143,18 @@ func Run(ctx context.Context, cfg Config, acc []Accepted) ([]Outcome, error) {
 			if err != nil {
 				return out, err
 			}
+			if cfg.Samples > 1 {
+				ok, err := cfg.attemptSamples(ctx, c, store, a, file, regions, prompt, &o, &feedback)
+				if err != nil {
+					if o.LastFailure != "" {
+						out = append(out, o)
+					}
+					return out, err
+				}
+				o.Applied = ok
+				continue
+			}
+			o.Calls++
 			resp, err := cfg.Model.Complete(ctx, prompt)
 			if err != nil {
 				if o.LastFailure != "" {
