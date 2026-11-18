@@ -26,3 +26,14 @@ Brief tests 1-5 pass; gofmt/vet/`go test -race ./...` clean; measurement + READM
 ## Gotchas
 - Never post absolute paths/secrets on freeq. Don't touch examples/freeq-lite/smoke/.
 - Sonnet runs cost ~$1 each.
+
+## Update: all 6 pre-smoke runs finished (binaries built before #21; oracle passed /47)
+| run | oracle | calls | attempts (regions) | cost USD |
+|---|---|---|---|---|
+| A-1 Sonnet x1 | 46 | 7 | 7 | 0.855 |
+| A-2 Sonnet x1 | 47 | 9 | 9 | 1.149 |
+| A-3 Sonnet x1 | 47 | 7 | 7 | 0.869 |
+| B-1 Haiku x3 | 4 | 21 | 7 | 0.171 |
+| B-2 Haiku x3 | 46 | 21 | 7 | 0.168 |
+| B-3 Haiku x3 | 47 | 21 | 7 | 0.174 |
+Wall times are in results.txt in the scratchpad m/ dir. Remaining: post-#21 reruns (or report these as pre-smoke), README, PR.
