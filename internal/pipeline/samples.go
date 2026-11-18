@@ -114,7 +114,7 @@ func (cfg Config) attemptSamples(ctx context.Context, c converge.Converger, stor
 		all = append(all, s)
 	}
 
-	win, satisfied := pick(all, base == "")
+	win, satisfied := pick(all, fresh(base))
 	if win != nil {
 		d, err := c.Commit(win.trial)
 		if err != nil {
@@ -161,6 +161,11 @@ func pick(all []sample, fresh bool) (*sample, int) {
 	}
 	return win, satisfied
 }
+
+// fresh reports whether a region has no real body yet: none at all, or (under
+// --render) only the seeded placeholder, which a diff would also reduce to
+// "shortest answer wins".
+func fresh(base string) bool { return base == "" || hasPlaceholder(base) }
 
 // smokeRe matches the eval gate's "smoke: X/Y checks passed" detail line.
 var smokeRe = regexp.MustCompile(`smoke: (\d+)/\d+ checks passed`)

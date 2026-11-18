@@ -14,6 +14,7 @@ import (
 	"github.com/chad/graft/internal/converge"
 	"github.com/chad/graft/internal/drafter"
 	"github.com/chad/graft/internal/evidence"
+	"github.com/chad/graft/internal/recording"
 )
 
 // subGate checks extra.go (when it exists) for a substring, with a fixed detail.
@@ -372,5 +373,22 @@ func TestPickExistingRegionTakesSmallestDiff(t *testing.T) {
 	}
 	if w, n := pick(all[1:2], false); w != nil || n != 0 {
 		t.Fatalf("none satisfied: %+v %d", w, n)
+	}
+}
+
+func TestSeededRegionCountsAsFresh(t *testing.T) {
+	seeded := "func handleJoin(c *client) {\n\t" + recording.Placeholder + "\n}\n"
+	if !fresh("") || !fresh(seeded) || fresh("func f() { return }\n") {
+		t.Fatal("fresh: empty and placeholder-only bodies are fresh; a real body is not")
+	}
+	// A seeded region takes the lowest index even though a later sample has a
+	// smaller diff against the placeholder.
+	ok := converge.Trial{Decision: converge.Decision{Result: evidence.Result{Satisfied: true}}}
+	all := []sample{
+		{idx: 0, diff: 30, checked: true, trial: ok},
+		{idx: 1, diff: 3, checked: true, trial: ok},
+	}
+	if w, _ := pick(all, fresh(seeded)); w == nil || w.idx != 0 {
+		t.Fatalf("seeded region: %+v", w)
 	}
 }

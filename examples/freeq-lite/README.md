@@ -228,7 +228,8 @@ converged on the first attempt, and the held-out oracle scored it 47/47
 
 `graft run --samples N` draws N candidates per region in one round and keeps
 one passing candidate: for a region that already has a body, the one with the
-smallest diff against it (ties: lowest sample index); for a new region, the
+smallest diff against it (ties: lowest sample index); for a new region
+(no body yet, or under `--render` only the seeded placeholder), the
 lowest sample index, because there "smallest diff" would mean "shortest
 answer", the one most likely to have dropped a rule no gate covers. (The
 runs below predate that rule and used smallest diff everywhere.) When none passes, the closest miss (most
