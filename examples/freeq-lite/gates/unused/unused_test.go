@@ -76,6 +76,28 @@ func TestReviewCases(t *testing.T) {
 		"reached through a method": {map[string]string{
 			"a.go": "package main\n\ntype T struct{}\n\nfunc (T) Do() { helper() }\n\nfunc main() { T{}.Do() }\n\nfunc helper() {}\n",
 		}, true},
+		"stored in a never-read global map": {map[string]string{
+			"a.go": "package main\n\nfunc main() {}\n\nvar table = map[string]func(){\"x\": helper}\n\nfunc helper() {}\n",
+		}, false},
+		"stored in a global map that main reads": {map[string]string{
+			"a.go": "package main\n\nfunc main() { table[\"x\"]() }\n\nvar table = map[string]func(){\"x\": helper}\n\nfunc helper() {}\n",
+		}, true},
+		"reachable only from an uncalled method": {map[string]string{
+			"a.go": "package main\n\ntype T struct{}\n\nfunc (T) unused() { helper() }\n\nfunc main() {}\n\nfunc helper() {}\n",
+		}, false},
+		"through a String method": {map[string]string{
+			"a.go": "package main\n\nimport \"fmt\"\n\ntype T struct{}\n\nfunc (T) String() string { return helper() }\n\nfunc main() { fmt.Println(T{}) }\n\nfunc helper() string { return \"\" }\n",
+		}, true},
+		"_ = (f)": {map[string]string{
+			"a.go": "package main\n\nfunc main() { _ = (helper) }\n\nfunc helper() {}\n",
+		}, false},
+		"initializer calls something else": {map[string]string{
+			"a.go": "package main\n\nimport \"fmt\"\n\nfunc main() {}\n\nfunc helper() {}\n\nvar _ = fmt.Sprint(helper)\n",
+		}, false},
+		"excluded by build tag": {map[string]string{
+			"a.go":     "package main\n\nfunc main() {}\n",
+			"other.go": "//go:build never\n\npackage main\n\nfunc ghost() {}\n",
+		}, true},
 		"reached through a handler map": {map[string]string{
 			"a.go": "package main\n\nvar handlers = map[string]func(){}\n\nfunc main() { handlers[\"X\"]() }\n",
 			"b.go": "package main\n\nfunc init() { handlers[\"X\"] = bHandle }\n\nfunc bHandle() { bUtil() }\n\nfunc bUtil() {}\n",
