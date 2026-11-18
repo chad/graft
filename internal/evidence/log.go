@@ -301,6 +301,9 @@ func (l *Log) Append(e Evidence) (Evidence, error) {
 	return e, nil
 }
 
+// Path is the log's file path.
+func (l *Log) Path() string { return l.path }
+
 // All returns a copy of the entries as of the last Verify or Append.
 func (l *Log) All() []Evidence {
 	l.mu.Lock()
