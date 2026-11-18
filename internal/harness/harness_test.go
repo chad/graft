@@ -3,7 +3,10 @@ package harness
 import (
 	"bytes"
 	"context"
+	"errors"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -98,5 +101,41 @@ func TestRunRecordsEveryArmAndReports(t *testing.T) {
 func TestDigestSeparatesParts(t *testing.T) {
 	if Digest("ab", "c") == Digest("a", "bc") {
 		t.Fatal("digest is ambiguous across part boundaries")
+	}
+}
+
+type failing struct{}
+
+func (failing) Complete(context.Context, string) (string, error) {
+	return "", errors.New("model CLI exploded")
+}
+
+// Review on #13: a model/CLI failure is infrastructure (unreachable), not
+// broken code.
+func TestModelFailureIsUnreachableNotBroke(t *testing.T) {
+	c := cfg(t, answer{}, fakeOracle)
+	c.Model = failing{}
+	for _, arm := range []bench.Arm{bench.ArmBaseline, bench.ArmGraft} {
+		if s := Sample(context.Background(), c, arm); s.Outcome != bench.Unreachable {
+			t.Errorf("%s: %+v", arm, s)
+		}
+	}
+}
+
+func TestRunKeepsCallsAndTranscripts(t *testing.T) {
+	c := cfg(t, answer{map[string]string{"main.go": good, "core.go": good}}, fakeOracle)
+	c.Transcripts = t.TempDir()
+	recs, err := Run(context.Background(), c, bench.Store{Dir: t.TempDir()}, []bench.Arm{bench.ArmBaseline}, 1, bench.Smoke)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := recs[0].Samples[0]
+	if s.Calls == nil || *s.Calls != 1 || s.Transcript == "" {
+		t.Fatalf("%+v", s)
+	}
+	for _, f := range []string{"01.prompt.md", "01.answer.md"} {
+		if _, err := os.Stat(filepath.Join(s.Transcript, f)); err != nil {
+			t.Errorf("transcript lacks %s", f)
+		}
 	}
 }

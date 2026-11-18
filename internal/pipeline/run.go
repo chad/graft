@@ -16,6 +16,10 @@ import (
 	"github.com/chad/graft/internal/records"
 )
 
+// ErrModel: the model command failed (timeout, CLI error, empty answer). That
+// is infrastructure, not a verdict on the code.
+var ErrModel = errors.New("pipeline: model command failed")
+
 // Config is one `graft run`.
 type Config struct {
 	Repo        string // provenance repo (records + .graft index)
@@ -102,7 +106,7 @@ func Run(ctx context.Context, cfg Config, acc []Accepted) ([]Outcome, error) {
 			}
 			resp, err := cfg.Model.Complete(ctx, prompt)
 			if err != nil {
-				return out, err
+				return out, fmt.Errorf("%w: %v", ErrModel, err)
 			}
 			cand, err := converge.NewCandidate(store, a.ID, a.Entry.File, cfg.Tier, model.ExtractCode(resp, "go"))
 			if err != nil {

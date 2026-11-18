@@ -58,7 +58,37 @@ type Config struct {
 	Commit     string
 	Dirty      bool
 	Progress   io.Writer
+	// Transcripts, if set, keeps every prompt and answer under
+	// <Transcripts>/<case>/<arm>/<n>/ so any sample can be audited.
+	Transcripts string
 }
+
+// recorder counts calls and optionally writes each prompt and answer to dir.
+type recorder struct {
+	m     model.Model
+	dir   string
+	calls int
+}
+
+func (r *recorder) Complete(ctx context.Context, prompt string) (string, error) {
+	r.calls++
+	resp, err := r.m.Complete(ctx, prompt)
+	if r.dir != "" {
+		os.MkdirAll(r.dir, 0o755)
+		base := filepath.Join(r.dir, fmt.Sprintf("%02d", r.calls))
+		os.WriteFile(base+".prompt.md", []byte(prompt), 0o644)
+		out := resp
+		if err != nil {
+			out = "ERROR: " + err.Error()
+		}
+		os.WriteFile(base+".answer.md", []byte(out), 0o644)
+	}
+	return resp, err
+}
+
+// infraPrefix marks a failure of the harness or the model command (not of the
+// code under test); such a sample is unreachable, never broke.
+const infraPrefix = "infra: "
 
 // Digest hashes the parts that define the question.
 func Digest(parts ...string) string {
@@ -89,6 +119,10 @@ func Sample(ctx context.Context, cfg Config, arm bench.Arm) bench.Sample {
 		return bench.Sample{Outcome: bench.Unreachable, Reason: "unknown arm"}
 	}
 	if reason != "" {
+		if strings.HasPrefix(reason, infraPrefix) {
+			// The harness or the model command failed: nothing about the code was measured.
+			return bench.Sample{Outcome: bench.Unreachable, Reason: strings.TrimPrefix(reason, infraPrefix)}
+		}
 		return bench.Sample{Outcome: bench.Broke, Reason: reason}
 	}
 	bin := filepath.Join(dir, "server")
@@ -116,6 +150,9 @@ func (cfg Config) graftArm(ctx context.Context, dir, root string) string {
 		Tier: cfg.Tier, Attempts: cfg.Attempts, Model: cfg.Model, Gates: cfg.Gates, Policy: cfg.Policy, Log: log,
 	}, acc)
 	if err != nil {
+		if errors.Is(err, pipeline.ErrModel) || ctx.Err() != nil {
+			return infraPrefix + err.Error()
+		}
 		return "pipeline: " + err.Error()
 	}
 	return ""
@@ -136,7 +173,7 @@ func (cfg Config) intentPrompt() string {
 func (cfg Config) oneCall(ctx context.Context, root, prompt string) string {
 	resp, err := cfg.Model.Complete(ctx, prompt)
 	if err != nil {
-		return "model: " + err.Error()
+		return infraPrefix + "model: " + err.Error()
 	}
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return err.Error()
@@ -198,7 +235,18 @@ func Run(ctx context.Context, cfg Config, store bench.Store, arms []bench.Arm, n
 			if ctx.Err() != nil {
 				return out, ctx.Err()
 			}
-			s := Sample(ctx, cfg, arm)
+			rec := &recorder{m: cfg.Model}
+			if cfg.Transcripts != "" {
+				rec.dir = filepath.Join(cfg.Transcripts, cfg.Case.Name, string(arm), fmt.Sprintf("%d-%d", time.Now().UnixNano(), i))
+			}
+			c := cfg
+			c.Model = rec
+			s := Sample(ctx, c, arm)
+			calls := rec.calls
+			s.Calls = &calls
+			if rec.dir != "" {
+				s.Transcript = rec.dir
+			}
 			if cfg.Progress != nil {
 				fmt.Fprintf(cfg.Progress, "%s %d/%d: %s %d/%d %s\n", arm, i+1, n, s.Outcome, s.Passed, s.Checks, firstLine(s.Reason))
 			}

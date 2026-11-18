@@ -94,6 +94,10 @@ type Sample struct {
 	Checks  int     `json:"checks"`
 	Passed  int     `json:"passed"`
 	Reason  string  `json:"reason,omitempty"`
+	// Calls is the model calls the sample made (all attempts); Transcript is
+	// where its prompts and answers were kept, if the run kept them.
+	Calls      *int   `json:"calls,omitempty"`
+	Transcript string `json:"transcript,omitempty"`
 }
 
 // Attribution says which layer(s) one failed sample's failure came from.

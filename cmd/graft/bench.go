@@ -90,6 +90,7 @@ func benchRun(args []string, stdout, stderr io.Writer) int {
 	armsFlag := fs.String("arms", "graft,baseline,intent", "arms to run")
 	resFlag := fs.String("resolution", "", "smoke | coarse | fine")
 	dir := fs.String("results", "bench/results", "results directory")
+	transcripts := fs.String("transcripts", "", "keep every prompt and answer under this directory")
 	if err := fs.Parse(args); err != nil || *casePath == "" {
 		fmt.Fprint(stderr, benchUsage)
 		return 2
@@ -154,12 +155,16 @@ func benchRun(args []string, stdout, stderr io.Writer) int {
 	}
 	commit, dirty := gitState()
 	modelName := strings.Join(cfg.Model.Argv, " ")
+	// An alias like "sonnet" is not a model; record the CLI's version with it.
+	if v, err := exec.Command(cfg.Model.Argv[0], "--version").Output(); err == nil {
+		modelName += " [" + strings.TrimSpace(strings.SplitN(string(v), "\n", 2)[0]) + "]"
+	}
 	hc := harness.Config{
 		Case: harness.Case{Name: cf.Name, Spec: spec, Intent: cf.Intent, Contract: cf.Contract, Conventions: conv,
 			Module: cfg.Module, Fixture: harness.Digest(spec, cf.Intent, cf.Contract, oracleSrc)},
 		Model:     model.Command{Argv: cfg.Model.Argv, Timeout: time.Duration(cfg.Model.TimeoutSec) * time.Second},
 		ModelName: modelName, Gates: gates, Policy: evidence.Policy(cfg.Policy), Tier: cfg.Tier, Attempts: cfg.Attempts,
-		OracleArgv: []string{oracleBin}, Commit: commit, Dirty: dirty, Progress: stdout,
+		OracleArgv: []string{oracleBin}, Commit: commit, Dirty: dirty, Progress: stdout, Transcripts: *transcripts,
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

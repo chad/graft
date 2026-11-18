@@ -20,10 +20,10 @@ func Report(w io.Writer, caseName string, recs []Record, attrs []Attribution, co
 	if len(parts) == 0 {
 		fmt.Fprintln(w, "No citable runs.")
 	} else {
-		fmt.Fprintln(w, "| fixture | commit | model | arm | works | checks passed | failures by layer |")
+		fmt.Fprintln(w, "| fixture | commit | model | arm | works | checks passed (descriptive; checks within a sample are correlated, so no interval) | failures by layer |")
 		fmt.Fprintln(w, "|---|---|---|---|---|---|---|")
 		for _, p := range parts {
-			fmt.Fprintf(w, "| %.12s | %.12s | %s | %s | %s | %s | %s |\n", p.Fixture, p.Commit, p.Model, p.Arm, p.Works, p.Checks, layers(p.ByLayer, p.Unattributed))
+			fmt.Fprintf(w, "| %.12s | %.12s | %s | %s | %s | %s | %s |\n", p.Fixture, p.Commit, p.Model, p.Arm, p.Works, fmt.Sprintf("%d/%d", p.Checks.K, p.Checks.N), layers(p.ByLayer, p.Unattributed))
 		}
 		fmt.Fprintln(w)
 		for _, cmp := range comparisons(parts) {
