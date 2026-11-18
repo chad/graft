@@ -312,7 +312,8 @@ func region(f File, owner records.Pin, tier string, declares []string) (Region, 
 		return Region{}, fmt.Errorf("recording: %s: seeded region does not format: %w", f.Path, err)
 	}
 	sp := synthPath(f.Path)
-	seed, err := converge.Seed("//", converge.Owner{Record: owner.RecordID, Version: owner.Version, Gen: owner.GenHash, Tier: tier}, string(body))
+	// gofmt wants a blank line between the last declaration and the end marker.
+	seed, err := converge.Seed("//", converge.Owner{Record: owner.RecordID, Version: owner.Version, Gen: owner.GenHash, Tier: tier}, string(body)+"\n")
 	if err != nil {
 		return Region{}, err
 	}

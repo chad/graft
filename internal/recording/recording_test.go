@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"go/format"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,8 +13,11 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/chad/graft/internal/converge"
 	"github.com/chad/graft/internal/drafter"
+	"github.com/chad/graft/internal/evidence"
 	"github.com/chad/graft/internal/records"
 	"github.com/chad/graft/internal/render"
 )
@@ -24,8 +26,12 @@ import (
 // as a provenance record under dir/provenance, ids derived from the section so
 // the result is deterministic. It returns the records as records.OpenDir reads
 // them.
-func writeRecords(t *testing.T, dir string) []Rec {
+func writeRecords(t *testing.T, dir string, sk Skeleton) []Rec {
 	t.Helper()
+	scope := map[string][]string{}
+	for _, f := range sk.Files {
+		scope[f.Section] = append(scope[f.Section], f.Path)
+	}
 	spec, err := os.ReadFile("testdata/freeq-lite.md")
 	if err != nil {
 		t.Fatal(err)
@@ -54,7 +60,8 @@ func writeRecords(t *testing.T, dir string) []Rec {
 		}
 		y := fmt.Sprintf(`id: %s
 title: %s
-type: blueprint
+type: imprint
+implements: prov-2026-parent
 status: open
 version: 1
 reason: ""
@@ -62,7 +69,7 @@ created_at: "2026-11-18"
 author: fixture@example.com
 intent: %s
 constraints: []
-affected_scope: []
+affected_scope: %s
 forbidden_scope: []
 related: []
 sealed_at_sha: ""
@@ -70,7 +77,7 @@ associated_specs: []
 associated_traces: []
 monitors: []
 tags: []
-`, id, strconv.Quote(d.Section), strconv.Quote(intent.String()))
+`, id, strconv.Quote(d.Section), strconv.Quote(intent.String()), flow(scope[d.Section]))
 		if err := os.WriteFile(filepath.Join(dir, "provenance", id+".yml"), []byte(y), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -83,6 +90,14 @@ tags: []
 	return out
 }
 
+func flow(ss []string) string {
+	q := make([]string, len(ss))
+	for i, s := range ss {
+		q[i] = strconv.Quote(s)
+	}
+	return "[" + strings.Join(q, ", ") + "]"
+}
+
 func freeqInput(t *testing.T, dir string) Input {
 	t.Helper()
 	b, err := os.ReadFile("../../examples/freeq-lite/skeleton.json")
@@ -93,7 +108,7 @@ func freeqInput(t *testing.T, dir string) Input {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return Input{Records: writeRecords(t, dir), Skeleton: sk}
+	return Input{Records: writeRecords(t, dir, sk), Skeleton: sk, Tier: "low"}
 }
 
 func recordingBytes(t *testing.T, in Input) []byte {
@@ -202,46 +217,20 @@ func dropGenerators(t *testing.T, dir string) {
 	}
 }
 
-func formatted(t *testing.T, src string) []byte {
-	t.Helper()
-	b, err := format.Source([]byte(src))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return b
-}
-
-// fill plays converge: one region-less file declaring every helper the stubs call.
-func fill(t *testing.T, dir string, p Planned) {
+// seed lays each region's panicking placeholder down. The package must build
+// with only the seeds in place, before any convergence has run.
+func seed(t *testing.T, dir string, p Planned) {
 	t.Helper()
 	for _, r := range p.Regions {
-		var sb strings.Builder
-		sb.WriteString("package main\n\n")
-		if strings.Contains(strings.Join(r.Declares, "\n"), "net.Conn") {
-			sb.WriteString("import \"net\"\n\n")
-		}
-		for _, d := range r.Declares {
-			sb.WriteString(d + " {\n")
-			if strings.HasSuffix(d, " string") && !strings.Contains(d, "string)") {
-				sb.WriteString("\treturn \"\"\n")
-			}
-			sb.WriteString("}\n\n")
-		}
-		name := "fill_" + strings.TrimSuffix(r.Path, ".go") + ".go"
-		if err := os.WriteFile(filepath.Join(dir, name), formatted(t, sb.String()), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, r.Path), r.Seed, 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
+	goBuild(t, dir)
 }
 
-func TestRecordingGrowsWithRealSedum(t *testing.T) {
-	dir, _, p, _ := grown(t)
-	dropGenerators(t, dir)
-	fill(t, dir, p)
-	out, err := exec.Command("gofmt", "-l", dir).CombinedOutput()
-	if err != nil || strings.TrimSpace(string(out)) != "" {
-		t.Fatalf("gofmt: %v %s", err, out)
-	}
+func goBuild(t *testing.T, dir string) {
+	t.Helper()
 	cmd := exec.Command("go", "build", "./...")
 	cmd.Dir = dir
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -249,11 +238,101 @@ func TestRecordingGrowsWithRealSedum(t *testing.T) {
 	}
 }
 
+// bodyOf is the seed without its marker lines: the text between the markers.
+func bodyOf(r Region) string {
+	var sb strings.Builder
+	for _, l := range strings.SplitAfter(string(r.Seed), "\n") {
+		if !strings.Contains(l, "graft:synth") {
+			sb.WriteString(l)
+		}
+	}
+	return sb.String()
+}
+
+// fill converges every region through the real Converger, gated on go build,
+// with a body that differs from the seed.
+func fill(t *testing.T, dir string, p Planned, in Input) {
+	t.Helper()
+	log, err := evidence.Open(filepath.Join(t.TempDir(), "evidence.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := records.OpenDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := converge.Converger{Root: dir, Records: st, Log: log,
+		Policy: evidence.Policy{"low": {evidence.TestRun}},
+		Gates:  []converge.Gate{converge.CommandGate{Label: "go build", Argv: []string{"go", "build", "./..."}, As: evidence.TestRun, Timeout: time.Minute}}}
+	for _, r := range p.Regions {
+		pin, err := st.Current(r.Owner.RecordID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body := strings.ReplaceAll(bodyOf(r), "graft: not converged", "graft: test body")
+		d, err := c.Converge(context.Background(), converge.Candidate{Path: r.Path, RecordID: pin.RecordID,
+			Version: pin.Version, GenHash: pin.GenHash, SpecHash: pin.SpecHash, Tier: r.Tier, Body: body})
+		if err != nil || !d.Applied {
+			t.Fatalf("converge %s: applied=%v err=%v %+v", r.Path, d.Applied, err, d.Result)
+		}
+	}
+}
+
+func gofmtClean(t *testing.T, dir string) {
+	t.Helper()
+	out, err := exec.Command("gofmt", "-l", dir).CombinedOutput()
+	if err != nil || strings.TrimSpace(string(out)) != "" {
+		t.Fatalf("gofmt: %v %s", err, out)
+	}
+}
+
+func TestRecordingGrowsWithRealSedum(t *testing.T) {
+	dir, s, p, in := grown(t)
+	dropGenerators(t, dir)
+	seed(t, dir, p)
+	fill(t, dir, p, in)
+	gofmtClean(t, dir)
+	goBuild(t, dir)
+	// after convergence the tree is still current, and a regrow keeps it so
+	copyGenerators(t, dir)
+	if err := s.GrowCheck(context.Background(), dir); err != nil {
+		t.Fatalf("grow --check after fill: %v", err)
+	}
+	rec := filepath.Join(dir, "recording.json")
+	if err := render.Render(context.Background(), s, dir, rec); err != nil {
+		t.Fatalf("regrow after fill: %v", err)
+	}
+	dropGenerators(t, dir)
+	goBuild(t, dir)
+	for _, r := range p.Regions {
+		b, _ := os.ReadFile(filepath.Join(dir, r.Path))
+		if !strings.Contains(string(b), "graft: test body") {
+			t.Errorf("%s: regrow lost the converged body", r.Path)
+		}
+	}
+}
+
 func TestGrowCheckCleanAfterGrow(t *testing.T) {
-	dir, s, _, _ := grown(t)
+	dir, s, p, in := grown(t)
+	if len(in.Skeleton.Files) != 7 {
+		t.Fatalf("skeleton has %d files", len(in.Skeleton.Files))
+	}
 	if err := s.GrowCheck(context.Background(), dir); err != nil {
 		t.Fatal(err)
 	}
+	// the check must actually look at files: a hand edit to a sedum file fails it
+	f := filepath.Join(dir, in.Skeleton.Files[0].Path)
+	b, err := os.ReadFile(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(f, append(b, []byte("\nvar handEdit = 1\n")...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.GrowCheck(context.Background(), dir); err == nil {
+		t.Fatal("grow --check passed over a hand-edited sedum file")
+	}
+	_ = p
 }
 
 func TestRegionsOwnedByRecords(t *testing.T) {
@@ -268,11 +347,11 @@ func TestRegionsOwnedByRecords(t *testing.T) {
 	}
 	for _, r := range regs {
 		pin, ok := want[r.Owner.RecordID]
+		// v2 markers carry no version (render.go), so only record and gen_hash are checked
 		if !ok || r.Owner.GenHash != pin.GenHash {
 			t.Errorf("%s: region owned by %+v, want one of the planned records with its gen_hash", r.Path, r.Owner)
 		}
 	}
-	// every planned file's owner appears
 	owners := map[string]bool{}
 	for _, r := range regs {
 		owners[r.Path] = true
@@ -290,31 +369,63 @@ func TestRegionsOwnedByRecords(t *testing.T) {
 }
 
 var stubBody = regexp.MustCompile(`(?s)\{\n\t(return )?(\w+\.)?\w+Body\([^)]*\)\n\}`)
+var stubFunc = regexp.MustCompile(`(?s)\nfunc [^\n]*\{\n.*?\n\}\n`)
 
 func TestHandlerBodiesAreConvergenceRegions(t *testing.T) {
-	dir, _, p, _ := grown(t)
+	dir, _, p, in := grown(t)
 	if len(p.Regions) != 7 {
 		t.Fatalf("want one convergence region per file, got %d", len(p.Regions))
 	}
+	sedumFiles := map[string]string{}
+	for _, f := range in.Skeleton.Files {
+		sedumFiles[f.Path] = f.Section
+	}
 	for _, r := range p.Regions {
+		if _, owned := sedumFiles[r.Path]; owned || !strings.HasSuffix(r.Path, "_synth.go") {
+			t.Errorf("%s: region file must be a <stem>_synth.go sedum does not own", r.Path)
+		}
 		if len(r.Declares) == 0 {
 			t.Errorf("%s: region declares nothing", r.Path)
 		}
-		src, err := os.ReadFile(filepath.Join(dir, r.Path))
+		if n := strings.Count(string(r.Seed), "graft:synth"); n != 2 {
+			t.Errorf("%s: seed has %d marker lines, want one region (2)", r.Path, n)
+		}
+		if _, err := os.Stat(filepath.Join(dir, r.Path)); err == nil {
+			t.Errorf("%s: sedum rendered the synth file", r.Path)
+		}
+	}
+	// every stub in every sedum-owned file is a pure delegation to a helper the region declares
+	var declared []string
+	for _, r := range p.Regions {
+		for _, d := range r.Declares {
+			declared = append(declared, regexp.MustCompile(`\w+Body`).FindString(d))
+		}
+	}
+	for _, f := range in.Skeleton.Files {
+		src, err := os.ReadFile(filepath.Join(dir, f.Path))
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, d := range r.Declares {
-			name := regexp.MustCompile(`\w+Body`).FindString(d)
-			if name == "" || strings.Contains(string(src), "func "+d[len("func "):]) && strings.Contains(string(src), name+" {") {
-				t.Errorf("%s: helper %q must not be rendered by sedum", r.Path, name)
+		if len(f.Stubs) == 0 {
+			continue
+		}
+		n := 0
+		for _, m := range stubFunc.FindAll(src, -1) {
+			if !strings.Contains(string(m), "Body(") {
+				continue
 			}
-			if !strings.Contains(string(src), name+"(") {
-				t.Errorf("%s: no stub delegates to %s", r.Path, name)
+			n++
+			if !stubBody.Match(m) {
+				t.Errorf("%s: stub is not a pure delegation:\n%s", f.Path, m)
 			}
 		}
-		if !stubBody.Match(src) {
-			t.Errorf("%s: stubs are not pure delegations", r.Path)
+		if n != len(f.Stubs) {
+			t.Errorf("%s: %d delegating stubs, want %d", f.Path, n, len(f.Stubs))
+		}
+	}
+	for _, name := range declared {
+		if name == "" {
+			t.Error("region declares a function that is not a Body helper")
 		}
 	}
 }
@@ -323,9 +434,10 @@ func TestHandlerBodiesAreConvergenceRegions(t *testing.T) {
 // oracle is in the tree, checks it can connect (behaviour checks are expected
 // to fail until converge has filled the bodies).
 func TestFreeqLiteBlueprintsPlan(t *testing.T) {
-	dir, _, p, _ := grown(t)
+	dir, _, p, in := grown(t)
 	dropGenerators(t, dir)
-	fill(t, dir, p)
+	seed(t, dir, p)
+	fill(t, dir, p, in)
 	bin := filepath.Join(t.TempDir(), "freeqlite")
 	cmd := exec.Command("go", "build", "-o", bin, ".")
 	cmd.Dir = dir
@@ -337,4 +449,65 @@ func TestFreeqLiteBlueprintsPlan(t *testing.T) {
 		t.Skip("freeq-lite oracle not in this tree yet (PR #11)")
 	}
 	t.Skip("oracle wiring lands once PR #11 merges; its flags are not on main")
+}
+
+func pin(id, typ, status string, scope ...string) records.Pin {
+	return records.Pin{RecordID: id, GenHash: "g", Type: typ, Status: status, AffectedScope: scope}
+}
+
+func simple(f File, p records.Pin) Input {
+	return Input{Tier: "low", Records: []Rec{{Pin: p, Section: "s"}}, Skeleton: Skeleton{Files: []File{f}}}
+}
+
+func TestPlanValidation(t *testing.T) {
+	okPin := pin("r1", "imprint", "open", "a.go")
+	okFile := File{Path: "a.go", Section: "s", Decls: []Decl{{Kind: "var", Name: "X", Code: "var X = 1"}},
+		Stubs: []Stub{{Name: "Do"}}}
+	if _, err := Plan(simple(okFile, okPin)); err != nil {
+		t.Fatalf("baseline must plan: %v", err)
+	}
+	with := func(f func(*File)) File {
+		c := okFile
+		c.Decls = append([]Decl(nil), okFile.Decls...)
+		c.Stubs = append([]Stub(nil), okFile.Stubs...)
+		f(&c)
+		return c
+	}
+	cases := map[string]Input{
+		"blueprint":          simple(okFile, pin("r1", "blueprint", "open", "a.go")),
+		"brief":              simple(okFile, pin("r1", "brief", "open", "a.go")),
+		"sealed status":      simple(okFile, pin("r1", "imprint", "sealed", "a.go")),
+		"scope mismatch":     simple(okFile, pin("r1", "imprint", "open", "b.go")),
+		"empty scope":        simple(okFile, pin("r1", "imprint", "open")),
+		"no tier":            {Records: []Rec{{Pin: okPin, Section: "s"}}, Skeleton: Skeleton{Files: []File{okFile}}},
+		"dup decl":           simple(with(func(f *File) { f.Decls = append(f.Decls, f.Decls[0]) }), okPin),
+		"decl vs stub name":  simple(with(func(f *File) { f.Decls = append(f.Decls, Decl{Kind: "func", Name: "Do", Code: "func Do() {}"}) }), okPin),
+		"decl name":          simple(with(func(f *File) { f.Decls[0].Name = "Y" }), okPin),
+		"decl kind":          simple(with(func(f *File) { f.Decls[0].Kind = "const" }), okPin),
+		"decl unparsable":    simple(with(func(f *File) { f.Decls[0].Code = "var X =" }), okPin),
+		"decl two":           simple(with(func(f *File) { f.Decls[0].Code = "var X = 1\nvar Z = 2" }), okPin),
+		"receiver name only": simple(with(func(f *File) { f.Stubs[0].ReceiverName = "c" }), okPin),
+		"receiver type only": simple(with(func(f *File) { f.Stubs[0].ReceiverType = "*T" }), okPin),
+		"dup import":         simple(with(func(f *File) { f.Imports = []string{"net", "net"} }), okPin),
+		"synth collision": {Tier: "low", Records: []Rec{{Pin: pin("r1", "imprint", "open", "a.go", "a_synth.go"), Section: "s"}},
+			Skeleton: Skeleton{Files: []File{okFile, {Path: "a_synth.go", Section: "s"}}}},
+		"file without owner": simple(with(func(f *File) { f.Section = "" }), okPin),
+		"record and section": simple(with(func(f *File) { f.Record = "r1" }), okPin),
+	}
+	for name, in := range cases {
+		if _, err := Plan(in); err == nil {
+			t.Errorf("%s: Plan accepted it", name)
+		}
+	}
+	// a record with no file in the skeleton
+	in := simple(okFile, okPin)
+	in.Records = append(in.Records, Rec{Pin: pin("r2", "imprint", "open", "b.go"), Section: "t"})
+	if _, err := Plan(in); err == nil {
+		t.Error("record with no file: Plan accepted it")
+	}
+	// implemented imprints are fine, and the recording is complete
+	p, err := Plan(simple(okFile, pin("r1", "imprint", "implemented", "a.go")))
+	if err != nil || !p.Recording.Complete {
+		t.Errorf("implemented imprint: %v complete=%v", err, p.Recording.Complete)
+	}
 }
