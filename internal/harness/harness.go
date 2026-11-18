@@ -99,9 +99,9 @@ func (r *recorder) Complete(ctx context.Context, prompt string) (string, error) 
 // any gate recorded a non-pass verdict at any point in this sample (a region
 // that later passed included), the sample is broke. Only a sample in which no
 // gate ever failed can be unreachable.
-func classify(err error, log *evidence.Log, ctx context.Context) string {
+func classify(err error, log *evidence.Log, since int, ctx context.Context) string {
 	if errors.Is(err, pipeline.ErrModel) || ctx.Err() != nil {
-		if f := firstFailure(log); f != "" {
+		if f := firstFailure(log, since); f != "" {
 			return fmt.Sprintf("pipeline: a gate had failed in this sample (%s) before the infrastructure failure: %v", f, err)
 		}
 		return infraPrefix + err.Error()
@@ -109,12 +109,17 @@ func classify(err error, log *evidence.Log, ctx context.Context) string {
 	return "pipeline: " + err.Error()
 }
 
-// firstFailure returns the first non-pass gate verdict in the sample's log.
-func firstFailure(log *evidence.Log) string {
+// firstFailure returns the first non-pass gate verdict in the log from entry
+// since on: the step being classified, not earlier steps of the same sample.
+func firstFailure(log *evidence.Log, since int) string {
 	if log == nil || log.Verify() != nil {
 		return ""
 	}
-	for _, e := range log.All() {
+	all := log.All()
+	if since > len(all) {
+		since = len(all)
+	}
+	for _, e := range all[since:] {
 		if e.Verdict != evidence.Pass {
 			return firstLine(e.Detail)
 		}
@@ -383,13 +388,16 @@ func (cfg Config) graftStep(ctx context.Context, repo, root, spec string) string
 	if err != nil {
 		return err.Error()
 	}
+	// Verdicts are scoped to this step: in an evolve sample, a gate retry while
+	// building v1 says nothing about whether the change was measured.
+	since := len(log.All())
 	outs, err := pipeline.Run(ctx, pipeline.Config{
 		Repo: repo, Root: root, Module: cfg.Case.Module, Spec: spec, Conventions: cfg.Case.Conventions,
 		Tier: cfg.Tier, Attempts: cfg.Attempts, Model: cfg.Model, Gates: cfg.Gates, Policy: cfg.Policy, Log: log,
 	}, acc)
 	_ = outs
 	if err != nil {
-		return classify(err, log, ctx)
+		return classify(err, log, since, ctx)
 	}
 	return ""
 }

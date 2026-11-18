@@ -261,3 +261,26 @@ func TestGateFailureThenCancelIsBroke(t *testing.T) {
 type modelFunc func(context.Context, string) (string, error)
 
 func (f modelFunc) Complete(ctx context.Context, p string) (string, error) { return f(ctx, p) }
+
+// Review on #16: in an evolve sample, a gate retry during v1 followed by a
+// model error during the change is unreachable (the change was never
+// measured), not broke.
+func TestEvolveV1RetryThenChangeInfraIsUnreachable(t *testing.T) {
+	c := cfg(t, answer{}, fakeOracle)
+	c.Case.SpecV2 = c.Case.Spec + "\n## Extra\n\n- The program must define a function Twice that returns twice its argument\n"
+	n := 0
+	c.Model = modelFunc(func(_ context.Context, prompt string) (string, error) {
+		n++
+		switch {
+		case n == 1: // v1 core.go: fails the build gate
+			return "```go\npackage main\nfunc main( {}\n```\n", nil
+		case strings.Contains(prompt, "`core.go`"): // v1 core.go retry: passes
+			return "```go\n" + good + "```\n", nil
+		}
+		return "", errors.New("model CLI exploded") // the change step
+	})
+	c.Attempts = 3
+	if s := EvolveSample(context.Background(), c, bench.ArmGraft); s.Outcome != bench.Unreachable {
+		t.Fatalf("%+v", s)
+	}
+}
