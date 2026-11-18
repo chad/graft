@@ -90,17 +90,32 @@ func (r *recorder) Complete(ctx context.Context, prompt string) (string, error) 
 // model command failure, a cancelled run) is unreachable, unless the code had
 // already failed its checks in that run: a failed retry call does not erase a
 // real code failure, so that sample is broke.
-func classify(err error, outs []pipeline.Outcome, ctx context.Context) string {
+//
+// "Already failed" is tracked for the whole sample, from the evidence log: if
+// any gate recorded a non-pass verdict at any point in this sample (a region
+// that later passed included), the sample is broke. Only a sample in which no
+// gate ever failed can be unreachable.
+func classify(err error, log *evidence.Log, ctx context.Context) string {
 	if errors.Is(err, pipeline.ErrModel) || ctx.Err() != nil {
-		for _, o := range outs {
-			if !o.Applied && o.LastFailure != "" {
-				return fmt.Sprintf("pipeline: %s failed its checks (%s), then the retry's model call failed: %v",
-					o.Section, firstLine(o.LastFailure), err)
-			}
+		if f := firstFailure(log); f != "" {
+			return fmt.Sprintf("pipeline: a gate had failed in this sample (%s) before the infrastructure failure: %v", f, err)
 		}
 		return infraPrefix + err.Error()
 	}
 	return "pipeline: " + err.Error()
+}
+
+// firstFailure returns the first non-pass gate verdict in the sample's log.
+func firstFailure(log *evidence.Log) string {
+	if log == nil || log.Verify() != nil {
+		return ""
+	}
+	for _, e := range log.All() {
+		if e.Verdict != evidence.Pass {
+			return firstLine(e.Detail)
+		}
+	}
+	return ""
 }
 
 // infraPrefix marks a failure of the harness or the model command (not of the
@@ -166,8 +181,9 @@ func (cfg Config) graftArm(ctx context.Context, dir, root string) string {
 		Repo: repo, Root: root, Module: cfg.Case.Module, Spec: cfg.Case.Spec, Conventions: cfg.Case.Conventions,
 		Tier: cfg.Tier, Attempts: cfg.Attempts, Model: cfg.Model, Gates: cfg.Gates, Policy: cfg.Policy, Log: log,
 	}, acc)
+	_ = outs
 	if err != nil {
-		return classify(err, outs, ctx)
+		return classify(err, log, ctx)
 	}
 	return ""
 }

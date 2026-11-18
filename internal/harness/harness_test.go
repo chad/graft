@@ -158,7 +158,58 @@ func TestCodeFailureThenModelErrorIsBroke(t *testing.T) {
 	c.Model = &failsThenErrs{}
 	c.Attempts = 3
 	s := Sample(context.Background(), c, bench.ArmGraft)
-	if s.Outcome != bench.Broke || !strings.Contains(s.Reason, "failed its checks") {
+	if s.Outcome != bench.Broke || !strings.Contains(s.Reason, "a gate had failed") {
 		t.Fatalf("%+v", s)
 	}
 }
+
+// failsThenPassesThenErrs: region 1 fails then passes; region 2 hits a model error.
+type failsThenPassesThenErrs struct{ n int }
+
+func (f *failsThenPassesThenErrs) Complete(_ context.Context, prompt string) (string, error) {
+	f.n++
+	switch {
+	case strings.Contains(prompt, "`core.go`") && f.n == 1:
+		return "```go\npackage main\nfunc main( {}\n```\n", nil
+	case strings.Contains(prompt, "`core.go`"):
+		return "```go\n" + good + "```\n", nil
+	}
+	return "", errors.New("model CLI exploded")
+}
+
+// Review on #13: a gate failure anywhere in the sample (even in a region that
+// later passed) makes a later infrastructure failure broke, not unreachable.
+func TestEarlierGateFailureInAnyRegionIsBroke(t *testing.T) {
+	c := cfg(t, answer{}, fakeOracle)
+	c.Case.Spec += "\n## Extra\n\n- The program must define a function Twice that returns twice its argument\n"
+	c.Model = &failsThenPassesThenErrs{}
+	c.Attempts = 3
+	s := Sample(context.Background(), c, bench.ArmGraft)
+	if s.Outcome != bench.Broke {
+		t.Fatalf("%+v", s)
+	}
+}
+
+// cancelAfterFailure fails the gate once, then cancels the run.
+func TestGateFailureThenCancelIsBroke(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c := cfg(t, answer{}, fakeOracle)
+	n := 0
+	c.Model = modelFunc(func(context.Context, string) (string, error) {
+		n++
+		if n == 2 {
+			cancel()
+			return "", ctx.Err()
+		}
+		return "```go\npackage main\nfunc main( {}\n```\n", nil
+	})
+	c.Attempts = 3
+	if s := Sample(ctx, c, bench.ArmGraft); s.Outcome != bench.Broke {
+		t.Fatalf("%+v", s)
+	}
+}
+
+type modelFunc func(context.Context, string) (string, error)
+
+func (f modelFunc) Complete(ctx context.Context, p string) (string, error) { return f(ctx, p) }
