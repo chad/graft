@@ -77,53 +77,63 @@ func afterPrefix(line, keyword string) (string, bool) {
 }
 
 // parseOpen recognizes an opening marker line. key is "action[:variant]".
-// verifiable is false for a marker sedum cannot verify: a v1 marker, a marker
-// with no body hash, or a foreign (unknown v) marker.
-func parseOpen(line string) (key string, a attrs, verifiable, ok bool, err error) {
+// A marker sedum cannot verify (v1, no body hash, or a foreign v) yields a
+// zero attrs.Body, so the Region it produces is Unverifiable.
+func parseOpen(line string) (key string, a attrs, ok bool, err error) {
+	if _, isClose := parseClose(line); isClose {
+		// A stray close ("// /sedum:x") is never an opener; sedum ignores it.
+		return "", a, false, nil
+	}
 	rest, found := afterPrefix(line, " sedum:")
 	if !found {
 		rest, found = afterPrefix(line, "sedum:")
 	}
 	if !found {
-		return "", a, false, false, nil
+		return "", a, false, nil
 	}
 	label, encoded, _ := strings.Cut(rest, " ")
 	label = strings.TrimSpace(label)
 	action, _, _ := strings.Cut(label, ":")
 	if action == "" || action == "anchor" || strings.HasPrefix(label, "/") {
-		return "", a, false, false, nil
+		return "", a, false, nil
 	}
 	encoded = strings.TrimSpace(encoded)
 	if !strings.HasPrefix(encoded, "{") {
 		// No attributes at all: sedum reads every field as absent.
-		return label, a, false, true, nil
+		return label, a, true, nil
 	}
 	// A package comment suffix (e.g. " -->") may follow the object.
 	var raw map[string]json.RawMessage
 	if err := json.NewDecoder(strings.NewReader(encoded)).Decode(&raw); err != nil {
-		return "", a, false, false, fmt.Errorf("marker %q has unreadable attributes: %w", label, err)
+		return "", a, false, fmt.Errorf("marker %q has unreadable attributes: %w", label, err)
 	}
 	var v any
 	if r, present := raw["v"]; present {
 		if err := json.Unmarshal(r, &v); err != nil {
-			return "", a, false, false, fmt.Errorf("marker %q has unreadable attributes: %w", label, err)
+			return "", a, false, fmt.Errorf("marker %q has unreadable attributes: %w", label, err)
 		}
 		if n, isNum := v.(float64); !isNum || n != 2 {
-			return label, a, false, true, nil // foreign: names no record, unverifiable
+			return label, a, true, nil // foreign: names no record, unverifiable
 		}
 	} else {
-		return label, a, false, true, nil // v1: no body hash, unverifiable
+		return label, a, true, nil // v1: no body hash, unverifiable
 	}
 	if err := json.NewDecoder(strings.NewReader(encoded)).Decode(&a); err != nil {
-		return "", a, false, false, fmt.Errorf("marker %q has unreadable attributes: %w", label, err)
+		return "", a, false, fmt.Errorf("marker %q has unreadable attributes: %w", label, err)
 	}
-	return label, a, a.Body != "", true, nil
+	return label, a, true, nil
 }
 
 // parseClose recognizes "<comment> /sedum:<action>[:<variant>]".
 func parseClose(line string) (string, bool) {
 	rest, ok := afterPrefix(line, "/sedum:")
 	if !ok {
+		return "", false
+	}
+	// "//sedum:x" is an opener with prefix "//", not a close: the "/" of
+	// "/sedum:" must start the prefix's last token.
+	t := strings.TrimSpace(line)
+	if i := strings.Index(t, "/sedum:"); i > 0 && !unicode.IsSpace(rune(t[i-1])) {
 		return "", false
 	}
 	f := strings.Fields(rest)
@@ -139,26 +149,56 @@ func hashBody(b string) string {
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
+// fenceState tracks CommonMark fenced code blocks: a run of 3+ backticks or
+// tildes opens, and only a run of the same character at least as long, with
+// nothing after it, closes.
+type fenceState struct {
+	char byte
+	n    int
+}
+
+// update consumes one line and reports whether it is a fence line or inside a fence.
+func (f *fenceState) update(line string) bool {
+	t := strings.TrimSpace(line)
+	if len(t) < 3 || (t[0] != '`' && t[0] != '~') {
+		return f.n > 0
+	}
+	n := 0
+	for n < len(t) && t[n] == t[0] {
+		n++
+	}
+	if n < 3 {
+		return f.n > 0
+	}
+	if f.n > 0 {
+		if t[0] == f.char && n >= f.n && strings.TrimSpace(t[n:]) == "" {
+			*f = fenceState{}
+		}
+		return true
+	}
+	if t[0] == '`' && strings.Contains(t[n:], "`") {
+		return false // inline code span, not a fence
+	}
+	*f = fenceState{char: t[0], n: n}
+	return true
+}
+
 // parseFile finds the regions in one file. Like sedum's FindRegions it fails
 // on a region that is never closed or whose closing marker names a different
 // action, because its extent is unknown.
 func parseFile(rel string, data []byte) ([]Region, error) {
 	lines := strings.SplitAfter(string(data), "\n")
 	markdown := strings.HasSuffix(rel, ".md") || strings.HasSuffix(rel, ".markdown")
-	inFence := false
+	var fence fenceState
 	var out []Region
 	for i := 0; i < len(lines); i++ {
 		if markdown {
 			// Fenced code blocks in docs show example markers; they are not regions.
-			if strings.HasPrefix(strings.TrimSpace(lines[i]), "```") {
-				inFence = !inFence
-				continue
-			}
-			if inFence {
+			if fence.update(lines[i]) {
 				continue
 			}
 		}
-		key, a, verifiable, ok, err := parseOpen(strings.TrimRight(lines[i], "\r\n"))
+		key, a, ok, err := parseOpen(strings.TrimRight(lines[i], "\r\n"))
 		if err != nil {
 			return nil, fmt.Errorf("file %s: %w", rel, err)
 		}
@@ -188,9 +228,6 @@ func parseFile(rel string, data []byte) ([]Region, error) {
 			Actual:   hashBody(body.String()),
 			Seeded:   a.Tier == "seeded",
 		}
-		if !verifiable {
-			r.BodyHash = ""
-		}
 		out = append(out, r)
 	}
 	return out, nil
@@ -207,6 +244,12 @@ func ReadMarkers(root string) ([]Region, error) {
 			if p != root && strings.HasPrefix(d.Name(), ".") {
 				return filepath.SkipDir
 			}
+			if rel, rerr := filepath.Rel(root, p); rerr == nil && filepath.ToSlash(rel) == "provenance" {
+				// Provenance records quote example markers in prose; they are
+				// never render targets. Everything else, YAML included, can hold
+				// owned regions.
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		if !d.Type().IsRegular() {
@@ -215,11 +258,6 @@ func ReadMarkers(root string) ([]Region, error) {
 		data, err := os.ReadFile(p)
 		if err != nil {
 			return err
-		}
-		if ext := filepath.Ext(p); ext == ".yml" || ext == ".yaml" {
-			// Provenance records and configs quote example markers in prose;
-			// they are never render targets.
-			return nil
 		}
 		if !bytes.Contains(data, []byte("sedum:")) || bytes.IndexByte(data, 0) >= 0 {
 			return nil

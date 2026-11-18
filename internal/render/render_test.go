@@ -224,3 +224,105 @@ func TestMarkdownFencedExampleIsNotAMarker(t *testing.T) {
 		t.Fatalf("rs=%v err=%v", rs, err)
 	}
 }
+
+func TestYAMLRegionIsReadAndHandEditDetected(t *testing.T) {
+	root := t.TempDir()
+	yml := strings.ReplaceAll(region("owned", "rec-y", "setKey", "name: web\n", ""), "// ", "# ")
+	write(t, root, "config/app.yml", yml)
+	write(t, root, "ci/docker-compose.yaml", strings.ReplaceAll(yml, "rec-y", "rec-z"))
+	rs, err := ReadMarkers(root)
+	if err != nil || len(rs) != 2 {
+		t.Fatalf("rs=%v err=%v", rs, err)
+	}
+	for _, r := range rs {
+		if r.Edited() {
+			t.Fatalf("clean YAML region read as edited: %+v", r)
+		}
+	}
+	write(t, root, "config/app.yml", strings.Replace(yml, "name: web", "name: hacked", 1))
+	err = Render(context.Background(), &fakeSedum{}, root, "rec.json")
+	if !errors.Is(err, ErrHandEdited) || !strings.Contains(err.Error(), "config/app.yml") {
+		t.Fatalf("err = %v, want ErrHandEdited naming config/app.yml", err)
+	}
+}
+
+func TestProvenanceDirIsSkipped(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, "provenance/prov-1.yml", "doc: |\n  // sedum:setFunction {\"v\":2}\n# sedum:x {\"v\":2}\n")
+	rs, err := ReadMarkers(root)
+	if err != nil || len(rs) != 0 {
+		t.Fatalf("rs=%v err=%v", rs, err)
+	}
+}
+
+func TestStrayCloseIsIgnored(t *testing.T) {
+	for name, c := range map[string]struct {
+		content string
+		want    int
+	}{
+		"stray":        {"// /sedum:x\nplain\n", 0},
+		"stray-before": {"// /sedum:x\n" + region("owned", "r", "setFunction", "b\n", ""), 1},
+		"html":         {"<!-- /sedum:x -->\n", 0},
+	} {
+		content, want := c.content, c.want
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			write(t, root, "f.txt", content)
+			rs, err := ReadMarkers(root)
+			if err != nil {
+				t.Fatalf("stray close caused error: %v", err)
+			}
+			if len(rs) != want {
+				t.Fatalf("got %d regions, want %d: %v", len(rs), want, rs)
+			}
+		})
+	}
+	// An opener written with no space after "//" is still an opener.
+	if r := readOne(t, strings.Replace(region("owned", "r", "setFunction", "b\n", ""), "// sedum:", "//sedum:", 1)); r.Owner.RecordID != "r" {
+		t.Fatalf("//sedum: opener not recognised: %+v", r)
+	}
+}
+
+func TestAnchorMarkerIsIgnored(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, "f.go", "// sedum:anchor:imports\nimport x\n")
+	rs, err := ReadMarkers(root)
+	if err != nil || len(rs) != 0 {
+		t.Fatalf("rs=%v err=%v", rs, err)
+	}
+}
+
+func TestEmptyPrefixIsNotAMarker(t *testing.T) {
+	root := t.TempDir()
+	body := `sedum:setFunction {"v":2,"tier":"owned","record":"r","body":"sha256:x"}` + "\nbody\n"
+	write(t, root, "f.txt", body)
+	rs, err := ReadMarkers(root)
+	if err != nil || len(rs) != 0 {
+		t.Fatalf("unprefixed line parsed as marker: rs=%v err=%v", rs, err)
+	}
+}
+
+func TestMarkdownFenceVariants(t *testing.T) {
+	m := "// sedum:setFunction {\"v\":2,\"body\":\"sha256:x\"}\n"
+	for name, doc := range map[string]string{
+		"tilde":         "~~~\n" + m + "~~~\n",
+		"four-backtick": "````\n```\n" + m + "```\n````\n",
+		"tilde-in-bt":   "```\n~~~\n" + m + "```\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			write(t, root, "D.md", doc)
+			rs, err := ReadMarkers(root)
+			if err != nil || len(rs) != 0 {
+				t.Fatalf("rs=%v err=%v", rs, err)
+			}
+		})
+	}
+	// A real region after a closed fence is still read.
+	root := t.TempDir()
+	write(t, root, "D.md", "~~~\nx\n~~~\n"+region("owned", "r", "setFunction", "b\n", ""))
+	rs, err := ReadMarkers(root)
+	if err != nil || len(rs) != 1 {
+		t.Fatalf("region after closed fence: rs=%v err=%v", rs, err)
+	}
+}
