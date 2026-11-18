@@ -61,7 +61,7 @@ func TestCompareNeverGivesAVerdictOnOverlap(t *testing.T) {
 }
 
 func rec(arm Arm, commit string, res Resolution, outcomes ...Outcome) Record {
-	r := Record{Case: "todo", Arm: arm, Commit: commit, Fixture: "fx1", Model: "m1", Resolution: res}
+	r := Record{Schema: Schema, ID: "id-" + string(arm) + "-" + commit + "-" + string(res), Case: "todo", Arm: arm, Commit: commit, Fixture: "fx1", Model: "m1", Resolution: res}
 	for _, o := range outcomes {
 		s := Sample{Outcome: o, Checks: 10, Passed: 10}
 		if o != Works {
@@ -92,6 +92,8 @@ func TestCitable(t *testing.T) {
 		"no resolution":      {rec(ArmGraft, "c1", "", five(Works)...), false},
 		"unknown resolution": {rec(ArmGraft, "c1", "huge", five(Works)...), false},
 		"all unreachable":    {rec(ArmGraft, "c1", Coarse, five(Unreachable)...), false},
+		"schema v1":          {with(rec(ArmGraft, "c1", Coarse, five(Works)...), func(r *Record) { r.Schema = 1 }), false},
+		"no id":              {with(rec(ArmGraft, "c1", Coarse, five(Works)...), func(r *Record) { r.ID = "" }), false},
 	}
 	for name, c := range cases {
 		if ok, why := c.r.Citable(); ok != c.want {
@@ -274,5 +276,27 @@ func TestReportShowsExcludedAndOnlyPermittedComparisons(t *testing.T) {
 		if strings.Contains(out, banned) {
 			t.Errorf("report contains %q:\n%s", banned, out)
 		}
+	}
+}
+
+func TestConcurrentAppendsKeepEveryLineWhole(t *testing.T) {
+	s := Store{Dir: t.TempDir()}
+	r, _ := s.Append(rec(ArmGraft, "c1", Coarse, five(Broke)...))
+	done := make(chan error, 40)
+	for i := 0; i < 20; i++ {
+		go func() { _, err := s.Append(rec(ArmBaseline, "c1", Coarse, five(Works)...)); done <- err }()
+		go func(i int) {
+			done <- s.Attribute("todo", Attribution{RecordID: r.ID, SampleIdx: i % 5, Layers: []Layer{LayerRender}, By: "x"})
+		}(i)
+	}
+	for i := 0; i < 40; i++ {
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	}
+	recs, bad, _ := s.Load("todo")
+	attrs, badA, _ := s.LoadAttributions("todo")
+	if len(recs) != 21 || len(bad) != 0 || len(attrs) != 20 || len(badA) != 0 {
+		t.Fatalf("records %d (corrupt %d), attributions %d (corrupt %d)", len(recs), len(bad), len(attrs), len(badA))
 	}
 }

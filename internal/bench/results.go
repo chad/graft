@@ -105,10 +105,16 @@ type Record struct {
 }
 
 // Citable reports whether a record may enter any aggregate, and if not, why.
+// Records from another schema (there are no v1 logs in the wild: v1 never
+// merged) are shown and counted in nothing.
 // Smoke, dirty, unstated and short runs stay in the log and are shown, but
 // are counted in nothing.
 func (r Record) Citable() (bool, string) {
 	switch {
+	case r.Schema != Schema:
+		return false, fmt.Sprintf("schema v%d, this harness reads v%d", r.Schema, Schema)
+	case r.ID == "":
+		return false, "no record id: it was not written by Store.Append"
 	case r.Resolution == Smoke:
 		return false, "smoke run: proves plumbing, measures nothing"
 	case r.Resolution == Unstated || r.Resolution == "":
@@ -235,6 +241,13 @@ func appendLine(dir, p string, b []byte) error {
 	if err != nil {
 		return err
 	}
+	// Serialise writers, so the torn-line check and the write are one step and
+	// log order (which decides "latest attribution wins") is well defined.
+	if err := lockFile(f); err != nil {
+		f.Close()
+		return err
+	}
+	defer unlockFile(f)
 	if fi, err := f.Stat(); err == nil && fi.Size() > 0 {
 		last := make([]byte, 1)
 		if _, err := f.ReadAt(last, fi.Size()-1); err == nil && last[0] != '\n' {
