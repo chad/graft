@@ -7,6 +7,7 @@ identity, no media.
 | Path | What | Who may see it |
 |---|---|---|
 | `spec/freeq-lite.md` | the intent: the only input to generation | graft, models, everyone |
+| `smoke/` | a small **visible** smoke suite (12 checks, a few per section), written from the spec alone | the model, and a gate during generation |
 | `oracle/` | the behaviour suite (47 checks over TCP) | the bench only, never a model |
 | `reference/` | a hand-written server that exists to validate the oracle | nobody but the oracle's own test |
 
@@ -194,3 +195,31 @@ first attempt with no gate retries, and the 47-check oracle scored it 47/47.
 Three of chad-bot's trees generated before the convention existed each fail
 the dead-function gate on one unused helper, which in those runs would have
 cost a retry; livecodelife's agent reports a Haiku tree that passes it.
+
+## The visible smoke suite
+
+`smoke/smoke.go` is a handful of behaviour checks per spec section (12 in
+all), written from the spec alone with its own scenarios. Unlike the oracle it
+is **shown to the model** (`"visible"` in `graft.json`) and **runs as a gate**
+(kind `eval`): each region's gate checks its own section and every section
+generated before it, so a region that drops a rule its section's smoke checks
+cover cannot land. It is deliberately small and **never a score**: the
+held-out oracle stays the only measure. It must pass 12/12 on the reference
+(v1 and v2), which its own test checks.
+
+**Overlap with the oracle, stated plainly.** About 11 of the oracle's 47
+behaviours are also exercised, in different scenarios, by the visible smoke
+checks. An oracle score from a run that used the smoke gate is therefore not
+fully held out: read it as "47/47, of which roughly 11 behaviours the model
+could see a check for".
+
+**What this changes in the bench.** Only the graft arms see the smoke suite
+and get its gate's retries; the one-call baseline does not. graft vs baseline
+then compares the pipeline *including* visible tests and test-driven retries
+against a single call without them, a deliberate difference that the
+fixture digest records (the visible files are part of it) and the arm table
+names.
+
+One run with the smoke gate (claude sonnet, n=1, an anecdote): 7/7 regions
+converged on the first attempt, and the held-out oracle scored it 47/47
+(with the overlap above).

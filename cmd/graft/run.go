@@ -77,6 +77,11 @@ func runCmd(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "graft: conventions: %v\n", err)
 		return 2
 	}
+	visible, err := loadVisible(*cfgPath, cfg)
+	if err != nil {
+		fmt.Fprintf(stderr, "graft: %v\n", err)
+		return 2
+	}
 	spec, err := os.ReadFile(*specPath)
 	if err != nil {
 		fmt.Fprintf(stderr, "graft: %v\n", err)
@@ -150,7 +155,7 @@ func runCmd(args []string, stdout, stderr io.Writer) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	out, err := pipeline.Run(ctx, pipeline.Config{
-		Repo: *repo, Root: *root, Module: cfg.Module, Spec: string(spec), Conventions: string(conv),
+		Repo: *repo, Root: *root, Module: cfg.Module, Spec: string(spec), Conventions: string(conv), Visible: visible,
 		Tier: cfg.Tier, Attempts: cfg.Attempts,
 		Model: model.Command{Argv: cfg.Model.Argv, Timeout: time.Duration(cfg.Model.TimeoutSec) * time.Second},
 		Gates: gates, Policy: evidence.Policy(cfg.Policy), Log: log, Progress: stdout,

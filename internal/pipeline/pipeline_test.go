@@ -217,3 +217,13 @@ func TestHandEditRefusedBeforeAnyModelCall(t *testing.T) {
 		t.Fatal("hand edit not preserved")
 	}
 }
+
+func TestVisibleChecksAreInThePrompt(t *testing.T) {
+	cfg, _ := setup(t)
+	cfg.Visible = map[string]string{"smoke/smoke.go": "package main // SMOKE-MARKER\n"}
+	acc, _ := Accept(cfg.Repo, drafter.Drafts(spec), "test", time.Now())
+	p, err := cfg.prompt(acc[0], "")
+	if err != nil || !strings.Contains(p, "SMOKE-MARKER") || !strings.Contains(p, "### smoke/smoke.go") {
+		t.Fatalf("%v\n%s", err, p)
+	}
+}

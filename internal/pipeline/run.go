@@ -29,16 +29,19 @@ type Config struct {
 	Module      string // Go module path for a fresh tree
 	Spec        string // the full spec text, shown to the model as context
 	Conventions string // architecture conventions, shown to the model
-	Tier        string
-	Attempts    int // per record; 0 means 3
-	Model       model.Model
-	Gates       []converge.Gate
-	Policy      evidence.Policy
-	Log         *evidence.Log
-	Progress    io.Writer           // nil for silence
-	Skeleton    *recording.Skeleton // non-nil (with Sedum): sedum lays out the tree, the model writes only Body helpers
-	Sedum       render.Sedum
-	Generators  string // sedum's generators directory (contains go/); needed with Skeleton
+	// Visible are checks the model is shown (name → source), e.g. a smoke
+	// suite that also runs as a gate. Never the held-out oracle.
+	Visible    map[string]string
+	Tier       string
+	Attempts   int // per record; 0 means 3
+	Model      model.Model
+	Gates      []converge.Gate
+	Policy     evidence.Policy
+	Log        *evidence.Log
+	Progress   io.Writer           // nil for silence
+	Skeleton   *recording.Skeleton // non-nil (with Sedum): sedum lays out the tree, the model writes only Body helpers
+	Sedum      render.Sedum
+	Generators string // sedum's generators directory (contains go/); needed with Skeleton
 }
 
 // Outcome is what happened to one record.
@@ -210,6 +213,22 @@ func current(store records.Store, regions []converge.Region, a Accepted, file, r
 	return "", false
 }
 
+// writeVisible adds the visible checks to a prompt, in name order.
+func (cfg Config) writeVisible(b *strings.Builder) {
+	if len(cfg.Visible) == 0 {
+		return
+	}
+	names := make([]string, 0, len(cfg.Visible))
+	for n := range cfg.Visible {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	fmt.Fprintf(b, "## Checks your code will be run against (visible; they run as a gate)\n\n")
+	for _, n := range names {
+		fmt.Fprintf(b, "### %s\n\n```go\n%s```\n\n", n, cfg.Visible[n])
+	}
+}
+
 func (cfg Config) say(f string, a ...any) {
 	if cfg.Progress != nil {
 		fmt.Fprintf(cfg.Progress, f, a...)
@@ -247,6 +266,7 @@ func (cfg Config) prompt(a Accepted, feedback string) (string, error) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "You are writing one file of a Go program, generated section by section from a spec.\n\n")
 	fmt.Fprintf(&b, "## Conventions\n\n%s\n\n", strings.TrimSpace(cfg.Conventions))
+	cfg.writeVisible(&b)
 	fmt.Fprintf(&b, "## The whole spec (context)\n\n%s\n\n", strings.TrimSpace(cfg.Spec))
 	fmt.Fprintf(&b, "## Your section: %s\n\nWrite the complete file `%s`. It must satisfy every statement below:\n\n", a.Entry.Section, a.Entry.File)
 	for _, s := range a.Draft.Statements {
