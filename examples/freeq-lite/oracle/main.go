@@ -957,23 +957,48 @@ var checks = []check{
 			kb.expect(":freeq-lite 366 "+nb+" "+ch+" :End of /NAMES list"))
 	}},
 	{"forgotten_channel_takes_new_name", func(a string) error {
-		// A channel forgotten when its last member left is new when joined
-		// again, and takes the name it is created with this time.
-		first1 := uniq("#Phoenix")
-		again := strings.ToUpper(first1)
-		n := uniq("gil")
-		k, err := register(a, n)
-		if err != nil {
-			return err
+		// A channel forgotten when its last member left (by PART, QUIT or a
+		// dropped connection) is new when joined again, and takes the name it
+		// is created with this time.
+		for _, how := range []string{"part", "quit", "drop"} {
+			name := uniq("#Phoenix")
+			again := strings.ToUpper(name)
+			n := uniq("gil")
+			k, err := register(a, n)
+			if err != nil {
+				return err
+			}
+			k.send("JOIN " + name)
+			if err := k.drainUntil(":freeq-lite 366 " + n + " " + name + " :End of /NAMES list"); err != nil {
+				k.close()
+				return err
+			}
+			switch how {
+			case "part":
+				k.send("PART " + name)
+				if err := k.drainUntil(":" + pfx(n) + " PART " + name); err != nil {
+					k.close()
+					return err
+				}
+			case "quit":
+				k.send("QUIT")
+				k.closed()
+			}
+			k.close()
+			n2 := uniq("hal")
+			k2, err := register(a, n2)
+			if err != nil {
+				return err
+			}
+			time.Sleep(100 * time.Millisecond) // let the server process the drop
+			k2.send("JOIN " + again)
+			err = first(k2.expect(":"+pfx(n2)+" JOIN "+again), k2.expect(":freeq-lite 353 "+n2+" = "+again+" :"+n2))
+			k2.close()
+			if err != nil {
+				return fmt.Errorf("after %s: %w", how, err)
+			}
 		}
-		defer k.close()
-		k.send("JOIN "+first1, "PART "+first1)
-		if err := k.drainUntil(":" + pfx(n) + " PART " + first1); err != nil {
-			return err
-		}
-		k.send("JOIN " + again)
-		return first(k.expect(":"+pfx(n)+" JOIN "+again),
-			k.expect(":freeq-lite 353 "+n+" = "+again+" :"+n))
+		return nil
 	}},
 }
 
