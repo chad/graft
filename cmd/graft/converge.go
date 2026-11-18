@@ -56,7 +56,7 @@ func loadConvergeConfig(path string) (convergeConfig, []converge.Gate, error) {
 	// lets a duplicate key win silently, accepts null and ignores trailing data.
 	if err := strictCheck(b, map[string][]string{
 		"":         {"policy", "gates", "model", "conventions", "visible", "tier", "attempts", "module", "skeleton", "language"},
-		"language": {"name", "ext", "fence", "comment", "synth_suffix", "preamble", "bootstrap", "build", "run"},
+		"language": {"name", "ext", "fence", "comment", "preamble", "bootstrap", "build", "run"},
 		"gates[]":  {"label", "argv", "kind", "timeout_sec"},
 		"model":    {"argv", "timeout_sec"},
 	}); err != nil {

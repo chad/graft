@@ -246,7 +246,7 @@ func TestPythonProfile(t *testing.T) {
 		t.Skip("needs python3")
 	}
 	cfg, root := setup(t)
-	cfg.Lang = lang.Profile{Name: "python", Ext: ".py", Fence: "python", Comment: "#", SynthSuffix: "_synth",
+	cfg.Lang = lang.Profile{Name: "python", Ext: ".py", Fence: "python", Comment: "#",
 		Preamble: "a complete module", Bootstrap: map[string]string{"main.py": "# {module} entry\n"},
 		Run: []string{"python3", "main.py"}}
 	cfg.Gates = []converge.Gate{converge.CommandGate{Label: "py_compile",

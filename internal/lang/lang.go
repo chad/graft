@@ -12,32 +12,31 @@ import (
 	"strings"
 )
 
-// Profile describes one target language. Strings may use the placeholders
+// Profile describes one target language. Render-mode naming (the synth file
+// suffix, placeholders) belongs to the sedum generator package, not here. Strings may use the placeholders
 // {module} (the config's module), {out} (the built artifact's path) and
 // {addr} (the address the server should listen on).
 type Profile struct {
-	Name        string            `json:"name"`
-	Ext         string            `json:"ext"`          // e.g. ".go", ".py"
-	Fence       string            `json:"fence"`        // code-fence language the model answers in
-	Comment     string            `json:"comment"`      // line-comment prefix for region markers
-	SynthSuffix string            `json:"synth_suffix"` // render mode: <stem><suffix><ext>
-	Preamble    string            `json:"preamble"`     // how the answer must start, for the prompt
-	Bootstrap   map[string]string `json:"bootstrap"`    // files written once into a fresh tree
-	Build       []string          `json:"build"`        // empty: nothing to build
-	Run         []string          `json:"run"`          // start the program; "-addr {addr}" appended unless {addr} appears
+	Name      string            `json:"name"`
+	Ext       string            `json:"ext"`       // e.g. ".go", ".py"
+	Fence     string            `json:"fence"`     // code-fence language the model answers in
+	Comment   string            `json:"comment"`   // line-comment prefix for region markers
+	Preamble  string            `json:"preamble"`  // how the answer must start, for the prompt
+	Bootstrap map[string]string `json:"bootstrap"` // files written once into a fresh tree
+	Build     []string          `json:"build"`     // empty: nothing to build
+	Run       []string          `json:"run"`       // start the program; "-addr {addr}" appended unless {addr} appears
 }
 
 // Go is the default profile: what graft did before profiles existed.
 var Go = Profile{
-	Name:        "go",
-	Ext:         ".go",
-	Fence:       "go",
-	Comment:     "//",
-	SynthSuffix: "_synth",
-	Preamble:    "starting with the package clause",
-	Bootstrap:   map[string]string{"go.mod": "module {module}\n\ngo 1.22\n"},
-	Build:       []string{"go", "build", "-o", "{out}", "."},
-	Run:         []string{"{out}"},
+	Name:      "go",
+	Ext:       ".go",
+	Fence:     "go",
+	Comment:   "//",
+	Preamble:  "starting with the package clause",
+	Bootstrap: map[string]string{"go.mod": "module {module}\n\ngo 1.22\n"},
+	Build:     []string{"go", "build", "-o", "{out}", "."},
+	Run:       []string{"{out}"},
 }
 
 // ErrProfile: a profile that cannot be used.
@@ -56,9 +55,6 @@ func Resolve(p *Profile) (Profile, error) {
 	}
 	if !strings.HasPrefix(q.Ext, ".") || strings.ContainsAny(q.Ext, "/\\ ") {
 		return q, fmt.Errorf("%w: ext %q must look like \".py\"", ErrProfile, q.Ext)
-	}
-	if q.SynthSuffix == "" {
-		q.SynthSuffix = "_synth"
 	}
 	for name := range q.Bootstrap {
 		if path.IsAbs(name) || path.Clean(name) != name || strings.HasPrefix(name, "../") || name == ".." {
