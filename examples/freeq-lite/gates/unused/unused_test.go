@@ -64,6 +64,22 @@ func TestReviewCases(t *testing.T) {
 		"self-recursion only": {map[string]string{
 			"a.go": "package main\n\nfunc main() {}\n\nfunc loop(n int) { if n > 0 { loop(n - 1) } }\n",
 		}, false},
+		"mutual recursion only": {map[string]string{
+			"a.go": "package main\n\nfunc main() {}\n\nfunc ping(n int) { if n > 0 { pong(n - 1) } }\n\nfunc pong(n int) { if n > 0 { ping(n - 1) } }\n",
+		}, false},
+		"_ = f in init is not a use": {map[string]string{
+			"a.go": "package main\n\nfunc main() {}\n\nfunc helper() {}\n\nfunc init() { _ = helper }\n",
+		}, false},
+		"var _ = func(){ f() }() runs f": {map[string]string{
+			"a.go": "package main\n\nfunc main() {}\n\nfunc helper() {}\n\nvar _ = func() int { helper(); return 0 }()\n",
+		}, true},
+		"reached through a method": {map[string]string{
+			"a.go": "package main\n\ntype T struct{}\n\nfunc (T) Do() { helper() }\n\nfunc main() { T{}.Do() }\n\nfunc helper() {}\n",
+		}, true},
+		"reached through a handler map": {map[string]string{
+			"a.go": "package main\n\nvar handlers = map[string]func(){}\n\nfunc main() { handlers[\"X\"]() }\n",
+			"b.go": "package main\n\nfunc init() { handlers[\"X\"] = bHandle }\n\nfunc bHandle() { bUtil() }\n\nfunc bUtil() {}\n",
+		}, true},
 	}
 	for name, c := range cases {
 		out, ok := runUnused(t, c.files)

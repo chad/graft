@@ -5,12 +5,12 @@
 // left topicsSendOnJoin uncalled ("channels.go must call it") and still
 // reported success. This turns that silent drop into a refusal.
 //
-// It type-checks the package (go/types), so uses are resolved precisely: a
-// method with the same name is not a use, and `var _ = f` (which exists only
-// to silence the compiler) is not a use either. References from _test.go
-// files count as uses. Methods are not checked: interface satisfaction makes
-// "unused" ambiguous for them. A function used only by itself (recursion) is
-// reported as unused.
+// It type-checks the package (go/types) and walks the call graph from the
+// roots (main, init, initializers that run code, _test.go files, method
+// bodies), so: a same-named method is not a use; `var _ = f` and `_ = f` are
+// not uses; self- and mutual recursion among otherwise unreached functions are
+// reported. Methods themselves are not checked: interface satisfaction makes
+// "unused" ambiguous for them.
 //
 // Run in the generated tree: go run <path>/unused.go
 package main
@@ -47,47 +47,98 @@ func main() {
 		fail("type-check failed")
 	}
 
-	// Package-level functions, and the function each identifier sits inside.
+	// Package-level functions, and a call graph between them: an edge from
+	// each function (or package-level initializer) to every package-level
+	// function it uses. A function is live if it is reachable from a root:
+	// main, init, any initializer that runs code, or a _test.go file.
 	funcs := map[*types.Func]token.Pos{}
-	for i, f := range files {
-		if strings.HasSuffix(names[i], "_test.go") {
-			continue // tests are callers, not candidates
+	edges := map[*types.Func][]*types.Func{}
+	var roots []*types.Func
+	rootSet := map[*types.Func]bool{}
+	addRoot := func(fn *types.Func) {
+		if fn != nil && !rootSet[fn] {
+			rootSet[fn] = true
+			roots = append(roots, fn)
 		}
+	}
+	// A synthetic root collects uses from initializers and tests.
+	initRoot := types.NewFunc(token.NoPos, pkg, "<initializers and tests>", nil)
+	addRoot(initRoot)
+	// `_ = f` only silences the compiler; the f there is not a use.
+	silenced := map[*ast.Ident]bool{}
+	for _, f := range files {
+		ast.Inspect(f, func(m ast.Node) bool {
+			if as, ok := m.(*ast.AssignStmt); ok && len(as.Lhs) == len(as.Rhs) {
+				for i, l := range as.Lhs {
+					if id, ok := l.(*ast.Ident); ok && id.Name == "_" {
+						if r, ok := as.Rhs[i].(*ast.Ident); ok {
+							silenced[r] = true
+						}
+					}
+				}
+			}
+			return true
+		})
+	}
+	usesIn := func(n ast.Node) []*types.Func {
+		var out []*types.Func
+		ast.Inspect(n, func(m ast.Node) bool {
+			if id, ok := m.(*ast.Ident); ok && !silenced[id] {
+				if fn, ok := info.Uses[id].(*types.Func); ok && fn.Pkg() == pkg && fn.Type().(*types.Signature).Recv() == nil {
+					out = append(out, fn)
+				}
+			}
+			return true
+		})
+		return out
+	}
+	for i, f := range files {
+		test := strings.HasSuffix(names[i], "_test.go")
 		for _, d := range f.Decls {
-			if fd, ok := d.(*ast.FuncDecl); ok && fd.Recv == nil {
-				switch fd.Name.Name {
-				case "main", "init", "_":
+			switch x := d.(type) {
+			case *ast.FuncDecl:
+				if x.Recv != nil {
+					// Method bodies run when the method is called; treat them as
+					// reachable roots (methods are not checked themselves).
+					edges[initRoot] = append(edges[initRoot], usesIn(x.Body)...)
 					continue
 				}
-				if obj, ok := info.Defs[fd.Name].(*types.Func); ok {
-					funcs[obj] = fd.Pos()
+				fn, _ := info.Defs[x.Name].(*types.Func)
+				if fn == nil {
+					continue
 				}
+				if test || x.Name.Name == "main" || x.Name.Name == "init" {
+					addRoot(fn)
+				} else {
+					funcs[fn] = x.Pos()
+				}
+				edges[fn] = append(edges[fn], usesIn(x)...)
+			case *ast.GenDecl:
+				if x.Tok != token.VAR {
+					continue
+				}
+				// A non-blank var initializer is live code. A blank one
+				// (`var _ = f`) only silences the compiler unless it actually
+				// calls something, e.g. `var _ = func(){ f() }()`.
+				if blankOnly(x) && !callsSomething(x) {
+					continue
+				}
+				edges[initRoot] = append(edges[initRoot], usesIn(x)...)
 			}
 		}
 	}
-	used := map[*types.Func]bool{}
-	for _, f := range files {
-		for _, d := range f.Decls {
-			// `var _ = f` exists to silence "declared and not used"; it is not a use.
-			if g, ok := d.(*ast.GenDecl); ok && g.Tok == token.VAR && blankOnly(g) {
-				continue
-			}
-			var self *types.Func
-			if fd, ok := d.(*ast.FuncDecl); ok && fd.Recv == nil {
-				self, _ = info.Defs[fd.Name].(*types.Func)
-			}
-			ast.Inspect(d, func(n ast.Node) bool {
-				id, ok := n.(*ast.Ident)
-				if !ok {
-					return true
-				}
-				if fn, ok := info.Uses[id].(*types.Func); ok && fn != self {
-					used[fn] = true
-				}
-				return true
-			})
+	reach := map[*types.Func]bool{}
+	queue := append([]*types.Func{}, roots...)
+	for len(queue) > 0 {
+		fn := queue[0]
+		queue = queue[1:]
+		if reach[fn] {
+			continue
 		}
+		reach[fn] = true
+		queue = append(queue, edges[fn]...)
 	}
+	used := reach
 	var dead []string
 	for fn, pos := range funcs {
 		if !used[fn] {
@@ -101,6 +152,17 @@ func main() {
 		os.Exit(1)
 	}
 	fmt.Printf("unused ok: %d functions, all used\n", len(funcs))
+}
+
+func callsSomething(g *ast.GenDecl) bool {
+	found := false
+	ast.Inspect(g, func(n ast.Node) bool {
+		if _, ok := n.(*ast.CallExpr); ok {
+			found = true
+		}
+		return !found
+	})
+	return found
 }
 
 func blankOnly(g *ast.GenDecl) bool {
