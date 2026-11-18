@@ -2,8 +2,8 @@ package main
 
 import (
 	"os/exec"
-	"regexp"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
