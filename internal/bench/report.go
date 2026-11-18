@@ -23,7 +23,7 @@ func Report(w io.Writer, caseName string, recs []Record, attrs []Attribution, co
 		fmt.Fprintln(w, "| fixture | commit | model | arm | works | unreachable (not in works) | checks passed (descriptive; checks within a sample are correlated, so no interval) | failures by layer |")
 		fmt.Fprintln(w, "|---|---|---|---|---|---|---|---|")
 		for _, p := range parts {
-			fmt.Fprintf(w, "| %.12s | %.12s | %s | %s | %s | %d | %s | %s |\n", p.Fixture, p.Commit, p.Model, p.Arm, p.Works, p.Outcomes[Unreachable], fmt.Sprintf("%d/%d", p.Checks.K, p.Checks.N), layers(p.ByLayer, p.Unattributed))
+			fmt.Fprintf(w, "| %.12s | %.12s | %s | %s | %s | %d | %s | %s |\n", p.Fixture, p.Commit, p.Model, armLabel(p), p.Works, p.Outcomes[Unreachable], fmt.Sprintf("%d/%d", p.Checks.K, p.Checks.N), layers(p.ByLayer, p.Unattributed))
 		}
 		fmt.Fprintln(w)
 		for _, cmp := range comparisons(parts) {
@@ -132,6 +132,9 @@ func changeCosts(recs []Record, excluded map[int]string) []string {
 			continue
 		}
 		line := fmt.Sprintf("%s @%.12s: model calls for the change [%s]", r.Arm, r.Commit, strings.Join(calls, " "))
+		if r.Tools != "" {
+			line = fmt.Sprintf("%s (+ %s)", line, r.Tools)
+		}
 		if len(bytes) > 0 {
 			line += fmt.Sprintf("; lines changed (added+removed, same measure for every arm) [%s]", strings.Join(bytes, " "))
 		}
@@ -144,4 +147,13 @@ func changeCosts(recs []Record, excluded map[int]string) []string {
 		out = append(out, line)
 	}
 	return out
+}
+
+// armLabel names an arm with any extra tools it used, so an extra input
+// (sedum's skeleton) is visible next to the numbers it produced.
+func armLabel(p Partition) string {
+	if p.Tools == "" {
+		return string(p.Arm)
+	}
+	return fmt.Sprintf("%s (+ %s)", p.Arm, p.Tools)
 }

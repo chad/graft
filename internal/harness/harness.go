@@ -69,9 +69,11 @@ type Config struct {
 	// Transcripts, if set, keeps every prompt and answer under
 	// <Transcripts>/<case>/<arm>/<n>/ so any sample can be audited.
 	Transcripts string
-	// graft-render arm: the sedum binary and its generators directory.
-	Sedum      render.Sedum
-	Generators string
+	// graft-render arm: the sedum binary, its generators directory, and the
+	// version string recorded in Record.Tools for that arm.
+	Sedum        render.Sedum
+	Generators   string
+	SedumVersion string
 }
 
 // recorder counts calls and optionally writes each prompt and answer to dir.
@@ -160,6 +162,9 @@ func Sample(ctx context.Context, cfg Config, arm bench.Arm) bench.Sample {
 	case bench.ArmGraft:
 		reason = cfg.graftArm(ctx, dir, root)
 	case bench.ArmGraftRender:
+		if cfg.Case.Skeleton == nil {
+			return bench.Sample{Outcome: bench.Unreachable, Reason: "graft-render: the case has no skeleton"}
+		}
 		reason = cfg.graftStep(ctx, filepath.Join(dir, "repo"), root, cfg.Case.Spec, cfg.Case.Skeleton)
 	case bench.ArmBaseline:
 		reason = cfg.oneCall(ctx, root, cfg.baselinePrompt())
@@ -261,6 +266,9 @@ func Run(ctx context.Context, cfg Config, store bench.Store, arms []bench.Arm, n
 	for _, arm := range arms {
 		r := bench.Record{Case: cfg.Case.Name, Arm: arm, Commit: cfg.Commit, Dirty: cfg.Dirty, Fixture: cfg.Case.Fixture,
 			Model: cfg.ModelName, Resolution: res}
+		if arm == bench.ArmGraftRender && cfg.SedumVersion != "" {
+			r.Tools = "sedum " + cfg.SedumVersion
+		}
 		for i := 0; i < n; i++ {
 			if ctx.Err() != nil {
 				return out, ctx.Err()
@@ -337,6 +345,9 @@ func EvolveSample(ctx context.Context, cfg Config, arm bench.Arm) bench.Sample {
 		skel1, skel2 := (*recording.Skeleton)(nil), (*recording.Skeleton)(nil)
 		if arm == bench.ArmGraftRender {
 			skel1, skel2 = c.Case.Skeleton, c.Case.SkeletonV2
+			if skel1 == nil || skel2 == nil {
+				return bench.Sample{Outcome: bench.Unreachable, Reason: "graft-render: the case needs a skeleton for both steps"}
+			}
 		}
 		if reason = c.graftStep(ctx, repo, root, c.Case.Spec, skel1); reason != "" {
 			break
@@ -517,6 +528,9 @@ func RunEvolve(ctx context.Context, cfg Config, store bench.Store, arms []bench.
 	for _, arm := range arms {
 		r := bench.Record{Case: cfg.Case.Name, Arm: arm, Commit: cfg.Commit, Dirty: cfg.Dirty, Fixture: cfg.Case.Fixture,
 			Model: cfg.ModelName, Resolution: res}
+		if arm == bench.ArmGraftRender && cfg.SedumVersion != "" {
+			r.Tools = "sedum " + cfg.SedumVersion
+		}
 		for i := 0; i < n; i++ {
 			if ctx.Err() != nil {
 				return out, ctx.Err()

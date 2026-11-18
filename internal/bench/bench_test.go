@@ -438,3 +438,16 @@ func TestGraftRenderArmIsComparedWithEachOther(t *testing.T) {
 		t.Fatalf("graft-render arm refused: %v", err)
 	}
 }
+
+func TestToolsAreNamedInTheReport(t *testing.T) {
+	r := rec(ArmGraftRender, "c1", Coarse, five(Works)...)
+	r.Tools = "sedum 0.12.2"
+	var b bytes.Buffer
+	Report(&b, "todo", []Record{r, rec(ArmGraft, "c1", Coarse, five(Works)...)}, nil, nil)
+	if !strings.Contains(b.String(), "graft-render (+ sedum 0.12.2)") {
+		t.Fatal(b.String())
+	}
+	if !strings.Contains(b.String(), "distinguish graft-render") {
+		t.Fatalf("tools must not split the comparison cell:\n%s", b.String())
+	}
+}

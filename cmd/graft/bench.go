@@ -233,23 +233,35 @@ func benchRun(args []string, stdout, stderr io.Writer) int {
 			return 2
 		}
 	}
+	// The skeletons are part of the question the graft-render arm is asked, so
+	// they are in the fixture digest whenever the case declares them.
+	skeletonSrc := ""
+	for _, rel := range []string{cf.Skeleton, evolveSkeleton(cf, *evolve)} {
+		if rel == "" {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(base, rel))
+		if err != nil {
+			fmt.Fprintf(stderr, "graft: %v\n", err)
+			return 2
+		}
+		skeletonSrc += rel + "\x00" + string(b) + "\x00"
+	}
 	commit, dirty := gitState()
 	modelName := strings.Join(cfg.Model.Argv, " ")
 	// An alias like "sonnet" is not a model; record the CLI's version with it.
 	if v, err := exec.Command(cfg.Model.Argv[0], "--version").Output(); err == nil {
 		modelName += " [" + strings.TrimSpace(strings.SplitN(string(v), "\n", 2)[0]) + "]"
 	}
-	if sedumVer != "" {
-		modelName += " + sedum " + sedumVer
-	}
+
 	hc := harness.Config{
 		Case: harness.Case{Name: name, Spec: spec, Intent: cf.Intent, Contract: cf.Contract, Conventions: conv,
-			Module: cfg.Module, Fixture: harness.Digest(spec, cf.Intent, cf.Contract, oracleSrc, fixtureExtra),
+			Module: cfg.Module, Fixture: harness.Digest(spec, cf.Intent, cf.Contract, oracleSrc, fixtureExtra, skeletonSrc),
 			SpecV2: specV2, OracleArgs: oracleArgs, Skeleton: skel1, SkeletonV2: skel2},
 		Model:     model.Command{Argv: cfg.Model.Argv, Timeout: time.Duration(cfg.Model.TimeoutSec) * time.Second},
 		ModelName: modelName, Gates: gates, Policy: evidence.Policy(cfg.Policy), Tier: cfg.Tier, Attempts: cfg.Attempts,
 		OracleArgv: []string{oracleBin}, Commit: commit, Dirty: dirty, Progress: stdout, Transcripts: *transcripts,
-		Sedum: sedum, Generators: gens,
+		Sedum: sedum, Generators: gens, SedumVersion: sedumVer,
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -271,6 +283,13 @@ func benchRun(args []string, stdout, stderr io.Writer) int {
 		return 3
 	}
 	return 0
+}
+
+func evolveSkeleton(cf caseFile, evolve bool) string {
+	if !evolve || cf.Evolve == nil {
+		return ""
+	}
+	return cf.Evolve.Skeleton
 }
 
 func firstErr(errs ...error) error {

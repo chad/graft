@@ -300,3 +300,10 @@ func TestGraftRenderWithoutSedumIsUnreachable(t *testing.T) {
 		t.Fatalf("%+v", s)
 	}
 }
+
+func TestGraftRenderWithoutSkeletonIsUnreachable(t *testing.T) {
+	c := cfg(t, answer{map[string]string{"core.go": good}}, fakeOracle)
+	if s := Sample(context.Background(), c, bench.ArmGraftRender); s.Outcome != bench.Unreachable || !strings.Contains(s.Reason, "no skeleton") {
+		t.Fatalf("%+v", s)
+	}
+}
