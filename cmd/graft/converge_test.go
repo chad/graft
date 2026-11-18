@@ -151,7 +151,7 @@ func TestConvergeCLIFailureAfterCheckingBeganIsExit3(t *testing.T) {
 // Review on #9: neither flags nor the environment can set the pin.
 func TestConvergeCLIPinComesOnlyFromRecords(t *testing.T) {
 	root, cfg, logp := convergeSetup(t, "true")
-	for _, f := range []string{"--version=99", "--gen=forged", "--gen-hash=forged"} {
+	for _, f := range []string{"--version=99", "--gen=forged", "--gen-hash=forged", "--spec-hash=forged"} {
 		args := append(convergeArgs(root, cfg, logp), f, "-")
 		if code, _, _ := runWith("func F() {}\n", args); code != 2 {
 			t.Errorf("%s accepted", f)

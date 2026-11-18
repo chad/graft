@@ -4,6 +4,9 @@
 package records
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -18,11 +21,22 @@ import (
 // ErrNotFound means the record, or the requested version, does not exist.
 var ErrNotFound = errors.New("records: not found")
 
+// ErrSpecMissing means an associated spec could not be read (absent, not a
+// regular file, permission denied, or reached through a symlink leaving the
+// repository), so the record's spec hash cannot be stated. It is never
+// silently treated as "no specs".
+var ErrSpecMissing = errors.New("records: associated spec cannot be resolved")
+
 // Pin identifies a record version and the generation-driving content it had.
 type Pin struct {
 	RecordID string // stable id, never derived from content
 	Version  int
 	GenHash  string // hash over generation-driving fields only
+	// SpecHash summarises the record's associated specs: "" when it has none,
+	// otherwise "sha256:" + hex(sha256(JSON array of provenance's per-spec
+	// hashes, in record order)). Specs verify output and do not drive it, so
+	// Stale ignores this; evidence pins it (SPEC §7).
+	SpecHash string
 }
 
 // Store reads records from a provenance repo on disk
@@ -56,24 +70,104 @@ func validID(id string) bool {
 }
 
 func (d *dirStore) Current(id string) (Pin, error) {
+	p, r, err := d.currentGen(id)
+	if err != nil {
+		return Pin{}, err
+	}
+	sh, err := specHash(r, confined(d.root, d.fs.Specs()))
+	if err != nil {
+		return Pin{}, fmt.Errorf("%s: %w", id, err)
+	}
+	p.SpecHash = sh
+	return p, nil
+}
+
+// currentGen reads the record's id, version and gen_hash without touching its
+// specs: generation staleness must not depend on whether a spec file exists.
+func (d *dirStore) currentGen(id string) (Pin, *record.Record, error) {
 	if !validID(id) {
-		return Pin{}, fmt.Errorf("%w: %q", ErrNotFound, id)
+		return Pin{}, nil, fmt.Errorf("%w: %q", ErrNotFound, id)
 	}
 	r, _, err := d.fs.Load(id)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return Pin{}, fmt.Errorf("%w: %s", ErrNotFound, id)
+			return Pin{}, nil, fmt.Errorf("%w: %s", ErrNotFound, id)
 		}
-		return Pin{}, fmt.Errorf("records: load %s: %w", id, err)
+		return Pin{}, nil, fmt.Errorf("records: load %s: %w", id, err)
 	}
 	if r.ID != id {
-		return Pin{}, fmt.Errorf("records: %s.yml holds record %q", id, r.ID)
+		return Pin{}, nil, fmt.Errorf("records: %s.yml holds record %q", id, r.ID)
 	}
 	v := r.Version
 	if v == 0 {
 		v = 1 // a v1 record reads as version 1
 	}
-	return Pin{RecordID: r.ID, Version: v, GenHash: r.GenHash()}, nil
+	return Pin{RecordID: r.ID, Version: v, GenHash: r.GenHash()}, r, nil
+}
+
+// ErrSpecPath means an associated spec path is absolute or escapes the repo.
+var ErrSpecPath = errors.New("records: associated spec path is outside the repository")
+
+// confined wraps provenance's resolver so a spec path cannot be absolute,
+// climb out of the repository, or reach outside it through a symlink: a record
+// must not be able to make graft read, and pin evidence to, an arbitrary file.
+// Such a path resolves as missing (the caller has already reported lexical
+// escapes as ErrSpecPath).
+func confined(root string, resolve record.SpecResolver) record.SpecResolver {
+	return func(p string) (string, bool) {
+		if !specPathOK(p) || !insideAfterSymlinks(root, p) {
+			return "", false
+		}
+		return resolve(p)
+	}
+}
+
+func insideAfterSymlinks(root, p string) bool {
+	r, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return false
+	}
+	t, err := filepath.EvalSymlinks(filepath.Join(root, filepath.FromSlash(p)))
+	if err != nil {
+		return false // missing or unreadable: reported as missing
+	}
+	rel, err := filepath.Rel(r, t)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+func specPathOK(p string) bool {
+	if p == "" || strings.HasPrefix(p, "/") || filepath.IsAbs(p) || strings.Contains(p, "\\") {
+		return false
+	}
+	c := filepath.ToSlash(filepath.Clean(filepath.FromSlash(p)))
+	return c != ".." && !strings.HasPrefix(c, "../")
+}
+
+// specHash aggregates provenance's per-spec hashes (record.SpecHashes, which
+// also handles record-file specs) into one value for the pin.
+func specHash(r *record.Record, resolve record.SpecResolver) (string, error) {
+	if len(r.AssociatedSpecs) == 0 {
+		return "", nil
+	}
+	for _, sp := range r.AssociatedSpecs {
+		if sp.Path != "" && !record.IsRecordFilePath(sp.Path) && !specPathOK(sp.Path) {
+			return "", fmt.Errorf("%w: %q", ErrSpecPath, sp.Path)
+		}
+	}
+	hashes, missing := r.SpecHashes(resolve)
+	if len(missing) > 0 {
+		return "", fmt.Errorf("%w: %s", ErrSpecMissing, strings.Join(missing, ", "))
+	}
+	list := make([]string, len(hashes))
+	for i, h := range hashes {
+		list[i] = *h
+	}
+	b, err := json.Marshal(list)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(b)
+	return "sha256:" + hex.EncodeToString(sum[:]), nil
 }
 
 func (d *dirStore) Snapshot(id string, version int) ([]byte, error) {
@@ -116,8 +210,17 @@ func (d *dirStore) Snapshot(id string, version int) ([]byte, error) {
 
 // Stale is true exactly when GenHash differs. A version bump with an
 // unchanged GenHash is NOT stale.
+//
+// Stale never reads spec files: a deleted or unreadable spec does not make
+// generation staleness unanswerable (specs verify output; they do not drive it).
 func Stale(s Store, p Pin) (bool, error) {
-	cur, err := s.Current(p.RecordID)
+	var cur Pin
+	var err error
+	if d, ok := s.(*dirStore); ok {
+		cur, _, err = d.currentGen(p.RecordID)
+	} else {
+		cur, err = s.Current(p.RecordID)
+	}
 	if err != nil {
 		return false, err
 	}

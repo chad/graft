@@ -15,14 +15,15 @@ import (
 var ErrSedumRegion = errors.New("converge: synthesis would touch a sedum-owned region")
 
 // NewCandidate builds a candidate for record id from the records layer: the
-// version and gen_hash are the record's current ones, never caller-supplied.
-func NewCandidate(s records.Store, id, path, tier, specHash, body string) (Candidate, error) {
+// version, gen_hash and spec hash are the record's current ones, never
+// caller-supplied.
+func NewCandidate(s records.Store, id, path, tier, body string) (Candidate, error) {
 	p, err := s.Current(id)
 	if err != nil {
 		return Candidate{}, err
 	}
 	return Candidate{Path: path, RecordID: p.RecordID, Version: p.Version, GenHash: p.GenHash,
-		SpecHash: specHash, Tier: tier, Body: body}, nil
+		SpecHash: p.SpecHash, Tier: tier, Body: body}, nil
 }
 
 // guardSedum refuses when the record's synthesis region overlaps a sedum

@@ -46,8 +46,8 @@ func setup(t *testing.T, gates ...Gate) (Converger, string) {
 		t.Fatal(err)
 	}
 	return Converger{Root: root, Log: log, Gates: gates, Records: fakeStore{
-		"prov-1": {RecordID: "prov-1", Version: 2, GenHash: "g2"},
-		"prov-2": {RecordID: "prov-2", Version: 2, GenHash: "g2"},
+		"prov-1": {RecordID: "prov-1", Version: 2, GenHash: "g2", SpecHash: "s1"},
+		"prov-2": {RecordID: "prov-2", Version: 2, GenHash: "g2", SpecHash: "s1"},
 	},
 		Policy: evidence.Policy{"low": {evidence.TestRun}, "high": {evidence.TestRun, evidence.HumanSignoff}}}, root
 }
@@ -646,7 +646,7 @@ func TestAbsoluteRootRelativeLogInsideTree(t *testing.T) {
 	abs, _ := filepath.Abs(root)
 	c := Converger{Root: abs, Log: log, Gates: []Gate{verdictGate{evidence.TestRun, evidence.Pass}},
 		Policy:  evidence.Policy{"low": {evidence.TestRun}},
-		Records: fakeStore{"prov-1": {RecordID: "prov-1", Version: 2, GenHash: "g2"}}}
+		Records: fakeStore{"prov-1": {RecordID: "prov-1", Version: 2, GenHash: "g2", SpecHash: "s1"}}}
 	if d, err := c.Converge(context.Background(), cand("func F() {}")); err != nil || !d.Applied {
 		t.Fatalf("%+v %v", d, err)
 	}

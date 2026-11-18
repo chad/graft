@@ -85,9 +85,10 @@ happens only in a convergence-layer region, owned and marked like any other.**
   The record version is recorded but not compared: a version bump that changes
   none of them (a status flip, a reworded reason) is no reason to re-verify.
   This matches §3, where `records.Stale` compares `gen_hash` only.
-- `spec_hash` is computed by the records layer over the specs associated with
-  the owning record (M1); evidence treats it as opaque. Evidence that ran no
-  specs leaves it empty.
+- `spec_hash` is computed by the records layer (`records.Pin.SpecHash`) from
+  provenance's per-spec hashes for the record's associated specs; evidence
+  treats it as opaque. A record with no specs has an empty spec hash; a spec
+  that cannot be read is an error (`ErrSpecMissing`), never "no specs".
 - The log is append-only and hash-chained, with a sidecar head pinning its
   committed prefix. The head is a lower bound: entries written after it that
   chain correctly (a crash before the head moved) are accepted and the head is

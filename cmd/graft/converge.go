@@ -87,7 +87,8 @@ const convergeUsage = `usage: graft converge --record ID --path FILE --tier T [f
 
 Checks a synthesized body through the configured gates and the tier's policy,
 and writes it into the record's synthesis region only if the tier is satisfied.
-The record's version and gen_hash come from --records; they cannot be set here.
+The record's version, gen_hash and spec hash come from --records; they cannot
+be set here.
 
 exit codes:
   0  applied (guarantee: checked)
@@ -109,7 +110,7 @@ func knownKind(k evidence.Kind) bool {
 }
 
 // convergeCmd: graft converge --config graft.json --records DIR --log FILE
-// --record ID --path FILE --tier T [--spec-hash H] [--comment //] [--root .] BODY|-
+// --record ID --path FILE --tier T [--comment //] [--root .] BODY|-
 //
 // Exit 0: applied. Exit 1: checked and NOT applied (a gate failed or the tier
 // is unsatisfied). Exit 2: usage or a refusal before checking (bad path,
@@ -119,8 +120,8 @@ func knownKind(k evidence.Kind) bool {
 //
 // Gates run with graft's environment and permissions: the scratch copy keeps
 // them off the working tree, it is not a sandbox. --tier is caller-supplied
-// because records carry no risk tier (SPEC §12); --spec-hash is caller-supplied
-// until records.Pin passes through provenance's spec hashes.
+// because records carry no risk tier (SPEC §12). The spec hash, like the
+// version and gen_hash, comes from the records layer.
 func convergeCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("converge", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -132,7 +133,6 @@ func convergeCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	id := fs.String("record", "", "owning record id")
 	path := fs.String("path", "", "target file, relative to --root")
 	tier := fs.String("tier", "", "risk tier of the owning record")
-	specHash := fs.String("spec-hash", "", "hash of the specs the gates run (opaque)")
 	comment := fs.String("comment", "//", "line-comment prefix for markers")
 	asJSON := fs.Bool("json", false, "print the decision as JSON")
 	if err := fs.Parse(args); err != nil {
@@ -163,7 +163,7 @@ func convergeCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "graft: %v\n", err)
 		return 2
 	}
-	cand, err := converge.NewCandidate(store, *id, *path, *tier, *specHash, string(body))
+	cand, err := converge.NewCandidate(store, *id, *path, *tier, string(body))
 	if err != nil {
 		fmt.Fprintf(stderr, "graft: %v\n", err)
 		return 2

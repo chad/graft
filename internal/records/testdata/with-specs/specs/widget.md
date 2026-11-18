@@ -1,0 +1,3 @@
+# Widget
+
+- the widget renders

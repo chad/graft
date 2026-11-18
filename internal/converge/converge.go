@@ -64,7 +64,7 @@ type Candidate struct {
 	RecordID string
 	Version  int
 	GenHash  string
-	SpecHash string // hash of the specs the gates run (opaque; from the records layer)
+	SpecHash string // the record's spec hash (records.Pin.SpecHash); must match the store
 	Tier     string // risk tier of the owning record
 	Body     string
 }
@@ -84,7 +84,7 @@ type Decision struct {
 // Converger runs candidates through gates and the evidence policy.
 type Converger struct {
 	Root    string        // the working tree
-	Records records.Store // source of truth for every candidate's version and gen_hash
+	Records records.Store // source of truth for every candidate's version, gen_hash and spec hash
 	Log     *evidence.Log
 	Policy  evidence.Policy
 	Gates   []Gate
@@ -222,16 +222,16 @@ func isNil(s records.Store) bool {
 	return false
 }
 
-// checkPin re-reads the record: the candidate's version and gen_hash must be
+// checkPin re-reads the record: the candidate's version, gen_hash and spec hash must be
 // its current ones. Caller-supplied literals are never trusted.
 func (c Converger) checkPin(cand Candidate) error {
 	cur, err := c.Records.Current(cand.RecordID)
 	if err != nil {
 		return err
 	}
-	if cur.Version != cand.Version || cur.GenHash != cand.GenHash {
-		return fmt.Errorf("%w: %s is at v%d %s, candidate pins v%d %s",
-			ErrStalePin, cand.RecordID, cur.Version, cur.GenHash, cand.Version, cand.GenHash)
+	if cur.Version != cand.Version || cur.GenHash != cand.GenHash || cur.SpecHash != cand.SpecHash {
+		return fmt.Errorf("%w: %s is at v%d %s specs %q, candidate pins v%d %s specs %q",
+			ErrStalePin, cand.RecordID, cur.Version, cur.GenHash, cur.SpecHash, cand.Version, cand.GenHash, cand.SpecHash)
 	}
 	return nil
 }
@@ -346,7 +346,7 @@ func (c Converger) apply(cand Candidate, target string, before, next []byte, dig
 	if _, err := c.target(rel); err != nil { // re-check: no symlink appeared in the path
 		return err
 	}
-	// The record must not have moved while gates ran. Residual window: record
+	// The record (version, gen_hash, spec hash) must not have moved while gates ran. Residual window: record
 	// writers (provenance) do not take graft's lock, so a record can still
 	// change between this check and the rename below. The evidence written by
 	// this run stays pinned to the version it checked, and goes stale (§7) the
