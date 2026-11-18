@@ -79,14 +79,14 @@ func (cfg Config) attemptSamples(ctx context.Context, c converge.Converger, stor
 		if errs[i] != nil {
 			continue // a failed call is not a candidate
 		}
-		code := model.ExtractCode(resps[i], "go")
+		code := model.ExtractCode(resps[i], cfg.lang().Fence)
 		s := sample{idx: i, diff: diffLines(base, code), smoke: -1}
 		if cfg.Skeleton != nil && hasPlaceholder(code) {
 			s.failure = "the answer still contains the placeholder panic (" + recording.Placeholder + ")"
 			all = append(all, s)
 			continue
 		}
-		cand, err := converge.NewCandidate(store, a.ID, file, cfg.Tier, code)
+		cand, err := cfg.newCandidate(store, a.ID, file, code)
 		if err != nil {
 			return false, err
 		}

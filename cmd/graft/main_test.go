@@ -66,3 +66,31 @@ func TestDraftHidesStatementsOfUnvalidatedDrafts(t *testing.T) {
 		t.Fatalf("an unvalidated draft's statements were shown:\n%s", out.String())
 	}
 }
+
+func TestRunLanguageProfileRefusals(t *testing.T) {
+	dir := t.TempDir()
+	spec := dir + "/spec.md"
+	os.WriteFile(spec, []byte("# T\n\n## Core\n\n- It must run\n"), 0o644)
+	os.WriteFile(dir+"/conv.md", []byte("conventions\n"), 0o644)
+	write := func(lang string) string {
+		p := dir + "/graft.json"
+		os.WriteFile(p, []byte(`{"tier":"low","conventions":"conv.md","model":{"argv":["true"]},"policy":{"low":["static_analysis"]},
+"gates":[{"label":"g","argv":["true"],"kind":"static_analysis"}],"language":`+lang+`}`), 0o644)
+		return p
+	}
+	cases := []struct{ lang, flag, want string }{
+		{`{"ext":".py"}`, "", "name, ext, fence, comment and run are required"},
+		{`{"name":"python","ext":".py","fence":"python","comment":"#","run":["python3","main.py"],"Ext":".x"}`, "", "unknown key"},
+		{`{"name":"python","ext":".py","fence":"python","comment":"#","run":["python3","main.py"]}`, "--render", "--render supports only Go"},
+	}
+	for _, c := range cases {
+		args := []string{"run", "--config", write(c.lang), "--spec", spec, "--repo", dir + "/r", "--root", dir + "/a", "--accept"}
+		if c.flag != "" {
+			args = append(args, c.flag)
+		}
+		var out, errb bytes.Buffer
+		if code := run(args, &out, &errb); code != 2 || !strings.Contains(errb.String(), c.want) {
+			t.Errorf("%s %s: exit %d, stderr %q (want %q)", c.lang, c.flag, code, errb.String(), c.want)
+		}
+	}
+}

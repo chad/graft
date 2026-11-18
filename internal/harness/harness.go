@@ -30,6 +30,7 @@ import (
 	"github.com/chad/graft/internal/converge"
 	"github.com/chad/graft/internal/drafter"
 	"github.com/chad/graft/internal/evidence"
+	"github.com/chad/graft/internal/lang"
 	"github.com/chad/graft/internal/model"
 	"github.com/chad/graft/internal/pipeline"
 	"github.com/chad/graft/internal/recording"
@@ -76,6 +77,9 @@ type Config struct {
 	SedumVersion string
 	// Visible checks shown to the graft arm's model (never the oracle).
 	Visible map[string]string
+	// Lang is the target language (zero value: Go). It decides file names,
+	// the build command and how the oracle starts the program.
+	Lang lang.Profile
 }
 
 // recorder counts calls and optionally writes each prompt and answer to dir.
@@ -183,12 +187,60 @@ func Sample(ctx context.Context, cfg Config, arm bench.Arm) bench.Sample {
 		return bench.Sample{Outcome: bench.Broke, Reason: reason}
 	}
 	bin := filepath.Join(dir, "server")
-	build := exec.CommandContext(ctx, "go", "build", "-o", bin, ".")
-	build.Dir = root
-	if out, err := build.CombinedOutput(); err != nil {
-		return bench.Sample{Outcome: bench.Broke, Reason: "does not build: " + tail(string(out), 400)}
+	if reason := cfg.build(ctx, root, bin); reason != "" {
+		return bench.Sample{Outcome: bench.Broke, Reason: reason}
 	}
-	return cfg.score(ctx, bin)
+	return cfg.score(ctx, root, bin)
+}
+
+// lang is the target language (Go when unset).
+func (cfg Config) lang() lang.Profile {
+	if cfg.Lang.Name == "" {
+		return lang.Go
+	}
+	return cfg.Lang
+}
+
+// build runs the profile's build command in root (none: nothing to build).
+// A failure is the code's: it does not build.
+func (cfg Config) build(ctx context.Context, root, out string) string {
+	b := cfg.lang().Build
+	if len(b) == 0 {
+		return ""
+	}
+	argv := lang.ExpandArgv(b, map[string]string{"out": out})
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd.Dir = root
+	if o, err := cmd.CombinedOutput(); err != nil {
+		return "does not build: " + tail(string(o), 400)
+	}
+	return ""
+}
+
+// mainFile is the one file the baseline and intent arms write.
+func (cfg Config) mainFile() string { return "main" + cfg.lang().Ext }
+
+// answerWith is the closing instruction of a one-call prompt.
+func (cfg Config) answerWith(updated bool) string {
+	l := cfg.lang()
+	what := "complete"
+	if updated {
+		what = "complete updated"
+	}
+	if l.Name == "go" {
+		if updated {
+			return "Answer with the complete updated `main.go` in a single ```go block.\n"
+		}
+		return "Answer with the complete `main.go` (package main, standard library only) in a single ```go block.\n"
+	}
+	return fmt.Sprintf("Answer with the %s `%s` (standard library only) in a single ```%s block.\n", what, cfg.mainFile(), l.Fence)
+}
+
+func (cfg Config) displayName() string {
+	if n := cfg.lang().Name; n != "go" {
+		return n
+	}
+	return "Go"
 }
 
 func (cfg Config) graftArm(ctx context.Context, dir, root string) string {
@@ -196,14 +248,14 @@ func (cfg Config) graftArm(ctx context.Context, dir, root string) string {
 }
 
 func (cfg Config) baselinePrompt() string {
-	return "Write a complete Go program implementing this spec.\n\n## Spec\n\n" + strings.TrimSpace(cfg.Case.Spec) +
+	return "Write a complete " + cfg.displayName() + " program implementing this spec.\n\n## Spec\n\n" + strings.TrimSpace(cfg.Case.Spec) +
 		"\n\n## How it is run\n\n" + strings.TrimSpace(cfg.Case.Contract) +
-		"\n\nAnswer with the complete `main.go` (package main, standard library only) in a single ```go block.\n"
+		"\n\n" + cfg.answerWith(false)
 }
 
 func (cfg Config) intentPrompt() string {
 	return strings.TrimSpace(cfg.Case.Intent) + "\n\n## How it is run\n\n" + strings.TrimSpace(cfg.Case.Contract) +
-		"\n\nAnswer with the complete `main.go` (package main, standard library only) in a single ```go block.\n"
+		"\n\n" + cfg.answerWith(false)
 }
 
 // oneCall is the baseline and intent arms: one model call, one file, no gates.
@@ -219,8 +271,14 @@ func (cfg Config) oneCall(ctx context.Context, root, prompt string) string {
 	if mod == "" {
 		mod = "app"
 	}
-	os.WriteFile(filepath.Join(root, "go.mod"), []byte("module "+mod+"\n\ngo 1.22\n"), 0o644)
-	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte(model.ExtractCode(resp, "go")), 0o644); err != nil {
+	// The profile's fresh-tree files (Go: go.mod); the answer is written last,
+	// so it wins over a bootstrap file of the same name.
+	for n, body := range cfg.lang().Bootstrap {
+		p := filepath.Join(root, filepath.FromSlash(n))
+		os.MkdirAll(filepath.Dir(p), 0o755)
+		os.WriteFile(p, []byte(lang.Expand(body, map[string]string{"module": mod})), 0o644)
+	}
+	if err := os.WriteFile(filepath.Join(root, cfg.mainFile()), []byte(model.ExtractCode(resp, cfg.lang().Fence)), 0o644); err != nil {
 		return err.Error()
 	}
 	return ""
@@ -234,8 +292,14 @@ type oracleResult struct {
 
 // score runs the oracle: exit 0/1 with JSON is a measurement; exit 2 means
 // the server never listened (broke); anything else is the harness's failure.
-func (cfg Config) score(ctx context.Context, bin string) bench.Sample {
-	argv := append(append(append([]string{}, cfg.OracleArgv...), cfg.Case.OracleArgs...), "-bin", bin)
+func (cfg Config) score(ctx context.Context, root, bin string) bench.Sample {
+	argv := append(append([]string{}, cfg.OracleArgv...), cfg.Case.OracleArgs...)
+	if l := cfg.lang(); len(l.Run) == 1 && l.Run[0] == "{out}" {
+		argv = append(argv, "-bin", bin) // a built binary (Go): as before
+	} else {
+		run, _ := json.Marshal(lang.ExpandArgv(l.Run, map[string]string{"out": bin}))
+		argv = append(argv, "-cmd", string(run), "-dir", root)
+	}
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
@@ -354,7 +418,7 @@ func EvolveSample(ctx context.Context, cfg Config, arm bench.Arm) bench.Sample {
 		if reason = c.graftStep(ctx, repo, root, c.Case.Spec, skel1); reason != "" {
 			break
 		}
-		before, err := snapshot(root)
+		before, err := snapshot(root, c.lang().Ext)
 		if err != nil {
 			reason = err.Error()
 			break
@@ -363,7 +427,7 @@ func EvolveSample(ctx context.Context, cfg Config, arm bench.Arm) bench.Sample {
 		if reason = c.graftStep(ctx, repo, root, c.Case.SpecV2, skel2); reason != "" {
 			break
 		}
-		after, _ := snapshot(root)
+		after, _ := snapshot(root, c.lang().Ext)
 		n := 0
 		for f, src := range before {
 			if after[f] == src {
@@ -380,10 +444,10 @@ func EvolveSample(ctx context.Context, cfg Config, arm bench.Arm) bench.Sample {
 		if reason = c.oneCall(ctx, root, c.baselinePrompt()); reason != "" {
 			break
 		}
-		before, _ := snapshot(root)
+		before, _ := snapshot(root, c.lang().Ext)
 		cm.calls = 0
-		if reason = c.oneCall(ctx, root, c.evolvePrompt(before["main.go"])); reason == "" {
-			after, _ := snapshot(root)
+		if reason = c.oneCall(ctx, root, c.evolvePrompt(before[c.mainFile()])); reason == "" {
+			after, _ := snapshot(root, c.lang().Ext)
 			d := diffLines(before, after)
 			changed = &d
 		}
@@ -398,12 +462,10 @@ func EvolveSample(ctx context.Context, cfg Config, arm bench.Arm) bench.Sample {
 		return bench.Sample{Outcome: bench.Broke, Reason: reason, ChangeCalls: &calls, Preserved: preserved, DiffLines: changed}
 	}
 	bin := filepath.Join(dir, "server")
-	build := exec.CommandContext(ctx, "go", "build", "-o", bin, ".")
-	build.Dir = root
-	if out, err := build.CombinedOutput(); err != nil {
-		return bench.Sample{Outcome: bench.Broke, Reason: "does not build: " + tail(string(out), 400), ChangeCalls: &calls, Preserved: preserved, DiffLines: changed}
+	if reason := cfg.build(ctx, root, bin); reason != "" {
+		return bench.Sample{Outcome: bench.Broke, Reason: reason, ChangeCalls: &calls, Preserved: preserved, DiffLines: changed}
 	}
-	s := cfg.score(ctx, bin)
+	s := cfg.score(ctx, root, bin)
 	s.ChangeCalls, s.Preserved, s.DiffLines, s.SynthDiffLines = &calls, preserved, changed, synthChanged
 	return s
 }
@@ -414,7 +476,7 @@ func (cfg Config) graftStep(ctx context.Context, repo, root, spec string, skel *
 	if skel != nil && (cfg.Sedum == nil || cfg.Generators == "") {
 		return infraPrefix + "graft-render needs sedum and its generators"
 	}
-	acc, err := pipeline.Accept(repo, drafter.Drafts(spec), "graft bench", time.Now())
+	acc, err := pipeline.AcceptExt(repo, drafter.Drafts(spec), "graft bench", time.Now(), cfg.lang().Ext)
 	if err != nil {
 		return "accept: " + err.Error()
 	}
@@ -430,7 +492,7 @@ func (cfg Config) graftStep(ctx context.Context, repo, root, spec string, skel *
 		Repo: repo, Root: root, Module: cfg.Case.Module, Spec: spec, Conventions: cfg.Case.Conventions,
 		Tier: cfg.Tier, Attempts: cfg.Attempts, Model: cfg.Model, Gates: cfg.Gates, Policy: cfg.Policy, Log: log,
 		Skeleton: skel, Sedum: cfg.Sedum, Generators: cfg.Generators,
-		Visible: cfg.Visible,
+		Visible: cfg.Visible, Lang: cfg.Lang,
 	}, acc)
 	_ = outs
 	if err != nil {
@@ -440,9 +502,9 @@ func (cfg Config) graftStep(ctx context.Context, repo, root, spec string, skel *
 }
 
 func (cfg Config) evolvePrompt(current string) string {
-	return "Here is a Go program and its revised spec. Update the program so it satisfies the revised spec.\n\n## Revised spec\n\n" +
+	return "Here is a " + cfg.displayName() + " program and its revised spec. Update the program so it satisfies the revised spec.\n\n## Revised spec\n\n" +
 		strings.TrimSpace(cfg.Case.SpecV2) + "\n\n## How it is run\n\n" + strings.TrimSpace(cfg.Case.Contract) +
-		"\n\n## Current main.go\n\n```go\n" + current + "```\n\nAnswer with the complete updated `main.go` in a single ```go block.\n"
+		"\n\n## Current " + cfg.mainFile() + "\n\n```" + cfg.lang().Fence + "\n" + current + "```\n\n" + cfg.answerWith(true)
 }
 
 // filterSynth keeps only the model-written *_synth.go files of a snapshot.
@@ -456,10 +518,10 @@ func filterSynth(m map[string]string) map[string]string {
 	return out
 }
 
-// snapshot reads every .go file in root.
-func snapshot(root string) (map[string]string, error) {
+// snapshot reads every source file (of ext) in root.
+func snapshot(root, ext string) (map[string]string, error) {
 	out := map[string]string{}
-	names, err := filepath.Glob(filepath.Join(root, "*.go"))
+	names, err := filepath.Glob(filepath.Join(root, "*"+ext))
 	if err != nil {
 		return nil, err
 	}

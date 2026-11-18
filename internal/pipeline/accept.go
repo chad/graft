@@ -85,6 +85,11 @@ var ErrUndecided = errors.New("pipeline: some drafts need a human decision")
 // through provenance's own Commit, so every version is snapshotted. Accepting
 // is the human step in SPEC §8; `graft run --accept` is that human saying yes.
 func Accept(repo string, drafts []drafter.Draft, author string, now time.Time) ([]Accepted, error) {
+	return AcceptExt(repo, drafts, author, now, ".go")
+}
+
+// AcceptExt is Accept for a target language whose source files end in ext.
+func AcceptExt(repo string, drafts []drafter.Draft, author string, now time.Time, ext string) ([]Accepted, error) {
 	idx, err := LoadIndex(repo)
 	if err != nil {
 		return nil, err
@@ -122,7 +127,7 @@ func Accept(repo string, drafts []drafter.Draft, author string, now time.Time) (
 		if !created {
 			before, _ = r.ContentHash(fs.Specs())
 		}
-		file := fileFor(d.Section)
+		file := fileFor(d.Section, ext)
 		if e, ok := idx.Records[id]; ok {
 			file = e.File // a record keeps its file
 		}
@@ -158,8 +163,8 @@ func newID(now time.Time) string {
 	return fmt.Sprintf("prov-%d-%s", now.UTC().Year(), hex.EncodeToString(b[:]))
 }
 
-// fileFor names the Go file a section's region lives in.
-func fileFor(section string) string {
+// fileFor names the source file (with extension ext) a section's region lives in.
+func fileFor(section, ext string) string {
 	parts := strings.Split(section, " › ")
 	last := strings.ToLower(parts[len(parts)-1])
 	var b strings.Builder
@@ -177,7 +182,7 @@ func fileFor(section string) string {
 	if name == "" {
 		name = "section"
 	}
-	return name + ".go"
+	return name + ext
 }
 
 // intent renders a draft's statements as the record's intent; constraints and

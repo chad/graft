@@ -1,0 +1,9 @@
+{
+  "name": "freeq-lite-py",
+  "spec": "../freeq-lite/spec/freeq-lite.md",
+  "intent": "Write a small chat server in Python that speaks a subset of IRC, like a simplified freeq: nicknames, channels, channel and private messages, ping, and quit.",
+  "contract": "It is a Python 3.9+ program, standard library only. It is started as `python3 main.py -addr <host:port>` and must listen for TCP connections on that address; the server's name in replies is `freeq-lite`.",
+  "conventions": "conventions.md",
+  "config": "graft.json",
+  "oracle": "../freeq-lite/oracle"
+}

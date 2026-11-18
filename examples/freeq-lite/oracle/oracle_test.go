@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -19,7 +20,7 @@ func TestOracleScoresReferenceFully(t *testing.T) {
 	}
 	run := func(c check, extra ...string) {
 		t.Run(c.name+fmt.Sprint(extra), func(t *testing.T) {
-			addr, stop, err := start(bin, extra...)
+			addr, stop, err := start([]string{bin}, "", extra...)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -36,5 +37,14 @@ func TestOracleScoresReferenceFully(t *testing.T) {
 	}
 	for _, c := range v2Checks {
 		run(c, "-v2")
+	}
+}
+
+func TestServerArgv(t *testing.T) {
+	if got := strings.Join(serverArgv([]string{"python3", "main.py"}, "h:1"), " "); got != "python3 main.py -addr h:1" {
+		t.Fatal(got)
+	}
+	if got := strings.Join(serverArgv([]string{"node", "s.js", "--listen={addr}"}, "h:1"), " "); got != "node s.js --listen=h:1" {
+		t.Fatal(got)
 	}
 }

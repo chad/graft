@@ -18,6 +18,7 @@ import (
 	"github.com/chad/graft/internal/bench"
 	"github.com/chad/graft/internal/evidence"
 	"github.com/chad/graft/internal/harness"
+	"github.com/chad/graft/internal/lang"
 	"github.com/chad/graft/internal/model"
 	"github.com/chad/graft/internal/recording"
 	"github.com/chad/graft/internal/render"
@@ -252,6 +253,28 @@ func benchRun(args []string, stdout, stderr io.Writer) int {
 		}
 		skeletonSrc += rel + "\x00" + string(b) + "\x00"
 	}
+	profile, err := lang.Resolve(cfg.Language)
+	if err != nil {
+		fmt.Fprintf(stderr, "graft: %v\n", err)
+		return 2
+	}
+	for _, a := range arms {
+		if a == bench.ArmGraftRender && profile.Name != "go" {
+			fmt.Fprintf(stderr, "graft: the graft-render arm supports only Go so far (language %q)\n", profile.Name)
+			return 2
+		}
+	}
+	// A non-default profile changes how the program is built and run, so it
+	// is part of the fixture; Go (absent) keeps existing fixtures unchanged.
+	langSrc := ""
+	if cfg.Language != nil {
+		b, _ := json.Marshal(profile)
+		langSrc = string(b)
+	}
+	fixtureParts := []string{spec, cf.Intent, cf.Contract, oracleSrc, fixtureExtra, skeletonSrc, visibleSrc(visible)}
+	if langSrc != "" {
+		fixtureParts = append(fixtureParts, langSrc)
+	}
 	commit, dirty := gitState()
 	modelName := strings.Join(cfg.Model.Argv, " ")
 	// An alias like "sonnet" is not a model; record the CLI's version with it.
@@ -261,13 +284,13 @@ func benchRun(args []string, stdout, stderr io.Writer) int {
 
 	hc := harness.Config{
 		Case: harness.Case{Name: name, Spec: spec, Intent: cf.Intent, Contract: cf.Contract, Conventions: conv,
-			Module: cfg.Module, Fixture: harness.Digest(spec, cf.Intent, cf.Contract, oracleSrc, fixtureExtra, skeletonSrc, visibleSrc(visible)),
+			Module: cfg.Module, Fixture: harness.Digest(fixtureParts...),
 			SpecV2: specV2, OracleArgs: oracleArgs, Skeleton: skel1, SkeletonV2: skel2},
 		Model:     model.Command{Argv: cfg.Model.Argv, Timeout: time.Duration(cfg.Model.TimeoutSec) * time.Second},
 		ModelName: modelName, Gates: gates, Policy: evidence.Policy(cfg.Policy), Tier: cfg.Tier, Attempts: cfg.Attempts,
 		OracleArgv: []string{oracleBin}, Commit: commit, Dirty: dirty, Progress: stdout, Transcripts: *transcripts,
 		Sedum: sedum, Generators: gens, SedumVersion: sedumVer,
-		Visible: visible,
+		Visible: visible, Lang: profile,
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

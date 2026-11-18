@@ -13,6 +13,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -22,6 +23,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -1085,19 +1087,40 @@ var v2Checks = []check{
 	}},
 }
 
-// start launches bin on a free port and waits until it accepts connections.
-func start(bin string, extra ...string) (string, func(), error) {
+// serverArgv is the command that starts the server on addr: argv with
+// "{addr}" substituted, or with "-addr addr" appended when it has no {addr}.
+func serverArgv(argv []string, addr string) []string {
+	out, placed := make([]string, len(argv)), false
+	for i, a := range argv {
+		out[i] = strings.ReplaceAll(a, "{addr}", addr)
+		placed = placed || out[i] != a
+	}
+	if !placed {
+		out = append(out, "-addr", addr)
+	}
+	return out
+}
+
+// start launches the server (argv, in dir) on a free port and waits until it
+// accepts connections.
+func start(argv []string, dir string, extra ...string) (string, func(), error) {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return "", nil, err
 	}
 	addr := l.Addr().String()
 	l.Close()
-	cmd := exec.Command(bin, append([]string{"-addr", addr}, extra...)...)
+	full := append(serverArgv(argv, addr), extra...)
+	cmd := exec.Command(full[0], full[1:]...)
+	cmd.Dir = dir
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.WaitDelay = 2 * time.Second
 	if err := cmd.Start(); err != nil {
 		return "", nil, err
 	}
-	stop := func() { cmd.Process.Kill(); cmd.Wait() }
+	stop := func() { syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); cmd.Process.Kill(); cmd.Wait() }
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		if c, err := net.Dial("tcp", addr); err == nil {
@@ -1107,7 +1130,14 @@ func start(bin string, extra ...string) (string, func(), error) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	stop()
-	return "", nil, fmt.Errorf("server did not listen on %s", addr)
+	err = fmt.Errorf("server did not listen on %s", addr)
+	if s := strings.TrimSpace(stderr.String()); s != "" {
+		if len(s) > 1500 {
+			s = "..." + s[len(s)-1500:]
+		}
+		err = fmt.Errorf("%w; its stderr:\n%s", err, s)
+	}
+	return "", nil, err
 }
 
 type result struct {
@@ -1119,12 +1149,24 @@ type result struct {
 
 func main() {
 	bin := flag.String("bin", "", "server binary to start once per check")
+	cmdJSON := flag.String("cmd", "", `server start command as a JSON argv, e.g. ["python3","main.py"]; "-addr A" is appended unless an argument holds {addr}`)
+	dir := flag.String("dir", "", "working directory for -cmd (default: the current one)")
 	addr := flag.String("addr", "", "address of an already-running server")
 	only := flag.String("run", "", "run only checks whose name contains this")
 	withV2 := flag.Bool("v2", false, "include the checks for the Topics spec revision")
 	flag.Parse()
-	if (*bin == "") == (*addr == "") {
-		fmt.Fprintln(os.Stderr, "oracle: exactly one of -bin or -addr")
+	var argv []string
+	switch {
+	case *cmdJSON != "":
+		if err := json.Unmarshal([]byte(*cmdJSON), &argv); err != nil || len(argv) == 0 {
+			fmt.Fprintln(os.Stderr, "oracle: -cmd must be a non-empty JSON array of strings")
+			os.Exit(2)
+		}
+	case *bin != "":
+		argv = []string{*bin}
+	}
+	if (argv == nil) == (*addr == "") {
+		fmt.Fprintln(os.Stderr, "oracle: exactly one of -bin, -cmd or -addr")
 		os.Exit(2)
 	}
 	r := result{Failed: []string{}, Errors: map[string]string{}}
@@ -1138,9 +1180,9 @@ func main() {
 		}
 		a := *addr
 		stop := func() {}
-		if *bin != "" {
+		if argv != nil {
 			var err error
-			a, stop, err = start(*bin)
+			a, stop, err = start(argv, *dir)
 			if err != nil {
 				fmt.Fprintln(os.Stderr, "oracle:", err)
 				os.Exit(2)
