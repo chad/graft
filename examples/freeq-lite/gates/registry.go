@@ -26,11 +26,56 @@ func main() {
 	fset := token.NewFileSet()
 	owner := map[string]string{}
 	var problems []string
+	parsed := map[string]*ast.File{}
+	declarer := ""
 	for _, f := range files {
 		af, err := parser.ParseFile(fset, f, nil, 0)
 		if err != nil {
 			problems = append(problems, err.Error())
 			continue
+		}
+		parsed[f] = af
+		for _, d := range af.Decls {
+			if g, ok := d.(*ast.GenDecl); ok && g.Tok == token.VAR {
+				for _, sp := range g.Specs {
+					for _, n := range sp.(*ast.ValueSpec).Names {
+						if n.Name == "handlers" {
+							declarer = f
+						}
+					}
+				}
+			}
+		}
+	}
+	for _, f := range files {
+		af := parsed[f]
+		if af == nil {
+			continue
+		}
+		// Outside the file that declares the registry, the only permitted use of
+		// the name is a direct registration: handlers["CMD"] = <handler>.
+		// Aliases, parenthesised forms, passing the map anywhere (reflect,
+		// helpers) and reassigning the whole map are all refused.
+		if f != declarer {
+			allowed := map[*ast.Ident]bool{}
+			ast.Inspect(af, func(n ast.Node) bool {
+				if as, ok := n.(*ast.AssignStmt); ok && as.Tok == token.ASSIGN {
+					for _, lhs := range as.Lhs {
+						if ix, ok := lhs.(*ast.IndexExpr); ok {
+							if id, ok := ix.X.(*ast.Ident); ok && id.Name == "handlers" {
+								allowed[id] = true
+							}
+						}
+					}
+				}
+				return true
+			})
+			ast.Inspect(af, func(n ast.Node) bool {
+				if id, ok := n.(*ast.Ident); ok && id.Name == "handlers" && !allowed[id] && id.Obj == nil {
+					problems = append(problems, fmt.Sprintf("%s:%d: handlers may only be used as handlers[\"CMD\"] = ... outside %s", f, fset.Position(id.Pos()).Line, declarer))
+				}
+				return true
+			})
 		}
 		ast.Inspect(af, func(n ast.Node) bool {
 			switch x := n.(type) {
