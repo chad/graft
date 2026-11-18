@@ -13,7 +13,9 @@ import (
 	"github.com/chad/graft/internal/converge"
 	"github.com/chad/graft/internal/evidence"
 	"github.com/chad/graft/internal/model"
+	"github.com/chad/graft/internal/recording"
 	"github.com/chad/graft/internal/records"
+	"github.com/chad/graft/internal/render"
 )
 
 // ErrModel: the model command failed (timeout, CLI error, empty answer). That
@@ -33,7 +35,10 @@ type Config struct {
 	Gates       []converge.Gate
 	Policy      evidence.Policy
 	Log         *evidence.Log
-	Progress    io.Writer // nil for silence
+	Progress    io.Writer           // nil for silence
+	Skeleton    *recording.Skeleton // non-nil (with Sedum): sedum lays out the tree, the model writes only Body helpers
+	Sedum       render.Sedum
+	Generators  string // sedum's generators directory (contains go/); needed with Skeleton
 }
 
 // Outcome is what happened to one record.
@@ -62,8 +67,15 @@ func Run(ctx context.Context, cfg Config, acc []Accepted) ([]Outcome, error) {
 	if err != nil {
 		return nil, err
 	}
-	c := converge.Converger{Root: cfg.Root, Records: store, Log: cfg.Log, Policy: cfg.Policy, Gates: cfg.Gates, By: "graft/run"}
 	sort.Slice(acc, func(i, j int) bool { return acc[i].Entry.Order < acc[j].Entry.Order })
+	var byRec map[string]recording.Region
+	var pending map[string]bool // regions still holding their seeded placeholder
+	if cfg.Skeleton != nil {
+		if byRec, pending, err = cfg.renderTree(ctx, store, acc); err != nil {
+			return nil, err
+		}
+	}
+	c := converge.Converger{Root: cfg.Root, Records: store, Log: cfg.Log, Policy: cfg.Policy, Gates: cfg.Gates, By: "graft/run"}
 	var out []Outcome
 	regions, err := converge.ReadRegions(cfg.Root)
 	if err != nil {
@@ -71,16 +83,28 @@ func Run(ctx context.Context, cfg Config, acc []Accepted) ([]Outcome, error) {
 	}
 	for _, a := range acc {
 		o := Outcome{ID: a.ID, Section: a.Entry.Section, File: a.Entry.File}
+		file := a.Entry.File
+		reg, hasReg := byRec[a.ID]
+		if cfg.Skeleton != nil {
+			if !hasReg {
+				// The skeleton fixes everything for this record: nothing to converge.
+				o.Applied = true
+				out = append(out, o)
+				continue
+			}
+			file = reg.Path
+			o.File = file
+		}
 		feedback := ""
 		// A hand edit inside this record's region is refused before any model
 		// call: converge would refuse to overwrite it anyway.
 		for _, r := range regions {
-			if r.Path == a.Entry.File && r.Owner.Record == a.ID && r.Edited() {
+			if r.Path == file && r.Owner.Record == a.ID && r.Edited() {
 				return out, fmt.Errorf("%s: %w: %s was edited by hand; keep the edit by revising the record, or restore the region", a.Entry.Section, converge.ErrHandEdited, r.Path)
 			}
 		}
-		if body, ok := current(store, regions, a, cfg.Root); ok {
-			cand, err := converge.NewCandidate(store, a.ID, a.Entry.File, cfg.Tier, body)
+		if body, ok := current(store, regions, a, file, cfg.Root); ok && !pending[a.ID] {
+			cand, err := converge.NewCandidate(store, a.ID, file, cfg.Tier, body)
 			if err != nil {
 				return out, err
 			}
@@ -90,17 +114,23 @@ func Run(ctx context.Context, cfg Config, acc []Accepted) ([]Outcome, error) {
 			}
 			if d.Applied {
 				o.Applied = true
-				cfg.say("%s (%s): up to date, re-verified under the current gates\n", a.Entry.Section, a.Entry.File)
+				cfg.say("%s (%s): up to date, re-verified under the current gates\n", a.Entry.Section, file)
 				out = append(out, o)
 				continue
 			}
 			feedback = "The existing file no longer passes these checks; fix it:\n" + failing(d)
-			cfg.say("%s (%s): current body fails the current gates; regenerating\n", a.Entry.Section, a.Entry.File)
+			cfg.say("%s (%s): current body fails the current gates; regenerating\n", a.Entry.Section, file)
 		}
 		for o.Attempts < cfg.Attempts && !o.Applied {
 			o.Attempts++
-			cfg.say("%s (%s): attempt %d\n", a.Entry.Section, a.Entry.File, o.Attempts)
-			prompt, err := cfg.prompt(a, feedback)
+			cfg.say("%s (%s): attempt %d\n", a.Entry.Section, file, o.Attempts)
+			var prompt string
+			var err error
+			if cfg.Skeleton != nil {
+				prompt, err = cfg.renderPrompt(a, reg, feedback)
+			} else {
+				prompt, err = cfg.prompt(a, feedback)
+			}
 			if err != nil {
 				return out, err
 			}
@@ -112,7 +142,15 @@ func Run(ctx context.Context, cfg Config, acc []Accepted) ([]Outcome, error) {
 				}
 				return out, fmt.Errorf("%w: %v", ErrModel, err)
 			}
-			cand, err := converge.NewCandidate(store, a.ID, a.Entry.File, cfg.Tier, model.ExtractCode(resp, "go"))
+			code := model.ExtractCode(resp, "go")
+			if cfg.Skeleton != nil && hasPlaceholder(code) {
+				// The seed is a placeholder, not an answer: refuse before any check runs.
+				o.LastFailure = "the answer still contains the placeholder panic (" + recording.Placeholder + ")"
+				feedback = "Your previous answer was refused before checking: " + o.LastFailure + "; write the real bodies"
+				cfg.say("  not applied: %s\n", o.LastFailure)
+				continue
+			}
+			cand, err := converge.NewCandidate(store, a.ID, file, cfg.Tier, code)
 			if err != nil {
 				return out, err
 			}
@@ -155,13 +193,13 @@ func failing(d converge.Decision) string {
 
 // current reports whether the record's region already holds an unedited body
 // written for the record's current version and gen_hash, and returns that body.
-func current(store records.Store, regions []converge.Region, a Accepted, root string) (string, bool) {
+func current(store records.Store, regions []converge.Region, a Accepted, file, root string) (string, bool) {
 	p, err := store.Current(a.ID)
 	if err != nil {
 		return "", false
 	}
 	for _, r := range regions {
-		if r.Path == a.Entry.File && r.Owner.Record == a.ID {
+		if r.Path == file && r.Owner.Record == a.ID {
 			if r.Owner.Version != p.Version || r.Owner.Gen != p.GenHash || r.Edited() {
 				return "", false
 			}

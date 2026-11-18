@@ -274,6 +274,14 @@ func stemOf(p string) string { return strings.TrimSuffix(path.Base(p), ".go") }
 // synthPath is the file that holds a skeleton file's convergence region.
 func synthPath(p string) string { return path.Join(path.Dir(p), stemOf(p)+"_synth.go") }
 
+// Placeholder is the panic message of a seeded, not-yet-converged helper. A
+// body that still contains it is never converged.
+const Placeholder = "graft: not converged"
+
+// IsSynthPath reports whether p is a model-written synthesis file; everything
+// else a render produces comes from sedum.
+func IsSynthPath(p string) bool { return strings.HasSuffix(p, "_synth.go") }
+
 func helperName(f File, s Stub) string { return stemOf(f.Path) + upperFirst(s.Name) + "Body" }
 
 func packageName(f File) string {
@@ -305,7 +313,7 @@ func region(f File, owner records.Pin, tier string, declares []string) (Region, 
 	}
 	b.WriteString("\n")
 	for _, d := range declares {
-		b.WriteString(d + " {\n\tpanic(\"graft: not converged\")\n}\n\n")
+		b.WriteString(d + " {\n\tpanic(\"" + Placeholder + "\")\n}\n\n")
 	}
 	body, err := format.Source([]byte(b.String()))
 	if err != nil {

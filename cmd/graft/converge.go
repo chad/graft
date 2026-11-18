@@ -31,6 +31,7 @@ type convergeConfig struct {
 	Tier        string `json:"tier"`
 	Attempts    int    `json:"attempts"`
 	Module      string `json:"module"`
+	Skeleton    string `json:"skeleton"` // path, relative to the config file (graft run --render)
 
 	Policy map[string][]evidence.Kind `json:"policy"`
 	Gates  []struct {
@@ -50,7 +51,7 @@ func loadConvergeConfig(path string) (convergeConfig, []converge.Gate, error) {
 	// encoding/json alone is not strict: it matches keys case-insensitively,
 	// lets a duplicate key win silently, accepts null and ignores trailing data.
 	if err := strictCheck(b, map[string][]string{
-		"":        {"policy", "gates", "model", "conventions", "tier", "attempts", "module"},
+		"":        {"policy", "gates", "model", "conventions", "tier", "attempts", "module", "skeleton"},
 		"gates[]": {"label", "argv", "kind", "timeout_sec"},
 		"model":   {"argv", "timeout_sec"},
 	}); err != nil {
@@ -186,6 +187,10 @@ func convergeCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	cfg, gates, err := loadConvergeConfig(*cfgPath)
 	if err != nil {
 		fmt.Fprintf(stderr, "graft: %v\n", err)
+		return 2
+	}
+	if cfg.Skeleton != "" {
+		fmt.Fprintln(stderr, "graft: config \"skeleton\" only applies to `graft run --render`; remove it for converge")
 		return 2
 	}
 	store, err := records.OpenDir(*recDir)

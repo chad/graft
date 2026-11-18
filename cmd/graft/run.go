@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"syscall"
@@ -15,6 +16,8 @@ import (
 	"github.com/chad/graft/internal/evidence"
 	"github.com/chad/graft/internal/model"
 	"github.com/chad/graft/internal/pipeline"
+	"github.com/chad/graft/internal/recording"
+	"github.com/chad/graft/internal/render"
 )
 
 const runUsage = `usage: graft run --config graft.json --spec SPEC.md --repo DIR --root DIR --accept
@@ -42,12 +45,18 @@ func runCmd(args []string, stdout, stderr io.Writer) int {
 	repo := fs.String("repo", "", "provenance repo for the accepted records")
 	root := fs.String("root", "", "code tree to generate into")
 	accept := fs.Bool("accept", false, "accept the drafts as records (the human step)")
+	renderOn := fs.Bool("render", false, "sedum lays out the skeleton; the model converges only the Body helpers")
+	skelPath := fs.String("skeleton", "", "skeleton JSON for --render (default: graft.json \"skeleton\", else skeleton.json beside it)")
 	logPath := fs.String("log", "", "evidence log (default <repo>/.graft/evidence.jsonl)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 	if *specPath == "" || *repo == "" || *root == "" || fs.NArg() != 0 {
 		fmt.Fprint(stderr, runUsage)
+		return 2
+	}
+	if !*renderOn && *skelPath != "" {
+		fmt.Fprintln(stderr, "graft: --skeleton has no effect without --render")
 		return 2
 	}
 	cfg, gates, err := loadConvergeConfig(*cfgPath)
@@ -86,6 +95,45 @@ func runCmd(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "graft: %v\n", err)
 		return 2
 	}
+	var skel *recording.Skeleton
+	var sedum render.Sedum
+	var gens string
+	if *renderOn {
+		sp := *skelPath
+		if sp == "" {
+			sp = cfg.Skeleton
+			if sp == "" {
+				sp = "skeleton.json"
+			}
+			sp = filepath.Join(filepath.Dir(*cfgPath), sp)
+		}
+		sb, err := os.ReadFile(sp)
+		if err != nil {
+			fmt.Fprintf(stderr, "graft: skeleton: %v\n", err)
+			return 2
+		}
+		sk, err := recording.LoadSkeleton(sb)
+		if err != nil {
+			fmt.Fprintf(stderr, "graft: skeleton %s: %v\n", sp, err)
+			return 2
+		}
+		skel = &sk
+		bin, err := exec.LookPath("sedum")
+		if err != nil {
+			fmt.Fprintln(stderr, "graft: --render needs sedum on PATH")
+			return 2
+		}
+		sedum = render.Exec(bin)
+		gens = os.Getenv("SEDUM_GENERATORS")
+		if gens == "" {
+			home, _ := os.UserHomeDir()
+			gens = filepath.Join(home, "sedum", "generators")
+		}
+		if _, err := os.Stat(gens); err != nil {
+			fmt.Fprintf(stderr, "graft: sedum generators: %v (set SEDUM_GENERATORS)\n", err)
+			return 2
+		}
+	}
 	lp := *logPath
 	if lp == "" {
 		lp = filepath.Join(*repo, ".graft", "evidence.jsonl")
@@ -106,6 +154,7 @@ func runCmd(args []string, stdout, stderr io.Writer) int {
 		Tier: cfg.Tier, Attempts: cfg.Attempts,
 		Model: model.Command{Argv: cfg.Model.Argv, Timeout: time.Duration(cfg.Model.TimeoutSec) * time.Second},
 		Gates: gates, Policy: evidence.Policy(cfg.Policy), Log: log, Progress: stdout,
+		Skeleton: skel, Sedum: sedum, Generators: gens,
 	}, acc)
 	applied := 0
 	for _, o := range out {
