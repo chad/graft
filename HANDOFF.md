@@ -29,3 +29,7 @@ Brief tests 1-5 pass; gofmt/vet/`go test -race ./...` clean; measurement + READM
 - `go build` needs network on first run (module download).
 - Do not touch examples/freeq-lite/smoke/.
 - Never post absolute paths/secrets on freeq.
+
+## Update from orchestrator (after handoff)
+- PR #21 (chad-bot's smoke suite) also edits `internal/pipeline/run.go` (adds `cfg.Visible` to prompts). Keep run.go changes minimal; whichever PR merges second rebases. My sampling logic is already mostly in `samples.go` to help with that.
+- chad-bot's eval gate prints exactly `smoke: X/Y checks passed` in the evidence Detail. Parse that in `closer()` (samples.go, TODO there) as the second ranking key: most gates passed, then most smoke checks passed, then smallest diff. Keep it tolerant: no match means skip the key. Smoke is a hard gate, so satisfied candidates rank on diff size only.
