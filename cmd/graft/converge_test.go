@@ -100,3 +100,24 @@ func TestConvergeCLIRefusals(t *testing.T) {
 		t.Fatal("tree changed")
 	}
 }
+
+func TestConvergeCLIConfigIsStrict(t *testing.T) {
+	root, _, logp := convergeSetup(t, "true")
+	for name, cfgText := range map[string]string{
+		"trailing object": `{"policy":{"low":["test_run"]},"gates":[{"label":"g","argv":["true"],"kind":"test_run"}]}{"policy":{}}`,
+		"unknown kind":    `{"policy":{"low":["test_rnu"]},"gates":[{"label":"g","argv":["true"],"kind":"test_run"}]}`,
+		"gate kind":       `{"policy":{"low":["test_run"]},"gates":[{"label":"g","argv":["true"],"kind":"vibes"}]}`,
+		"empty argv0":     `{"policy":{"low":["test_run"]},"gates":[{"label":"g","argv":[""],"kind":"test_run"}]}`,
+		"negative":        `{"policy":{"low":["test_run"]},"gates":[{"label":"g","argv":["true"],"kind":"test_run","timeout_sec":-1}]}`,
+		"empty policy":    `{"policy":{},"gates":[{"label":"g","argv":["true"],"kind":"test_run"}]}`,
+	} {
+		cfg := filepath.Join(t.TempDir(), "graft.json")
+		os.WriteFile(cfg, []byte(cfgText), 0o644)
+		if code, _, _ := runWith("func F() {}\n", convergeArgs(root, cfg, logp, "-")); code != 2 {
+			t.Errorf("%s: exit %d, want 2", name, code)
+		}
+	}
+	if b, _ := os.ReadFile(filepath.Join(root, "app.go")); string(b) != "package app\n" {
+		t.Fatal("tree changed")
+	}
+}

@@ -39,18 +39,42 @@ func loadConvergeConfig(path string) (convergeConfig, []converge.Gate, error) {
 	if err := dec.Decode(&c); err != nil {
 		return c, nil, fmt.Errorf("%s: %w", path, err)
 	}
+	if dec.More() {
+		return c, nil, fmt.Errorf("%s: trailing data after the config object", path)
+	}
 	if len(c.Policy) == 0 {
 		return c, nil, fmt.Errorf("%s: policy is empty", path)
 	}
+	for tier, kinds := range c.Policy {
+		for _, k := range kinds {
+			if !knownKind(k) {
+				return c, nil, fmt.Errorf("%s: tier %q requires unknown kind %q", path, tier, k)
+			}
+		}
+	}
 	var gates []converge.Gate
 	for i, g := range c.Gates {
-		if g.Label == "" || len(g.Argv) == 0 || g.Kind == "" {
+		if g.Label == "" || len(g.Argv) == 0 || g.Argv[0] == "" || g.Kind == "" {
 			return c, nil, fmt.Errorf("%s: gate %d needs label, argv and kind", path, i)
+		}
+		if !knownKind(g.Kind) {
+			return c, nil, fmt.Errorf("%s: gate %q has unknown kind %q", path, g.Label, g.Kind)
+		}
+		if g.TimeoutSec < 0 {
+			return c, nil, fmt.Errorf("%s: gate %q has a negative timeout", path, g.Label)
 		}
 		gates = append(gates, converge.CommandGate{Label: g.Label, Argv: g.Argv, As: g.Kind,
 			Timeout: time.Duration(g.TimeoutSec) * time.Second})
 	}
 	return c, gates, nil
+}
+
+func knownKind(k evidence.Kind) bool {
+	switch k {
+	case evidence.TestRun, evidence.Eval, evidence.HumanSignoff, evidence.StaticAnalysis, evidence.Conformance:
+		return true
+	}
+	return false
 }
 
 // convergeCmd: graft converge --config graft.json --records DIR --log FILE
@@ -64,7 +88,7 @@ func convergeCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	cfgPath := fs.String("config", "graft.json", "policy and gates")
 	recDir := fs.String("records", ".", "provenance repo root (records layer)")
-	logPath := fs.String("log", ".graft/evidence.jsonl", "evidence log")
+	logPath := fs.String("log", ".graft/evidence.jsonl", "evidence log (relative to the current directory, not --root)")
 	root := fs.String("root", ".", "working tree")
 	id := fs.String("record", "", "owning record id")
 	path := fs.String("path", "", "target file, relative to --root")
