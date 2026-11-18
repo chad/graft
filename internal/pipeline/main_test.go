@@ -40,7 +40,7 @@ func provisionSedum() error {
 	// predate `sedum convergence`.
 	bin := filepath.Join(tmp, "bin")
 	cmd := exec.Command("go", "install", "github.com/livecodelife/sedum/cmd/sedum@"+sedumVersion)
-	cmd.Env = append(os.Environ(), "GOBIN="+bin, "GOPROXY=direct", "GOFLAGS=-mod=mod")
+	cmd.Env = append(os.Environ(), "GOBIN="+bin, "GOPROXY=direct")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("go install sedum@%s: %v\n%s", sedumVersion, err, out)
 	}
