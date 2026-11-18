@@ -168,7 +168,7 @@ func TestEvolveSampleGraftPreservesAndCounts(t *testing.T) {
 	c.Case.SpecV2 = c.Case.Spec + "\n## Extra\n\n- The program must define a function Twice that returns twice its argument\n"
 	s := EvolveSample(context.Background(), c, bench.ArmGraft)
 	if s.Outcome != bench.Works || s.ChangeCalls == nil || *s.ChangeCalls != 1 || s.Preserved == nil || *s.Preserved != 1 ||
-		s.ChangeBytes == nil || *s.ChangeBytes == 0 {
+		s.DiffLines == nil || *s.DiffLines != 5 { // extra.go: 3 body lines + 2 marker lines
 		t.Fatalf("%+v calls=%v preserved=%v", s, deref(s.ChangeCalls), deref(s.Preserved))
 	}
 }
@@ -187,6 +187,28 @@ func deref(p *int) any {
 		return nil
 	}
 	return *p
+}
+
+func TestLineDiff(t *testing.T) {
+	for _, c := range []struct {
+		a, b string
+		want int
+	}{
+		{"x\ny\nz\n", "x\ny\nz\n", 0},
+		{"x\ny\nz\n", "x\nY\nz\n", 2},
+		{"", "a\nb\n", 2},
+		{"a\nb\n", "", 2},
+		{"a\nb\nc\n", "a\nc\n", 1},
+	} {
+		if got := lineDiff(c.a, c.b); got != c.want {
+			t.Errorf("lineDiff(%q,%q) = %d, want %d", c.a, c.b, got, c.want)
+		}
+	}
+	// A rewrite that changes one line in a big file is small, however it was produced.
+	big := strings.Repeat("line\n", 500)
+	if d := diffLines(map[string]string{"main.go": big}, map[string]string{"main.go": big + "extra\n"}); d != 1 {
+		t.Fatalf("one added line counted as %d", d)
+	}
 }
 
 // failsThenPassesThenErrs: region 1 fails then passes; region 2 hits a model error.

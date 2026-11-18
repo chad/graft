@@ -323,7 +323,7 @@ func EvolveSample(ctx context.Context, cfg Config, arm bench.Arm) bench.Sample {
 		if reason = c.graftStep(ctx, repo, root, c.Case.Spec); reason != "" {
 			break
 		}
-		before, err := fileHashes(root)
+		before, err := snapshot(root)
 		if err != nil {
 			reason = err.Error()
 			break
@@ -332,33 +332,25 @@ func EvolveSample(ctx context.Context, cfg Config, arm bench.Arm) bench.Sample {
 		if reason = c.graftStep(ctx, repo, root, c.Case.SpecV2); reason != "" {
 			break
 		}
-		after, _ := fileHashes(root)
-		n, bytes := 0, 0
-		for f, h := range before {
-			if after[f] == h {
+		after, _ := snapshot(root)
+		n := 0
+		for f, src := range before {
+			if after[f] == src {
 				n++
 			}
 		}
-		for f, h := range after {
-			if before[f] != h {
-				fi, _ := os.Stat(filepath.Join(root, f))
-				if fi != nil {
-					bytes += int(fi.Size())
-				}
-			}
-		}
-		preserved, changed = &n, &bytes
+		d := diffLines(before, after)
+		preserved, changed = &n, &d
 	case bench.ArmBaseline:
 		if reason = c.oneCall(ctx, root, c.baselinePrompt()); reason != "" {
 			break
 		}
-		cur, _ := os.ReadFile(filepath.Join(root, "main.go"))
+		before, _ := snapshot(root)
 		cm.calls = 0
-		if reason = c.oneCall(ctx, root, c.evolvePrompt(string(cur))); reason == "" {
-			if fi, err := os.Stat(filepath.Join(root, "main.go")); err == nil {
-				b := int(fi.Size())
-				changed = &b
-			}
+		if reason = c.oneCall(ctx, root, c.evolvePrompt(before["main.go"])); reason == "" {
+			after, _ := snapshot(root)
+			d := diffLines(before, after)
+			changed = &d
 		}
 	default:
 		return bench.Sample{Outcome: bench.Unreachable, Reason: "evolve cases run the graft and baseline arms"}
@@ -368,16 +360,16 @@ func EvolveSample(ctx context.Context, cfg Config, arm bench.Arm) bench.Sample {
 		if strings.HasPrefix(reason, infraPrefix) {
 			return bench.Sample{Outcome: bench.Unreachable, Reason: strings.TrimPrefix(reason, infraPrefix), ChangeCalls: &calls}
 		}
-		return bench.Sample{Outcome: bench.Broke, Reason: reason, ChangeCalls: &calls, Preserved: preserved, ChangeBytes: changed}
+		return bench.Sample{Outcome: bench.Broke, Reason: reason, ChangeCalls: &calls, Preserved: preserved, DiffLines: changed}
 	}
 	bin := filepath.Join(dir, "server")
 	build := exec.CommandContext(ctx, "go", "build", "-o", bin, ".")
 	build.Dir = root
 	if out, err := build.CombinedOutput(); err != nil {
-		return bench.Sample{Outcome: bench.Broke, Reason: "does not build: " + tail(string(out), 400), ChangeCalls: &calls, Preserved: preserved, ChangeBytes: changed}
+		return bench.Sample{Outcome: bench.Broke, Reason: "does not build: " + tail(string(out), 400), ChangeCalls: &calls, Preserved: preserved, DiffLines: changed}
 	}
 	s := cfg.score(ctx, bin)
-	s.ChangeCalls, s.Preserved, s.ChangeBytes = &calls, preserved, changed
+	s.ChangeCalls, s.Preserved, s.DiffLines = &calls, preserved, changed
 	return s
 }
 
@@ -408,7 +400,8 @@ func (cfg Config) evolvePrompt(current string) string {
 		"\n\n## Current main.go\n\n```go\n" + current + "```\n\nAnswer with the complete updated `main.go` in a single ```go block.\n"
 }
 
-func fileHashes(root string) (map[string]string, error) {
+// snapshot reads every .go file in root.
+func snapshot(root string) (map[string]string, error) {
 	out := map[string]string{}
 	names, err := filepath.Glob(filepath.Join(root, "*.go"))
 	if err != nil {
@@ -419,10 +412,61 @@ func fileHashes(root string) (map[string]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		sum := sha256.Sum256(b)
-		out[filepath.Base(n)] = hex.EncodeToString(sum[:])
+		out[filepath.Base(n)] = string(b)
 	}
 	return out, nil
+}
+
+// diffLines is the size of the change between two trees, measured the same
+// way for every arm: lines added plus lines removed, per file, by a
+// longest-common-subsequence line diff (a new file counts all its lines, a
+// deleted file all of its).
+func diffLines(before, after map[string]string) int {
+	total := 0
+	seen := map[string]bool{}
+	for f, a := range before {
+		seen[f] = true
+		total += lineDiff(a, after[f])
+	}
+	for f, b := range after {
+		if !seen[f] {
+			total += lineDiff("", b)
+		}
+	}
+	return total
+}
+
+func splitLinesKeep(s string) []string {
+	if s == "" {
+		return nil
+	}
+	return strings.Split(strings.TrimSuffix(s, "\n"), "\n")
+}
+
+// lineDiff returns added+removed lines between a and b.
+func lineDiff(a, b string) int {
+	x, y := splitLinesKeep(a), splitLinesKeep(b)
+	if a == b {
+		return 0
+	}
+	// LCS length by dynamic programming over two rows.
+	prev := make([]int, len(y)+1)
+	cur := make([]int, len(y)+1)
+	for i := 1; i <= len(x); i++ {
+		for j := 1; j <= len(y); j++ {
+			switch {
+			case x[i-1] == y[j-1]:
+				cur[j] = prev[j-1] + 1
+			case prev[j] >= cur[j-1]:
+				cur[j] = prev[j]
+			default:
+				cur[j] = cur[j-1]
+			}
+		}
+		prev, cur = cur, prev
+	}
+	lcs := prev[len(y)]
+	return (len(x) - lcs) + (len(y) - lcs)
 }
 
 // RunEvolve draws n evolve samples of each arm and appends one record per arm.
@@ -444,8 +488,8 @@ func RunEvolve(ctx context.Context, cfg Config, store bench.Store, arms []bench.
 				if s.Preserved != nil {
 					extra += fmt.Sprintf(" preserved=%d", *s.Preserved)
 				}
-				if s.ChangeBytes != nil {
-					extra += fmt.Sprintf(" change_bytes=%d", *s.ChangeBytes)
+				if s.DiffLines != nil {
+					extra += fmt.Sprintf(" diff_lines=%d", *s.DiffLines)
 				}
 				fmt.Fprintf(cfg.Progress, "%s %d/%d: %s %d/%d%s %s\n", arm, i+1, n, s.Outcome, s.Passed, s.Checks, extra, firstLine(s.Reason))
 			}

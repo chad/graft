@@ -113,8 +113,8 @@ func changeCosts(recs []Record, excluded map[int]string) []string {
 		}
 		var calls, kept, bytes []string
 		for _, s := range r.Samples {
-			if s.ChangeBytes != nil {
-				bytes = append(bytes, fmt.Sprint(*s.ChangeBytes))
+			if s.DiffLines != nil {
+				bytes = append(bytes, fmt.Sprint(*s.DiffLines))
 			}
 			if s.ChangeCalls != nil {
 				calls = append(calls, fmt.Sprint(*s.ChangeCalls))
@@ -128,7 +128,7 @@ func changeCosts(recs []Record, excluded map[int]string) []string {
 		}
 		line := fmt.Sprintf("%s @%.12s: model calls for the change [%s]", r.Arm, r.Commit, strings.Join(calls, " "))
 		if len(bytes) > 0 {
-			line += fmt.Sprintf("; bytes of source rewritten [%s]", strings.Join(bytes, " "))
+			line += fmt.Sprintf("; lines changed (added+removed, same measure for every arm) [%s]", strings.Join(bytes, " "))
 		}
 		if len(kept) > 0 {
 			line += fmt.Sprintf("; pre-change files left byte-identical [%s]", strings.Join(kept, " "))

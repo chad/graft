@@ -103,8 +103,9 @@ type Sample struct {
 	// shown; never aggregated into a rate.
 	ChangeCalls *int `json:"change_calls,omitempty"`
 	Preserved   *int `json:"preserved,omitempty"`
-	ChangeBytes *int `json:"change_bytes,omitempty"` // bytes of source the change (re)wrote
-
+	// DiffLines is the size of the change, measured identically for every
+	// arm: lines added plus removed across the tree's .go files.
+	DiffLines *int `json:"diff_lines,omitempty"`
 }
 
 // Attribution says which layer(s) one failed sample's failure came from.
