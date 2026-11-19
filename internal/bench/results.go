@@ -96,7 +96,12 @@ type Sample struct {
 	Outcome Outcome `json:"outcome"`
 	Checks  int     `json:"checks"`
 	Passed  int     `json:"passed"`
-	Reason  string  `json:"reason,omitempty"`
+	// Visible / VisiblePassed: of Checks, those whose behaviour a check the
+	// model was shown also exercises, and how many of them passed, when the
+	// oracle reports it. Checks-Visible is the strictly held-out part.
+	Visible       *int   `json:"visible,omitempty"`
+	VisiblePassed *int   `json:"visible_passed,omitempty"`
+	Reason        string `json:"reason,omitempty"`
 	// Calls is the model calls the sample made (all attempts); Transcript is
 	// where its prompts and answers were kept, if the run kept them.
 	Calls      *int   `json:"calls,omitempty"`

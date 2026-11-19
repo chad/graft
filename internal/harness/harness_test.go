@@ -286,13 +286,6 @@ func TestEvolveV1RetryThenChangeInfraIsUnreachable(t *testing.T) {
 	}
 }
 
-func TestFilterSynth(t *testing.T) {
-	got := filterSynth(map[string]string{"a.go": "x", "a_synth.go": "y", "b_synth.go": "z"})
-	if len(got) != 2 || got["a_synth.go"] != "y" {
-		t.Fatalf("%v", got)
-	}
-}
-
 func TestGraftRenderWithoutSedumIsUnreachable(t *testing.T) {
 	c := cfg(t, answer{map[string]string{"core.go": good}}, fakeOracle)
 	c.Case.Skeleton = &recording.Skeleton{}
@@ -305,5 +298,28 @@ func TestGraftRenderWithoutSkeletonIsUnreachable(t *testing.T) {
 	c := cfg(t, answer{map[string]string{"core.go": good}}, fakeOracle)
 	if s := Sample(context.Background(), c, bench.ArmGraftRender); s.Outcome != bench.Unreachable || !strings.Contains(s.Reason, "no skeleton") {
 		t.Fatalf("%+v", s)
+	}
+}
+
+func TestVisibleCountsAreRecorded(t *testing.T) {
+	visOracle := `bin="$2"; "$bin" >/dev/null; echo '{"checks":2,"passed":2,"failed":[],"visible":1,"visible_passed":1}'`
+	s := Sample(context.Background(), cfg(t, answer{map[string]string{"main.go": good}}, visOracle), bench.ArmBaseline)
+	if s.Outcome != bench.Works || s.Visible == nil || *s.Visible != 1 || s.VisiblePassed == nil || *s.VisiblePassed != 1 {
+		t.Fatalf("%+v", s)
+	}
+	if s := Sample(context.Background(), cfg(t, answer{map[string]string{"main.go": good}}, fakeOracle), bench.ArmBaseline); s.Visible != nil {
+		t.Fatalf("an oracle without visible counts must leave them unset: %+v", s)
+	}
+}
+
+func TestFilterSynthIsSuffixIndependent(t *testing.T) {
+	m := map[string]string{
+		"channels.go":       "// sedum:begin x\npackage main\n",
+		"channels_synth.go": "// graft:synth:begin {}\npackage main\n// graft:synth:end {}\n",
+		"channels.gen.ts":   "// graft:synth:begin {}\nexport {}\n// graft:synth:end {}\n",
+	}
+	got := filterSynth(m)
+	if len(got) != 2 || got["channels.go"] != "" {
+		t.Fatalf("%v", got)
 	}
 }
