@@ -1,0 +1,9 @@
+{
+  "name": "freeq-lite-ts-gates",
+  "private": true,
+  "type": "module",
+  "description": "Gates for freeq-lite-ts. They use the TypeScript compiler API to read the generated code; run `npm ci` here once.",
+  "devDependencies": {
+    "typescript": "5.9.3"
+  }
+}

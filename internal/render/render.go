@@ -317,6 +317,10 @@ type execSedum struct{ bin string }
 // Exec returns a Sedum backed by the binary at bin (no shell).
 func Exec(bin string) Sedum { return execSedum{bin: bin} }
 
+// Bin is the path of the sedum binary, so the convergence contract can be run
+// with the same one.
+func (e execSedum) Bin() string { return e.bin }
+
 func (e execSedum) run(ctx context.Context, dir string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, e.bin, args...)
 	cmd.Dir = dir

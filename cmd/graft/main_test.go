@@ -78,10 +78,11 @@ func TestRunLanguageProfileRefusals(t *testing.T) {
 "gates":[{"label":"g","argv":["true"],"kind":"static_analysis"}],"language":`+lang+`}`), 0o644)
 		return p
 	}
+	// --render is no longer Go-only: the generator package's convergence
+	// contract carries the language (M10b), so only profile errors are refused.
 	cases := []struct{ lang, flag, want string }{
 		{`{"ext":".py"}`, "", "name, ext, fence, comment and run are required"},
 		{`{"name":"python","ext":".py","fence":"python","comment":"#","run":["python3","main.py"],"Ext":".x"}`, "", "unknown key"},
-		{`{"name":"python","ext":".py","fence":"python","comment":"#","run":["python3","main.py"]}`, "--render", "--render supports only Go"},
 	}
 	for _, c := range cases {
 		args := []string{"run", "--config", write(c.lang), "--spec", spec, "--repo", dir + "/r", "--root", dir + "/a", "--accept"}

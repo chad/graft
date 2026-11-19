@@ -1,0 +1,89 @@
+{
+  "module": "freeqlite",
+  "tier": "low",
+  "attempts": 3,
+  "conventions": "conventions.md",
+  "language": {
+    "name": "typescript",
+    "ext": ".ts",
+    "fence": "ts",
+    "comment": "//",
+    "preamble": "a complete ES module (imports first, with explicit .ts extensions); never write main.ts",
+    "bootstrap": {
+      "package.json": "{\"type\":\"module\"}\n",
+      "main.ts": "// Entry point, written by graft and not generated.\n//\n// It imports running, then every other module in name order and calls its\n// init() (which registers that module's commands), then starts the server:\n//   node --experimental-strip-types main.ts -addr host:port\nimport * as fs from \"node:fs\";\nimport * as path from \"node:path\";\nimport { fileURLToPath } from \"node:url\";\n\nconst here = path.dirname(fileURLToPath(import.meta.url));\nconst running = await import(\"./running.ts\");\nconst names = fs\n  .readdirSync(here)\n  .filter((f) => f.endsWith(\".ts\") && !f.endsWith(\"_synth.ts\") && f !== \"main.ts\" && f !== \"running.ts\")\n  .sort();\nfor (const f of names) {\n  const m = await import(\"./\" + f);\n  if (typeof m.init === \"function\") {\n    try {\n      m.init();\n    } catch (e) {\n      // Under --render a module whose region is not converged yet still holds\n      // its placeholder; the server must start so the other regions can be\n      // checked. A real error is never swallowed.\n      if (!String(e).includes(\"graft: not converged\")) throw e;\n    }\n  }\n}\nrunning.main(process.argv.slice(2));\n"
+    },
+    "build": [],
+    "run": [
+      "node",
+      "--experimental-strip-types",
+      "--no-warnings",
+      "main.ts"
+    ]
+  },
+  "model": {
+    "argv": [
+      "claude",
+      "-p",
+      "--tools",
+      "",
+      "--strict-mcp-config",
+      "--model",
+      "sonnet"
+    ],
+    "timeout_sec": 600
+  },
+  "policy": {
+    "low": [
+      "static_analysis",
+      "eval"
+    ]
+  },
+  "gates": [
+    {
+      "label": "parse and import",
+      "argv": [
+        "node",
+        "./gates/check.mjs"
+      ],
+      "kind": "static_analysis",
+      "timeout_sec": 120
+    },
+    {
+      "label": "registry ownership",
+      "argv": [
+        "node",
+        "./gates/registry.mjs"
+      ],
+      "kind": "static_analysis",
+      "timeout_sec": 60
+    },
+    {
+      "label": "no dead functions",
+      "argv": [
+        "node",
+        "./gates/unused.mjs"
+      ],
+      "kind": "static_analysis",
+      "timeout_sec": 60
+    },
+    {
+      "label": "smoke (visible)",
+      "argv": [
+        "go",
+        "run",
+        "../freeq-lite/smoke/smoke.go",
+        "-ext",
+        ".ts",
+        "-cmd",
+        "[\"node\", \"--experimental-strip-types\", \"--no-warnings\", \"main.ts\"]"
+      ],
+      "kind": "eval",
+      "timeout_sec": 300
+    }
+  ],
+  "visible": [
+    "../freeq-lite/smoke/smoke.go"
+  ],
+  "skeleton": "skeleton.json"
+}

@@ -1,0 +1,10 @@
+{
+  "name": "freeq-lite-ts",
+  "spec": "../freeq-lite/spec/freeq-lite.md",
+  "intent": "Write a small chat server in TypeScript that speaks a subset of IRC, like a simplified freeq: nicknames, channels, channel and private messages, ping, and quit.",
+  "contract": "It is a TypeScript program for Node 24, run with `node --experimental-strip-types` (so no enums, namespaces or parameter properties), standard library only (node: modules). It is started as `node --experimental-strip-types main.ts -addr <host:port>` and must listen for TCP connections on that address; the server's name in replies is `freeq-lite`.",
+  "conventions": "conventions.md",
+  "config": "graft.json",
+  "oracle": "../freeq-lite/oracle",
+  "skeleton": "skeleton.json"
+}

@@ -1,0 +1,15 @@
+freeq-lite › Running (running.ts): attempt 1
+  applied (guarantee: checked)
+freeq-lite › Registration (registration.ts): attempt 1
+  applied (guarantee: checked)
+freeq-lite › Keepalive (keepalive.ts): attempt 1
+  applied (guarantee: checked)
+freeq-lite › Channels (channels.ts): attempt 1
+  applied (guarantee: checked)
+freeq-lite › Messages (messages.ts): attempt 1
+  applied (guarantee: checked)
+freeq-lite › Leaving (leaving.ts): attempt 1
+  applied (guarantee: checked)
+freeq-lite › Everything else (everything_else.ts): attempt 1
+  applied (guarantee: checked)
+7/7 regions applied (guarantee: checked)

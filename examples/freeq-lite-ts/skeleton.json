@@ -1,0 +1,180 @@
+{
+  "generator": "typescript",
+  "files": [
+    {
+      "path": "running.ts",
+      "section": "freeq-lite \u203a Running",
+      "imports": [
+        "node:net"
+      ],
+      "decls": [
+        {
+          "kind": "const",
+          "name": "serverName",
+          "code": "export const serverName = \"freeq-lite\";"
+        },
+        {
+          "kind": "type",
+          "name": "Message",
+          "code": "export type Message = { command: string; params: string[] };"
+        },
+        {
+          "kind": "type",
+          "name": "Channel",
+          "code": "export type Channel = { name: string; members: Map<string, Client> };"
+        },
+        {
+          "kind": "type",
+          "name": "Client",
+          "code": "export class Client {\n  nick = \"\";\n  user = \"\";\n  registered = false;\n  channels: Set<string> = new Set();\n  socket: net.Socket;\n  constructor(socket: net.Socket) {\n    this.socket = socket;\n  }\n}"
+        },
+        {
+          "kind": "type",
+          "name": "Server",
+          "code": "export class Server {\n  clients: Map<string, Client> = new Map();\n  channels: Map<string, Channel> = new Map();\n}"
+        },
+        {
+          "kind": "const",
+          "name": "handlers",
+          "code": "export const handlers: Map<string, (s: Server, c: Client, m: Message) => void> = new Map();"
+        },
+        {
+          "kind": "func",
+          "name": "main",
+          "code": "export function main(argv: string[]): void {\n  let addr = \":6667\";\n  const i = argv.indexOf(\"-addr\");\n  if (i >= 0 && i + 1 < argv.length) {\n    addr = argv[i + 1];\n  }\n  const cut = addr.lastIndexOf(\":\");\n  const host = addr.slice(0, cut) || undefined;\n  const port = Number(addr.slice(cut + 1));\n  const s = new Server();\n  net.createServer((sock) => Server_serve(s, sock)).listen(port, host);\n}"
+        }
+      ],
+      "stubs": [
+        {
+          "name": "serve",
+          "receiver_name": "s",
+          "receiver_type": "Server",
+          "params": [
+            {
+              "name": "sock",
+              "type": "net.Socket"
+            }
+          ],
+          "doc": "Server_serve runs one connection: it makes a Client for sock, buffers incoming data into lines (CRLF, or a bare LF), parses each into a Message, dispatches it through handlers by its upper-cased command, and calls Server_disconnect when the socket ends or errors. Never throw out of a socket event handler."
+        },
+        {
+          "name": "send",
+          "receiver_name": "c",
+          "receiver_type": "Client",
+          "params": [
+            {
+              "name": "line",
+              "type": "string"
+            }
+          ],
+          "doc": "Client_send writes one protocol line to c's socket. line carries no trailing CRLF and is already complete, including any leading ':'; Client_send only appends CRLF, and does nothing once the socket is closed."
+        },
+        {
+          "name": "reply",
+          "receiver_name": "s",
+          "receiver_type": "Server",
+          "params": [
+            {
+              "name": "c",
+              "type": "Client"
+            },
+            {
+              "name": "code",
+              "type": "string"
+            },
+            {
+              "name": "text",
+              "type": "string"
+            }
+          ],
+          "doc": "Server_reply sends c a line from the server itself, built in full: \":\" + serverName + \" \" + code + \" \" + target + \" :\" + text, where target is c.nick, or \"*\" before c has a nick."
+        },
+        {
+          "name": "prefix",
+          "receiver_name": "c",
+          "receiver_type": "Client",
+          "results": [
+            "string"
+          ],
+          "doc": "Client_prefix returns c's prefix, nick!user@freeq-lite, WITHOUT the leading ':'. Every sender of a prefixed line adds the ':' itself (\":\" + Client_prefix(c) + \" JOIN ...\"), including QUIT."
+        },
+        {
+          "name": "disconnect",
+          "receiver_name": "s",
+          "receiver_type": "Server",
+          "params": [
+            {
+              "name": "c",
+              "type": "Client"
+            },
+            {
+              "name": "reason",
+              "type": "string"
+            }
+          ],
+          "doc": "Server_disconnect removes c from the server and from every channel, tells the channel peers \":\" + Client_prefix(c) + \" QUIT :\" + reason (once each), then closes c's socket."
+        }
+      ]
+    },
+    {
+      "path": "registration.ts",
+      "section": "freeq-lite \u203a Registration",
+      "stubs": [
+        {
+          "name": "init",
+          "doc": "init registers this module's commands: handlers.set(\"CMD\", fn) for each, with handlers imported by that name from \"./running.ts\". It runs once at startup."
+        }
+      ]
+    },
+    {
+      "path": "keepalive.ts",
+      "section": "freeq-lite \u203a Keepalive",
+      "stubs": [
+        {
+          "name": "init",
+          "doc": "init registers this module's commands: handlers.set(\"CMD\", fn) for each, with handlers imported by that name from \"./running.ts\". It runs once at startup."
+        }
+      ]
+    },
+    {
+      "path": "channels.ts",
+      "section": "freeq-lite \u203a Channels",
+      "stubs": [
+        {
+          "name": "init",
+          "doc": "init registers this module's commands: handlers.set(\"CMD\", fn) for each, with handlers imported by that name from \"./running.ts\". It runs once at startup."
+        }
+      ]
+    },
+    {
+      "path": "messages.ts",
+      "section": "freeq-lite \u203a Messages",
+      "stubs": [
+        {
+          "name": "init",
+          "doc": "init registers this module's commands: handlers.set(\"CMD\", fn) for each, with handlers imported by that name from \"./running.ts\". It runs once at startup."
+        }
+      ]
+    },
+    {
+      "path": "leaving.ts",
+      "section": "freeq-lite \u203a Leaving",
+      "stubs": [
+        {
+          "name": "init",
+          "doc": "init registers this module's commands: handlers.set(\"CMD\", fn) for each, with handlers imported by that name from \"./running.ts\". It runs once at startup."
+        }
+      ]
+    },
+    {
+      "path": "everything_else.ts",
+      "section": "freeq-lite \u203a Everything else",
+      "stubs": [
+        {
+          "name": "init",
+          "doc": "init registers this module's commands: handlers.set(\"CMD\", fn) for each, with handlers imported by that name from \"./running.ts\". It runs once at startup."
+        }
+      ]
+    }
+  ]
+}

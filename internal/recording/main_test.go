@@ -10,7 +10,11 @@ import (
 
 // sedumVersion pins the sedum the recording tests run against, so the
 // recording format cannot drift underneath them.
-const sedumVersion = "v0.12.2"
+//
+// This is the sedum release that added `sedum convergence`
+// (livecodelife/sedum#68). Tests build exactly this tag, never a sedum already
+// on PATH.
+const sedumVersion = "v0.13.0"
 
 // TestMain provisions sedum in CI without a workflow change: when CI is set
 // and sedum is not on PATH, it installs the pinned release with `go install`
@@ -31,21 +35,28 @@ func provisionSedum() error {
 	if err != nil {
 		return err
 	}
-	if _, err := exec.LookPath("sedum"); err != nil {
-		bin := filepath.Join(tmp, "bin")
-		cmd := exec.Command("go", "install", "github.com/livecodelife/sedum/cmd/sedum@"+sedumVersion)
-		cmd.Env = append(os.Environ(), "GOBIN="+bin)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("go install sedum@%s: %v\n%s", sedumVersion, err, out)
-		}
-		os.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	// Always build exactly the pinned commit in CI: a sedum already on PATH may
+	// predate `sedum convergence`.
+	bin := filepath.Join(tmp, "bin")
+	cmd := exec.Command("go", "install", "github.com/livecodelife/sedum/cmd/sedum@"+sedumVersion)
+	cmd.Env = append(os.Environ(), "GOBIN="+bin, "GOPROXY=direct")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("go install sedum@%s: %v\n%s", sedumVersion, err, out)
+	}
+	os.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if out, err := exec.Command(filepath.Join(bin, "sedum"), "convergence", "--help").CombinedOutput(); err != nil {
+		return fmt.Errorf("the sedum built from %s has no `convergence` command: %v\n%s", sedumVersion, err, out)
 	}
 	if os.Getenv("SEDUM_GENERATORS") == "" {
 		src := filepath.Join(tmp, "sedum")
-		cmd := exec.Command("git", "clone", "--quiet", "--depth", "1", "--branch", sedumVersion,
-			"https://github.com/livecodelife/sedum", src)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("clone sedum %s for its generators: %v\n%s", sedumVersion, err, out)
+		for _, args := range [][]string{
+			{"init", "--quiet", src},
+			{"-C", src, "fetch", "--quiet", "--depth", "1", "https://github.com/livecodelife/sedum", sedumVersion},
+			{"-C", src, "checkout", "--quiet", "FETCH_HEAD"},
+		} {
+			if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+				return fmt.Errorf("fetch sedum %s for its generators: git %v: %v\n%s", sedumVersion, args, err, out)
+			}
 		}
 		os.Setenv("SEDUM_GENERATORS", filepath.Join(src, "generators"))
 	}

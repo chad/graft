@@ -258,12 +258,6 @@ func benchRun(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "graft: %v\n", err)
 		return 2
 	}
-	for _, a := range arms {
-		if a == bench.ArmGraftRender && profile.Name != "go" {
-			fmt.Fprintf(stderr, "graft: the graft-render arm supports only Go so far (language %q)\n", profile.Name)
-			return 2
-		}
-	}
 	// A non-default profile changes how the program is built and run, so it
 	// is part of the fixture; Go (absent) keeps existing fixtures unchanged.
 	langSrc := ""

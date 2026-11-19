@@ -145,7 +145,7 @@ func TestRunRenderFakeModel(t *testing.T) {
 		t.Fatal("no model calls")
 	}
 	for i, p := range m.prompts {
-		if !recording.IsSynthPath(m.paths[i]) {
+		if !recording.IsSynthPath(m.paths[i], "_synth") {
 			t.Fatalf("model asked for %s, not a synth file", m.paths[i])
 		}
 		if !strings.Contains(p, "Declares: the helpers you must implement") || !strings.Contains(p, "Body(") {
@@ -277,7 +277,7 @@ func synthFiles(t *testing.T, root string) map[string]string {
 	t.Helper()
 	out := map[string]string{}
 	for k, v := range snapshot(t, root) {
-		if recording.IsSynthPath(k) {
+		if recording.IsSynthPath(k, "_synth") {
 			out[k] = v
 		}
 	}
