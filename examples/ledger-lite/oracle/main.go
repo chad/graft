@@ -33,14 +33,19 @@ type failure struct{ msg string }
 
 func failf(format string, a ...any) { panic(failure{fmt.Sprintf(format, a...)}) }
 
-// srv is a client for one server under test.
-type srv struct{ base string }
+// srv is a client for one server under test. It remembers the accounts it
+// created, so every refusal can be checked to have changed nothing.
+type srv struct {
+	base     string
+	mu       sync.Mutex
+	accounts []string
+}
 
 var client = &http.Client{Timeout: 10 * time.Second}
 
 // do sends a request; body "" sends none. It returns status, decoded JSON
 // (nil if the body is not a JSON object) and the Content-Type.
-func (s srv) do(method, path, body string) (int, map[string]any, string) {
+func (s *srv) do(method, path, body string) (int, map[string]any, string) {
 	var rd io.Reader
 	if body != "" {
 		rd = strings.NewReader(body)
@@ -61,11 +66,18 @@ func (s srv) do(method, path, body string) (int, map[string]any, string) {
 	if dec.Decode(&m) != nil {
 		m = nil
 	}
+	if method == "POST" && path == "/accounts" && resp.StatusCode == 201 {
+		if id, ok := m["id"].(string); ok {
+			s.mu.Lock()
+			s.accounts = append(s.accounts, id)
+			s.mu.Unlock()
+		}
+	}
 	return resp.StatusCode, m, resp.Header.Get("Content-Type")
 }
 
 // want asserts a status (and, for errors, the error message).
-func (s srv) want(status int, method, path, body string) map[string]any {
+func (s *srv) want(status int, method, path, body string) map[string]any {
 	got, m, _ := s.do(method, path, body)
 	if got != status {
 		failf("%s %s %s: status %d, want %d (body %v)", method, path, body, got, status, m)
@@ -73,10 +85,31 @@ func (s srv) want(status int, method, path, body string) map[string]any {
 	return m
 }
 
-func (s srv) wantErr(status int, msg, method, path, body string) {
+// wantErr asserts a refusal, and that it changed nothing: every known
+// account's balance, held and frozen, and the journal. (Ids are probed by
+// nextIDs, since reading them takes a new transfer and hold.)
+func (s *srv) wantErr(status int, msg, method, path, body string) {
+	before := s.snapshot()
 	m := s.want(status, method, path, body)
 	if m == nil || m["error"] != msg {
 		failf("%s %s %s: body %v, want error %q", method, path, body, m, msg)
+	}
+	if after := s.snapshot(); after != before {
+		failf("refused %s %s %s changed state: %s → %s", method, path, body, before, after)
+	}
+}
+
+// nextIDs checks the next transfer and hold ids, by making one of each
+// between two fresh probe accounts. Call it last: it changes state.
+func (s *srv) nextIDs(transfer, hold string) {
+	s.open("zprobe-a")
+	s.open("zprobe-b")
+	s.deposit("zprobe-a", 10)
+	if m := s.want(201, "POST", "/transfers", `{"from":"zprobe-a","to":"zprobe-b","amount":1}`); m["id"] != transfer {
+		failf("next transfer id is %v, want %s: a refused or repeated request took an id", m["id"], transfer)
+	}
+	if m := s.want(201, "POST", "/accounts/zprobe-a/holds", amt(1)); m["id"] != hold {
+		failf("next hold id is %v, want %s: a refused request took an id", m["id"], hold)
 	}
 }
 
@@ -92,13 +125,13 @@ func num(m map[string]any, k string) int64 {
 	return i
 }
 
-func (s srv) open(id string)                   { s.want(201, "POST", "/accounts", `{"id":"`+id+`"}`) }
-func (s srv) deposit(id string, n int)         { s.want(200, "POST", "/accounts/"+id+"/deposit", amt(n)) }
-func (s srv) account(id string) map[string]any { return s.want(200, "GET", "/accounts/"+id, "") }
-func amt(n int) string                         { return fmt.Sprintf(`{"amount":%d}`, n) }
+func (s *srv) open(id string)                   { s.want(201, "POST", "/accounts", `{"id":"`+id+`"}`) }
+func (s *srv) deposit(id string, n int)         { s.want(200, "POST", "/accounts/"+id+"/deposit", amt(n)) }
+func (s *srv) account(id string) map[string]any { return s.want(200, "GET", "/accounts/"+id, "") }
+func amt(n int) string                          { return fmt.Sprintf(`{"amount":%d}`, n) }
 
 // expect checks an account's balance, held and available.
-func (s srv) expect(id string, balance, held int64) {
+func (s *srv) expect(id string, balance, held int64) {
 	a := s.account(id)
 	if num(a, "balance") != balance || num(a, "held") != held || num(a, "available") != balance-held {
 		failf("account %s: %v, want balance %d held %d available %d", id, a, balance, held, balance-held)
@@ -112,7 +145,7 @@ type entry struct {
 	Kind    string
 }
 
-func (s srv) journal(path string) []entry {
+func (s *srv) journal(path string) []entry {
 	m := s.want(200, "GET", path, "")
 	raw, ok := m["entries"].([]any)
 	if !ok {
@@ -131,10 +164,16 @@ func (s srv) journal(path string) []entry {
 	return out
 }
 
-func (s srv) journalLen() int { return len(s.journal("/journal")) }
+func (s *srv) journalLen() int { return len(s.journal("/journal")) }
 
-// snapshot is everything a refused request must leave unchanged.
-func (s srv) snapshot(ids ...string) string {
+// snapshot is everything a refused request must leave unchanged, over the
+// given accounts (default: every account this session created).
+func (s *srv) snapshot(ids ...string) string {
+	if len(ids) == 0 {
+		s.mu.Lock()
+		ids = append([]string(nil), s.accounts...)
+		s.mu.Unlock()
+	}
 	var b strings.Builder
 	for _, id := range ids {
 		a := s.account(id)
@@ -145,7 +184,7 @@ func (s srv) snapshot(ids ...string) string {
 }
 
 // sumsMatch checks every account's balance equals the sum of its deltas.
-func (s srv) sumsMatch(ids ...string) {
+func (s *srv) sumsMatch(ids ...string) {
 	sum := map[string]int64{}
 	for _, e := range s.journal("/journal") {
 		sum[e.Account] += e.Delta
@@ -160,36 +199,37 @@ func (s srv) sumsMatch(ids ...string) {
 type check struct {
 	name    string
 	visible bool // a smoke check exercises the same behaviour
-	run     func(s srv)
+	run     func(s *srv)
 }
 
 var checks = []check{
 	// --- Running ---
-	{"content_type_json_everywhere", false, func(s srv) {
+	{"content_type_json_everywhere", true, func(s *srv) {
 		for _, r := range [][3]string{{"POST", "/accounts", `{"id":"a"}`}, {"GET", "/accounts/a", ""}, {"GET", "/accounts/zz", ""}, {"GET", "/nope", ""}, {"GET", "/journal", ""}} {
 			if _, _, ct := s.do(r[0], r[1], r[2]); !strings.HasPrefix(ct, "application/json") {
 				failf("%s %s: Content-Type %q", r[0], r[1], ct)
 			}
 		}
 	}},
-	{"invalid_json_400", false, func(s srv) {
+	{"invalid_json_400", false, func(s *srv) {
 		s.wantErr(400, "invalid json", "POST", "/accounts", `nope`)
 		s.open("a")
 		s.wantErr(400, "invalid json", "POST", "/accounts/a/deposit", `{"amount":`)
 		s.wantErr(400, "invalid json", "POST", "/transfers", `[1,2`)
+		s.nextIDs("t1", "h1")
 	}},
-	{"unknown_path_404", true, func(s srv) {
+	{"unknown_path_404", true, func(s *srv) {
 		s.wantErr(404, "not found", "GET", "/nope", "")
 		s.wantErr(404, "not found", "GET", "/accounts/a/b/c", "")
 	}},
-	{"undefined_method_404", false, func(s srv) {
+	{"undefined_method_404", false, func(s *srv) {
 		s.open("a")
 		s.wantErr(404, "not found", "GET", "/transfers", "")
 		s.wantErr(404, "not found", "DELETE", "/accounts/a", "")
 		s.wantErr(404, "not found", "GET", "/accounts/a/deposit", "")
 		s.wantErr(404, "not found", "PUT", "/journal", "")
 	}},
-	{"concurrent_deposits_no_lost_updates", false, func(s srv) {
+	{"concurrent_deposits_no_lost_updates", false, func(s *srv) {
 		s.open("a")
 		parallel(50, func(int) { s.deposit("a", 1) })
 		s.expect("a", 50, 0)
@@ -203,7 +243,7 @@ var checks = []check{
 			}
 		}
 	}},
-	{"concurrent_transfers_conserve_money", false, func(s srv) {
+	{"concurrent_transfers_conserve_money", false, func(s *srv) {
 		s.open("a")
 		s.open("b")
 		s.deposit("a", 1000)
@@ -225,7 +265,7 @@ var checks = []check{
 	}},
 
 	// --- Accounts ---
-	{"create_account_view", true, func(s srv) {
+	{"create_account_view", true, func(s *srv) {
 		m := s.want(201, "POST", "/accounts", `{"id":"alice"}`)
 		if m["id"] != "alice" || num(m, "balance") != 0 || num(m, "held") != 0 || num(m, "available") != 0 || m["frozen"] != false {
 			failf("new account view %v", m)
@@ -234,20 +274,20 @@ var checks = []check{
 			failf("GET view %v", a)
 		}
 	}},
-	{"account_id_validation", false, func(s srv) {
+	{"account_id_validation", false, func(s *srv) {
 		for _, b := range []string{`{"id":""}`, `{"id":"` + strings.Repeat("a", 33) + `"}`, `{"id":"Bob"}`, `{"id":"a b"}`, `{"id":"a.b"}`, `{}`, `{"id":5}`} {
 			s.wantErr(400, "invalid id", "POST", "/accounts", b)
 		}
 		s.want(201, "POST", "/accounts", `{"id":"`+strings.Repeat("z", 32)+`"}`)
 		s.want(201, "POST", "/accounts", `{"id":"a_b-9"}`)
 	}},
-	{"duplicate_account_409", false, func(s srv) {
+	{"duplicate_account_409", false, func(s *srv) {
 		s.open("a")
 		s.deposit("a", 10)
 		s.wantErr(409, "account exists", "POST", "/accounts", `{"id":"a"}`)
 		s.expect("a", 10, 0)
 	}},
-	{"unknown_account_404_everywhere", false, func(s srv) {
+	{"unknown_account_404_everywhere", false, func(s *srv) {
 		s.open("a")
 		s.deposit("a", 100)
 		for _, r := range [][3]string{
@@ -262,8 +302,9 @@ var checks = []check{
 		if n := s.journalLen(); n != 1 {
 			failf("journal has %d entries; refused requests must not append", n)
 		}
+		s.nextIDs("t1", "h1")
 	}},
-	{"available_is_balance_minus_held", false, func(s srv) {
+	{"available_is_balance_minus_held", true, func(s *srv) {
 		s.open("a")
 		s.deposit("a", 100)
 		s.want(201, "POST", "/accounts/a/holds", amt(30))
@@ -271,7 +312,7 @@ var checks = []check{
 	}},
 
 	// --- Deposits and withdrawals ---
-	{"deposit_adds", true, func(s srv) {
+	{"deposit_adds", true, func(s *srv) {
 		s.open("a")
 		m := s.want(200, "POST", "/accounts/a/deposit", amt(250))
 		if num(m, "balance") != 250 || num(m, "available") != 250 {
@@ -280,7 +321,7 @@ var checks = []check{
 		s.deposit("a", 50)
 		s.expect("a", 300, 0)
 	}},
-	{"withdraw_subtracts", false, func(s srv) {
+	{"withdraw_subtracts", false, func(s *srv) {
 		s.open("a")
 		s.deposit("a", 100)
 		m := s.want(200, "POST", "/accounts/a/withdraw", amt(40))
@@ -289,7 +330,7 @@ var checks = []check{
 		}
 		s.expect("a", 60, 0)
 	}},
-	{"amount_validation", false, func(s srv) {
+	{"amount_validation", false, func(s *srv) {
 		s.open("a")
 		s.open("b")
 		s.deposit("a", 500)
@@ -302,8 +343,9 @@ var checks = []check{
 		s.expect("a", 500, 0)
 		s.want(200, "POST", "/accounts/a/deposit", amt(100000000))
 		s.expect("a", 100000500, 0)
+		s.nextIDs("t1", "h1")
 	}},
-	{"withdraw_respects_available", false, func(s srv) {
+	{"withdraw_respects_available", false, func(s *srv) {
 		s.open("a")
 		s.deposit("a", 100)
 		s.want(201, "POST", "/accounts/a/holds", amt(60))
@@ -312,7 +354,7 @@ var checks = []check{
 		s.want(200, "POST", "/accounts/a/withdraw", amt(40))
 		s.expect("a", 60, 60)
 	}},
-	{"withdraw_beyond_balance_409", true, func(s srv) {
+	{"withdraw_beyond_balance_409", true, func(s *srv) {
 		s.open("a")
 		s.deposit("a", 10)
 		s.wantErr(409, "insufficient funds", "POST", "/accounts/a/withdraw", amt(11))
@@ -320,7 +362,7 @@ var checks = []check{
 	}},
 
 	// --- Transfers ---
-	{"transfer_moves_money", true, func(s srv) {
+	{"transfer_moves_money", true, func(s *srv) {
 		s.open("a")
 		s.open("b")
 		s.deposit("a", 100)
@@ -331,7 +373,7 @@ var checks = []check{
 		s.expect("a", 70, 0)
 		s.expect("b", 30, 0)
 	}},
-	{"transfer_ids_skip_refusals", false, func(s srv) {
+	{"transfer_ids_skip_refusals", false, func(s *srv) {
 		s.open("a")
 		s.open("b")
 		s.deposit("a", 100)
@@ -343,13 +385,14 @@ var checks = []check{
 			failf("second successful transfer has id %v; refused transfers must not take an id", m["id"])
 		}
 	}},
-	{"same_account_400", false, func(s srv) {
+	{"same_account_400", false, func(s *srv) {
 		s.open("a")
 		s.deposit("a", 100)
 		s.wantErr(400, "same account", "POST", "/transfers", `{"from":"a","to":"a","amount":5}`)
 		s.expect("a", 100, 0)
+		s.nextIDs("t1", "h1")
 	}},
-	{"transfer_insufficient_changes_nothing", false, func(s srv) {
+	{"transfer_insufficient_changes_nothing", false, func(s *srv) {
 		s.open("a")
 		s.open("b")
 		s.deposit("a", 50)
@@ -359,7 +402,7 @@ var checks = []check{
 			failf("refused transfer changed state: %s → %s", before, after)
 		}
 	}},
-	{"transfer_respects_holds", false, func(s srv) {
+	{"transfer_respects_holds", false, func(s *srv) {
 		s.open("a")
 		s.open("b")
 		s.deposit("a", 100)
@@ -368,7 +411,7 @@ var checks = []check{
 		s.want(201, "POST", "/transfers", `{"from":"a","to":"b","amount":20}`)
 		s.expect("a", 80, 80)
 	}},
-	{"idempotent_key_replay", false, func(s srv) {
+	{"idempotent_key_replay", false, func(s *srv) {
 		s.open("a")
 		s.open("b")
 		s.deposit("a", 100)
@@ -386,7 +429,7 @@ var checks = []check{
 			failf("next transfer has id %v; a replay must not take an id", m["id"])
 		}
 	}},
-	{"key_reused_409", false, func(s srv) {
+	{"key_reused_409", false, func(s *srv) {
 		s.open("a")
 		s.open("b")
 		s.open("c")
@@ -398,8 +441,9 @@ var checks = []check{
 		if after := s.snapshot("a", "b", "c"); after != before {
 			failf("key reuse changed state: %s → %s", before, after)
 		}
+		s.nextIDs("t2", "h1")
 	}},
-	{"get_transfer", false, func(s srv) {
+	{"get_transfer", false, func(s *srv) {
 		s.open("a")
 		s.open("b")
 		s.deposit("a", 100)
@@ -413,7 +457,7 @@ var checks = []check{
 	}},
 
 	// --- Holds ---
-	{"hold_reserves", true, func(s srv) {
+	{"hold_reserves", true, func(s *srv) {
 		s.open("a")
 		s.deposit("a", 100)
 		m := s.want(201, "POST", "/accounts/a/holds", amt(40))
@@ -422,7 +466,7 @@ var checks = []check{
 		}
 		s.expect("a", 100, 40)
 	}},
-	{"hold_ids_skip_refusals", false, func(s srv) {
+	{"hold_ids_skip_refusals", false, func(s *srv) {
 		s.open("a")
 		s.deposit("a", 100)
 		s.want(201, "POST", "/accounts/a/holds", amt(10))
@@ -431,14 +475,15 @@ var checks = []check{
 			failf("second hold has id %v", m["id"])
 		}
 	}},
-	{"hold_insufficient_409", false, func(s srv) {
+	{"hold_insufficient_409", false, func(s *srv) {
 		s.open("a")
 		s.deposit("a", 100)
 		s.want(201, "POST", "/accounts/a/holds", amt(70))
 		s.wantErr(409, "insufficient funds", "POST", "/accounts/a/holds", amt(31))
 		s.expect("a", 100, 70)
+		s.nextIDs("t1", "h2")
 	}},
-	{"capture_takes_money", false, func(s srv) {
+	{"capture_takes_money", false, func(s *srv) {
 		s.open("a")
 		s.deposit("a", 100)
 		s.want(201, "POST", "/accounts/a/holds", amt(30))
@@ -452,7 +497,7 @@ var checks = []check{
 			failf("capture journal entry %+v", last)
 		}
 	}},
-	{"release_returns_reservation", false, func(s srv) {
+	{"release_returns_reservation", false, func(s *srv) {
 		s.open("a")
 		s.deposit("a", 100)
 		s.want(201, "POST", "/accounts/a/holds", amt(30))
@@ -465,7 +510,7 @@ var checks = []check{
 			failf("journal has %d entries; a release must not append", n)
 		}
 	}},
-	{"hold_settles_once", false, func(s srv) {
+	{"hold_settles_once", false, func(s *srv) {
 		s.open("a")
 		s.deposit("a", 100)
 		s.want(201, "POST", "/accounts/a/holds", amt(10))
@@ -478,7 +523,7 @@ var checks = []check{
 		s.wantErr(404, "no such hold", "POST", "/holds/h9/release", "")
 		s.expect("a", 90, 0)
 	}},
-	{"holds_are_independent", false, func(s srv) {
+	{"holds_are_independent", false, func(s *srv) {
 		s.open("a")
 		s.open("b")
 		s.deposit("a", 100)
@@ -492,7 +537,7 @@ var checks = []check{
 	}},
 
 	// --- Journal ---
-	{"journal_records_each_kind", true, func(s srv) {
+	{"journal_records_each_kind", true, func(s *srv) {
 		s.open("a")
 		s.open("b")
 		s.deposit("a", 100)
@@ -505,7 +550,7 @@ var checks = []check{
 			failf("journal %+v, want %+v", got, want)
 		}
 	}},
-	{"journal_skips_non_changes", false, func(s srv) {
+	{"journal_skips_non_changes", false, func(s *srv) {
 		s.open("a")
 		s.open("b")
 		s.deposit("a", 100)
@@ -520,7 +565,7 @@ var checks = []check{
 			failf("journal has %d entries; only the deposit changed a balance", n)
 		}
 	}},
-	{"balance_equals_journal_sum", false, func(s srv) {
+	{"balance_equals_journal_sum", false, func(s *srv) {
 		for _, id := range []string{"a", "b", "c"} {
 			s.open(id)
 			s.deposit(id, 500)
@@ -536,7 +581,7 @@ var checks = []check{
 		}
 		s.sumsMatch("a", "b", "c")
 	}},
-	{"account_journal_is_filtered", false, func(s srv) {
+	{"account_journal_is_filtered", true, func(s *srv) {
 		s.open("a")
 		s.open("b")
 		s.deposit("a", 100)
@@ -547,7 +592,7 @@ var checks = []check{
 			failf("b's journal %+v, want %+v (global seq numbers, only b's entries)", got, want)
 		}
 	}},
-	{"empty_journal_is_a_list", false, func(s srv) {
+	{"empty_journal_is_a_list", false, func(s *srv) {
 		if got := s.journal("/journal"); len(got) != 0 {
 			failf("fresh journal %v", got)
 		}
@@ -558,7 +603,7 @@ var checks = []check{
 	}},
 
 	// --- Freezing ---
-	{"freeze_and_unfreeze_view", true, func(s srv) {
+	{"freeze_and_unfreeze_view", true, func(s *srv) {
 		s.open("a")
 		if m := s.want(200, "POST", "/accounts/a/freeze", ""); m["frozen"] != true {
 			failf("freeze answered %v", m)
@@ -570,14 +615,15 @@ var checks = []check{
 			failf("unfreeze answered %v", m)
 		}
 	}},
-	{"frozen_refuses_withdraw", true, func(s srv) {
+	{"frozen_refuses_withdraw", true, func(s *srv) {
 		s.open("a")
 		s.deposit("a", 100)
 		s.want(200, "POST", "/accounts/a/freeze", "")
 		s.wantErr(423, "account frozen", "POST", "/accounts/a/withdraw", amt(10))
 		s.expect("a", 100, 0)
+		s.nextIDs("t1", "h1")
 	}},
-	{"frozen_refuses_transfer_out_and_holds", false, func(s srv) {
+	{"frozen_refuses_transfer_out_and_holds", false, func(s *srv) {
 		s.open("a")
 		s.open("b")
 		s.deposit("a", 100)
@@ -596,7 +642,7 @@ var checks = []check{
 			failf("first successful hold has id %v; refused ones must not take ids", m["id"])
 		}
 	}},
-	{"frozen_still_receives", false, func(s srv) {
+	{"frozen_still_receives", false, func(s *srv) {
 		s.open("a")
 		s.open("b")
 		s.deposit("b", 100)
@@ -606,7 +652,7 @@ var checks = []check{
 		s.expect("a", 25, 0)
 		s.sumsMatch("a", "b")
 	}},
-	{"frozen_settles_existing_holds", false, func(s srv) {
+	{"frozen_settles_existing_holds", false, func(s *srv) {
 		s.open("a")
 		s.deposit("a", 100)
 		s.want(201, "POST", "/accounts/a/holds", amt(10))
@@ -616,7 +662,7 @@ var checks = []check{
 		s.want(200, "POST", "/holds/h2/release", "")
 		s.expect("a", 90, 0)
 	}},
-	{"unfreeze_restores_debits", false, func(s srv) {
+	{"unfreeze_restores_debits", false, func(s *srv) {
 		s.open("a")
 		s.deposit("a", 100)
 		s.want(200, "POST", "/accounts/a/freeze", "")
@@ -664,7 +710,7 @@ func runCheck(c check, addr string) (err error) {
 			err = fmt.Errorf("panic: %v", r)
 		}
 	}()
-	c.run(srv{base: "http://" + addr})
+	c.run(&srv{base: "http://" + addr})
 	return nil
 }
 

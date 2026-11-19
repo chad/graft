@@ -39,6 +39,13 @@ var mutants = []mutant{
 	{"duplicate_overwrites", "\tif _, ok := l.accounts[id]; ok {", "\tif false {", "duplicate_account_409"},
 	{"hold_settles_twice", "\tdelete(l.holds, id)\n", "", "hold_settles_once"},
 	{"refused_withdraw_journaled", "\tif err := l.debitable(a, n); err != nil {\n\t\treturn nil, err\n\t}\n\tl.post(a, -n, \"withdraw\")", "\tif err := l.debitable(a, n); err != nil {\n\t\tl.journal = append(l.journal, entry{Seq: len(l.journal) + 1, Account: a.ID, Kind: \"withdraw\"})\n\t\treturn nil, err\n\t}\n\tl.post(a, -n, \"withdraw\")", "journal_skips_non_changes"},
+	// Escaped the first version of the oracle (review on #29): refusals that
+	// leave a trace. wantErr now checks every refusal changed nothing, and
+	// nextIDs probes the id counters.
+	{"frozen_refusal_journaled", "\tif a.Frozen {\n\t\treturn errFrozen", "\tif a.Frozen {\n\t\tl.journal = append(l.journal, entry{Seq: len(l.journal) + 1, Account: a.ID, Kind: \"withdraw\"})\n\t\treturn errFrozen", "frozen_refuses_withdraw"},
+	{"invalid_amount_journaled", "\tn, err := amount(m)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tif op == \"deposit\" {", "\tn, err := amount(m)\n\tif err != nil {\n\t\tl.journal = append(l.journal, entry{Seq: len(l.journal) + 1, Account: a.ID, Kind: op})\n\t\treturn nil, err\n\t}\n\tif op == \"deposit\" {", "amount_validation"},
+	{"invalid_amount_transfer_takes_id", "\tn, err := amount(m)\n\tif err != nil {\n\t\treturn 0, nil, err\n\t}", "\tn, err := amount(m)\n\tif err != nil {\n\t\tl.nextT++\n\t\treturn 0, nil, err\n\t}", "amount_validation"},
+	{"key_reused_takes_id", "\t\t\treturn 0, nil, apiErr{409, \"key reused\"}", "\t\t\tl.nextT++\n\t\t\treturn 0, nil, apiErr{409, \"key reused\"}", "key_reused_409"},
 }
 
 func TestMutantsAreCaught(t *testing.T) {

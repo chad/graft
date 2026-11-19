@@ -3,7 +3,7 @@
 // generates the server. It is written from spec/ledger-lite.md alone and is
 // deliberately small; it is never a score. The held-out oracle (../oracle)
 // is the only measure, and it tags the checks whose behaviour a smoke check
-// also exercises (oracle -list; 9 of 42), so the overlap is stated.
+// also exercises (oracle -list; 12 of 42), so the overlap is stated.
 //
 // It runs in the generated tree: it builds a copy holding only the sections
 // generated so far (a section still holding graft's "not converged"

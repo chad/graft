@@ -143,7 +143,7 @@
       "int64",
       "bool"
      ],
-     "doc": "Amount validates a decoded JSON value (from a map[string]any) as an amount: an integer from 1 to 100000000. A non-number, a fraction, a missing value or one out of range is not valid.",
+     "doc": "Amount validates a decoded JSON value (from a map[string]any) as an amount: the spec's rule is an integer from 1 to 100000000.",
      "receiver_name": "l",
      "receiver_type": "*Ledger"
     },
