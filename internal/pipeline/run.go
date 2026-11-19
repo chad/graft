@@ -52,6 +52,8 @@ type Config struct {
 	// the skeleton names none).
 	Contract contract.Contract
 	Samples  int // model answers drawn per attempt; 0 or 1 means one (today's behaviour)
+
+	skelHash string // render mode: the skeleton hash pinned into every evidence entry
 }
 
 // Outcome is what happened to one record.
@@ -62,6 +64,15 @@ type Outcome struct {
 	LastFailure       string
 	Samples           int // answers drawn per attempt (1 unless best-of-N)
 	Calls             int // model calls actually made for this record
+	// Reason says why the region was looked at again, in render mode: "" when
+	// it was up to date, "skeleton_hash" when only the skeleton moved (the body
+	// was re-verified under the gates with no model call), "gen_hash" when the
+	// record's own content (its shape included) moved or its version did, and
+	// "new" when the region had no body yet.
+	Reason string
+	// Regenerated is true when the existing body failed its re-check and the
+	// model was asked for a new one.
+	Regenerated bool
 }
 
 // Run converges one region per accepted record, in spec order. A record whose
@@ -89,7 +100,7 @@ func Run(ctx context.Context, cfg Config, acc []Accepted) ([]Outcome, error) {
 	var byRec map[string]recording.Region
 	var pending map[string]bool // regions still holding their seeded placeholder
 	if cfg.Skeleton != nil {
-		if byRec, pending, err = cfg.renderTree(ctx, store, acc); err != nil {
+		if byRec, pending, cfg.skelHash, err = cfg.renderTree(ctx, store, acc); err != nil {
 			return nil, err
 		}
 	}
@@ -121,7 +132,18 @@ func Run(ctx context.Context, cfg Config, acc []Accepted) ([]Outcome, error) {
 				return out, fmt.Errorf("%s: %w: %s was edited by hand; keep the edit by revising the record, or restore the region", a.Entry.Section, converge.ErrHandEdited, r.Path)
 			}
 		}
-		if body, ok := current(store, regions, a, file, cfg.Root); ok && !pending[a.ID] {
+		body, ok, why := current(store, regions, a, file, cfg.Root)
+		if ok && !pending[a.ID] && cfg.skelHash != "" && !cfg.skeletonCurrent(cfg.Log, a.ID, store, body) {
+			why = "skeleton_hash" // owner unchanged, but the skeleton it was verified against moved
+		} else if pending[a.ID] {
+			why = "new"
+		} else if ok {
+			why = ""
+		}
+		if cfg.Skeleton != nil {
+			o.Reason = why
+		}
+		if ok && !pending[a.ID] {
 			cand, err := cfg.newCandidate(store, a.ID, file, body)
 			if err != nil {
 				return out, err
@@ -132,10 +154,15 @@ func Run(ctx context.Context, cfg Config, acc []Accepted) ([]Outcome, error) {
 			}
 			if d.Applied {
 				o.Applied = true
-				cfg.say("%s (%s): up to date, re-verified under the current gates\n", a.Entry.Section, file)
+				if why == "skeleton_hash" {
+					cfg.say("%s (%s): skeleton changed, re-verified under the current gates (no model call)\n", a.Entry.Section, file)
+				} else {
+					cfg.say("%s (%s): up to date, re-verified under the current gates\n", a.Entry.Section, file)
+				}
 				out = append(out, o)
 				continue
 			}
+			o.Regenerated = true
 			feedback = "The existing file no longer passes these checks; fix it:\n" + failing(d)
 			cfg.say("%s (%s): current body fails the current gates; regenerating\n", a.Entry.Section, file)
 		}
@@ -223,21 +250,49 @@ func failing(d converge.Decision) string {
 
 // current reports whether the record's region already holds an unedited body
 // written for the record's current version and gen_hash, and returns that body.
-func current(store records.Store, regions []converge.Region, a Accepted, file, root string) (string, bool) {
+//
+// When it does not, why names the first thing that moved: "gen_hash" when the
+// region was written for another gen_hash, "version" for another version.
+func current(store records.Store, regions []converge.Region, a Accepted, file, root string) (string, bool, string) {
 	p, err := store.Current(a.ID)
 	if err != nil {
-		return "", false
+		return "", false, ""
 	}
 	for _, r := range regions {
 		if r.Path == file && r.Owner.Record == a.ID {
-			if r.Owner.Version != p.Version || r.Owner.Gen != p.GenHash || r.Edited() {
-				return "", false
+			switch {
+			case r.Owner.Gen != p.GenHash:
+				return "", false, "gen_hash"
+			case r.Owner.Version != p.Version:
+				return "", false, "version"
+			case r.Edited():
+				return "", false, ""
 			}
 			body, err := converge.RegionBody(root, r)
-			return body, err == nil
+			return body, err == nil, ""
 		}
 	}
-	return "", false
+	return "", false, ""
+}
+
+// skeletonCurrent reports whether the region body was last verified against
+// the current skeleton: the evidence log holds an entry for this record, its
+// current gen_hash and this exact body that pins the current skeleton hash.
+// Evidence from before skeletons were pinned has none, so it is not current;
+// the body is re-verified under the gates (no model call) and fresh evidence
+// pins the skeleton.
+func (cfg Config) skeletonCurrent(log *evidence.Log, id string, store records.Store, body string) bool {
+	p, err := store.Current(id)
+	if err != nil || log == nil {
+		return false
+	}
+	rh := converge.RegionHash(body)
+	for _, e := range log.All() {
+		if e.Pin.RecordID == id && e.Pin.GenHash == p.GenHash && e.Pin.RegionHash == rh && e.Pin.SkeletonHash == cfg.skelHash {
+			return true
+		}
+	}
+	return false
 }
 
 // fenceFor names a visible file's code fence from its extension (the checks
@@ -304,6 +359,7 @@ func (cfg Config) displayName() string {
 func (cfg Config) newCandidate(store records.Store, id, file, code string) (converge.Candidate, error) {
 	cand, err := converge.NewCandidate(store, id, file, cfg.Tier, code)
 	cand.Comment = cfg.lang().Comment
+	cand.SkeletonHash = cfg.skelHash
 	return cand, err
 }
 

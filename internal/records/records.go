@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -43,6 +44,10 @@ type Pin struct {
 	Type          string
 	Status        string
 	AffectedScope []string
+	// Shape is the skeleton the record owns: one entry per file, each a tree
+	// of strings, lists and maps (provenance record.Record.Shape). It drives
+	// generation, so it is part of GenHash; planning renders from it.
+	Shape []any
 }
 
 // Store reads records from a provenance repo on disk
@@ -109,7 +114,7 @@ func (d *dirStore) currentGen(id string) (Pin, *record.Record, error) {
 		v = 1 // a v1 record reads as version 1
 	}
 	return Pin{RecordID: r.ID, Version: v, GenHash: r.GenHash(), Type: string(r.Type),
-		Status: string(r.Status), AffectedScope: append([]string(nil), r.AffectedScope...)}, r, nil
+		Status: string(r.Status), AffectedScope: append([]string(nil), r.AffectedScope...), Shape: r.Shape}, r, nil
 }
 
 // ErrSpecPath means an associated spec path is absolute or escapes the repo.
@@ -235,4 +240,78 @@ func Stale(s Store, p Pin) (bool, error) {
 		return false, err
 	}
 	return cur.GenHash != p.GenHash, nil
+}
+
+// ShapeStore is a Store that can write a record's shape. It is a separate
+// interface so read-only Store implementations stay as they are.
+type ShapeStore interface {
+	Store
+	// SetShape makes shape the record's shape. When it already is (compared
+	// canonically) nothing is written and changed is false; otherwise the
+	// change is a new record version through provenance's Commit (the one
+	// sanctioned revise path), with the given reason and author.
+	SetShape(id string, shape []any, reason, author string) (changed bool, err error)
+}
+
+func (d *dirStore) SetShape(id string, shape []any, reason, author string) (bool, error) {
+	if !validID(id) {
+		return false, fmt.Errorf("%w: %q", ErrNotFound, id)
+	}
+	r, doc, err := d.fs.Load(id)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return false, fmt.Errorf("%w: %s", ErrNotFound, id)
+		}
+		return false, fmt.Errorf("records: load %s: %w", id, err)
+	}
+	if record.Canonical(anyList(r.Shape)) == record.Canonical(anyList(shape)) {
+		return false, nil
+	}
+	if reason == "" {
+		return false, errors.New("records: a shape change needs a reason")
+	}
+	r.Shape = shape
+	if _, err := record.Commit(d.fs, r, doc, record.Bump{Reason: reason, Author: author}); err != nil {
+		return false, fmt.Errorf("records: revise %s: %w", id, err)
+	}
+	return true, nil
+}
+
+func anyList(v []any) any {
+	if v == nil {
+		return []any{}
+	}
+	return v
+}
+
+// SkeletonHash is the hash of the whole skeleton the planned records carry:
+// the generator's name and every file entry of every shape, sorted by path.
+// It covers content only, never record ids or versions, so a version bump
+// that changes no shape does not move it. Records without a shape contribute
+// nothing. It is pinned in every region's evidence in render mode (SPEC §7),
+// because a region's code depends on declarations anywhere in the layout.
+func SkeletonHash(generator string, pins []Pin) (string, error) {
+	type entry struct {
+		path string
+		v    any
+	}
+	var es []entry
+	for _, p := range pins {
+		for _, e := range p.Shape {
+			m, ok := e.(map[string]any)
+			if !ok {
+				return "", fmt.Errorf("records: %s: shape entry is not a mapping", p.RecordID)
+			}
+			path, _ := m["path"].(string)
+			es = append(es, entry{path, e})
+		}
+	}
+	sort.SliceStable(es, func(i, j int) bool { return es[i].path < es[j].path })
+	files := make([]any, len(es))
+	for i, e := range es {
+		files[i] = e.v
+	}
+	c := record.Canonical(map[string]any{"generator": generator, "files": files})
+	sum := sha256.Sum256([]byte(c))
+	return "sha256:" + hex.EncodeToString(sum[:]), nil
 }

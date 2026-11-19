@@ -21,9 +21,17 @@ import (
 // renders it with sedum into cfg.Root, and seeds each region's synth file
 // if it does not exist yet (a converged body is never clobbered). It returns
 // the regions by owning record id. It makes no model call.
-func (cfg Config) renderTree(ctx context.Context, store records.Store, acc []Accepted) (map[string]recording.Region, map[string]bool, error) {
+//
+// The skeleton lives in the records: cfg.Skeleton is only an import. Each file
+// entry is written into the shape of the imprint that owns it (a new record
+// version, only when it differs), and the tree is planned from the records.
+// The returned string is the skeleton hash every region's evidence pins.
+func (cfg Config) renderTree(ctx context.Context, store records.Store, acc []Accepted) (map[string]recording.Region, map[string]bool, string, error) {
+	nilRet := func(err error) (map[string]recording.Region, map[string]bool, string, error) {
+		return nil, nil, "", err
+	}
 	if cfg.Sedum == nil || cfg.Generators == "" {
-		return nil, nil, errors.New("pipeline: --render needs sedum and its generators")
+		return nilRet(errors.New("pipeline: --render needs sedum and its generators"))
 	}
 	if v, err := cfg.Sedum.Version(ctx); err == nil {
 		cfg.say("sedum %s\n", v)
@@ -32,11 +40,11 @@ func (cfg Config) renderTree(ctx context.Context, store records.Store, acc []Acc
 	if in.Contract == nil {
 		b, ok := cfg.Sedum.(interface{ Bin() string })
 		if !ok {
-			return nil, nil, errors.New("pipeline: --render: no convergence contract (Config.Contract) and the sedum is not a binary")
+			return nilRet(errors.New("pipeline: --render: no convergence contract (Config.Contract) and the sedum is not a binary"))
 		}
 		gens, err := filepath.Abs(cfg.Generators)
 		if err != nil {
-			return nil, nil, err
+			return nilRet(err)
 		}
 		gen := cfg.Skeleton.Generator
 		if gen == "" {
@@ -44,68 +52,94 @@ func (cfg Config) renderTree(ctx context.Context, store records.Store, acc []Acc
 		}
 		in.Contract = contract.Exec{Bin: b.Bin(), Generators: gens, Package: gen, Ctx: ctx}
 	}
-	for _, a := range acc {
-		p, err := store.Current(a.ID)
-		if err != nil {
-			return nil, nil, err
+	pins, err := cfg.currentPins(store, acc)
+	if err != nil {
+		return nilRet(err)
+	}
+	setRecs := func() {
+		in.Records = in.Records[:0]
+		for i, a := range acc {
+			in.Records = append(in.Records, recording.Rec{Pin: pins[i], Section: a.Entry.Section})
 		}
-		in.Records = append(in.Records, recording.Rec{Pin: p, Section: a.Entry.Section})
+	}
+	setRecs()
+	// Check the imported skeleton as a whole before any record is revised.
+	if _, err := recording.Plan(in); err != nil {
+		return nilRet(fmt.Errorf("pipeline: --render: %w", err))
+	}
+	if err := cfg.importSkeleton(store, acc); err != nil {
+		return nilRet(err)
+	}
+	if pins, err = cfg.currentPins(store, acc); err != nil {
+		return nilRet(err)
+	}
+	if in.Skeleton, err = recording.SkeletonOf(cfg.Skeleton.Generator, pins); err != nil {
+		return nilRet(err)
+	}
+	setRecs()
+	gen := cfg.Skeleton.Generator
+	if gen == "" {
+		gen = cfg.lang().Name
+	}
+	skelHash, err := records.SkeletonHash(gen, pins)
+	if err != nil {
+		return nilRet(err)
 	}
 	planned, err := recording.Plan(in)
 	if err != nil {
-		return nil, nil, fmt.Errorf("pipeline: --render: %w", err)
+		return nilRet(fmt.Errorf("pipeline: --render: %w", err))
 	}
 	var buf bytes.Buffer
 	if err := recording.Write(&buf, planned.Recording); err != nil {
-		return nil, nil, err
+		return nilRet(err)
 	}
 	tmp, err := os.MkdirTemp("", "graft-render-*")
 	if err != nil {
-		return nil, nil, err
+		return nilRet(err)
 	}
 	defer os.RemoveAll(tmp)
 	recPath := filepath.Join(tmp, "recording.json")
 	if err := os.WriteFile(recPath, buf.Bytes(), 0o644); err != nil {
-		return nil, nil, err
+		return nilRet(err)
 	}
 	cleanup, err := cfg.sedumEnv()
 	if err != nil {
-		return nil, nil, err
+		return nilRet(err)
 	}
 	defer cleanup()
 	if err := render.Render(ctx, cfg.Sedum, cfg.Root, recPath); err != nil {
 		if errors.Is(err, render.ErrHandEdited) {
-			return nil, nil, fmt.Errorf("pipeline: refusing to render before any model call: %w (restore the file, or revise the record)", err)
+			return nilRet(fmt.Errorf("pipeline: refusing to render before any model call: %w (restore the file, or revise the record)", err))
 		}
-		return nil, nil, fmt.Errorf("pipeline: --render: %w", err)
+		return nilRet(fmt.Errorf("pipeline: --render: %w", err))
 	}
 	if err := cfg.Sedum.GrowCheck(ctx, cfg.Root); err != nil {
-		return nil, nil, fmt.Errorf("pipeline: --render: grow --check after render: %w", err)
+		return nilRet(fmt.Errorf("pipeline: --render: grow --check after render: %w", err))
 	}
 	by := map[string]recording.Region{}
 	for _, r := range planned.Regions {
 		if !recording.IsSynthPath(r.Path, planned.SynthSuffix) {
-			return nil, nil, fmt.Errorf("pipeline: --render: region path %s is not a synth file (suffix %q)", r.Path, planned.SynthSuffix)
+			return nilRet(fmt.Errorf("pipeline: --render: region path %s is not a synth file (suffix %q)", r.Path, planned.SynthSuffix))
 		}
 		by[r.Owner.RecordID] = r
 		p := filepath.Join(cfg.Root, filepath.FromSlash(r.Path))
 		if _, err := os.Stat(p); err == nil {
 			continue
 		} else if !errors.Is(err, os.ErrNotExist) {
-			return nil, nil, err
+			return nilRet(err)
 		}
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-			return nil, nil, err
+			return nilRet(err)
 		}
 		if err := os.WriteFile(p, r.Seed, 0o644); err != nil {
-			return nil, nil, err
+			return nilRet(err)
 		}
 	}
 	// Pending is decided from the region body, never from the whole file: a
 	// seed written under another tier or pin differs in its marker only.
 	regions, err := converge.ReadRegions(cfg.Root)
 	if err != nil {
-		return nil, nil, err
+		return nilRet(err)
 	}
 	pending := map[string]bool{}
 	for _, r := range planned.Regions {
@@ -114,13 +148,13 @@ func (cfg Config) renderTree(ctx context.Context, store records.Store, acc []Acc
 			if g.Path == r.Path && g.Owner.Record == r.Owner.RecordID {
 				body, err := converge.RegionBody(cfg.Root, g)
 				if err != nil {
-					return nil, nil, err
+					return nilRet(err)
 				}
 				pending[r.Owner.RecordID] = hasPlaceholder(body)
 			}
 		}
 	}
-	return by, pending, nil
+	return by, pending, skelHash, nil
 }
 
 // hasPlaceholder reports whether a body still holds a seeded stub.
@@ -185,4 +219,66 @@ func (cfg Config) renderPrompt(a Accepted, r recording.Region, feedback string) 
 	stem := strings.TrimSuffix(filepath.Base(r.Path), filepath.Ext(r.Path))
 	fmt.Fprintf(&b, "\nAnswer with the complete contents of `%s` in a single ```%s block, %s, then the imports you need, the helpers above with their bodies, and any private helpers (named with the prefix `%s`). Do not write the skeleton's types or stubs, and do not include any line containing \"graft:synth\" or \"sedum:\".\n", r.Path, cfg.lang().Fence, cfg.lang().Preamble, strings.TrimSuffix(stem, r.SynthSuffix))
 	return b.String(), nil
+}
+
+// currentPins reads the current pin of every accepted record, in order.
+func (cfg Config) currentPins(store records.Store, acc []Accepted) ([]records.Pin, error) {
+	pins := make([]records.Pin, len(acc))
+	for i, a := range acc {
+		p, err := store.Current(a.ID)
+		if err != nil {
+			return nil, err
+		}
+		pins[i] = p
+	}
+	return pins, nil
+}
+
+// importSkeleton writes cfg.Skeleton into the records: each file entry becomes
+// part of the shape of the imprint that owns it, and a record the skeleton
+// no longer mentions loses its shape. A record whose shape is already what the
+// skeleton says is not touched, so importing the same skeleton again is a
+// no-op and bumps no version.
+func (cfg Config) importSkeleton(store records.Store, acc []Accepted) error {
+	ws, ok := store.(records.ShapeStore)
+	if !ok {
+		return errors.New("pipeline: --render: the record store cannot write shapes")
+	}
+	bySection := map[string]string{}
+	planned := map[string]bool{}
+	for _, a := range acc {
+		bySection[a.Entry.Section] = a.ID
+		planned[a.ID] = true
+	}
+	shapes, err := recording.ShapesOf(*cfg.Skeleton, func(f recording.File) (string, error) {
+		switch {
+		case f.Record != "" && f.Section != "":
+			return "", fmt.Errorf("pipeline: --render: file %s sets both record and section", f.Path)
+		case f.Record != "":
+			if !planned[f.Record] {
+				return "", fmt.Errorf("pipeline: --render: file %s names record %q, which is not planned", f.Path, f.Record)
+			}
+			return f.Record, nil
+		case f.Section != "":
+			id, ok := bySection[f.Section]
+			if !ok {
+				return "", fmt.Errorf("pipeline: --render: file %s names section %q, which no record covers", f.Path, f.Section)
+			}
+			return id, nil
+		}
+		return "", fmt.Errorf("pipeline: --render: file %s names neither a record nor a section", f.Path)
+	})
+	if err != nil {
+		return err
+	}
+	for _, a := range acc {
+		changed, err := ws.SetShape(a.ID, shapes[a.ID], "import skeleton", "graft")
+		if err != nil {
+			return fmt.Errorf("pipeline: --render: %w", err)
+		}
+		if changed {
+			cfg.say("%s: shape imported (%s now at a new version)\n", a.Entry.Section, a.ID)
+		}
+	}
+	return nil
 }

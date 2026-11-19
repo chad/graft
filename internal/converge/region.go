@@ -77,6 +77,10 @@ func HashBody(body string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// RegionHash is the region_hash evidence pins for a body: HashBody of the body
+// as it is written into the file.
+func RegionHash(body string) string { return HashBody(normalizeBody(body)) }
+
 func splitLines(b []byte) []string {
 	if len(b) == 0 {
 		return nil

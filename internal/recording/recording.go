@@ -546,3 +546,79 @@ func LoadSkeleton(b []byte) (Skeleton, error) {
 	}
 	return s, nil
 }
+
+// EntryOf is the shape entry of a skeleton file: the file as a tree of
+// strings, lists and maps (what provenance stores in a record's shape). The
+// owner (Record, Section) is not part of it: the owning record is the entry's
+// home.
+func EntryOf(f File) (any, error) {
+	f.Record, f.Section = "", ""
+	b, err := json.Marshal(f)
+	if err != nil {
+		return nil, err
+	}
+	var v any
+	if err := json.Unmarshal(b, &v); err != nil {
+		return nil, err
+	}
+	return v, nil
+}
+
+// fileOf reads a shape entry back as a file owned by record id.
+func fileOf(entry any, id string) (File, error) {
+	b, err := json.Marshal(entry)
+	if err != nil {
+		return File{}, err
+	}
+	var f File
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&f); err != nil {
+		return File{}, fmt.Errorf("recording: %s: shape entry: %w", id, err)
+	}
+	f.Record = id
+	return f, nil
+}
+
+// ShapesOf groups a skeleton's files by owning record, each record's entries
+// ordered by path (the order a shape is stored in). resolve maps a file's
+// record id or section to the id of the planned record that owns it.
+func ShapesOf(sk Skeleton, resolve func(File) (string, error)) (map[string][]any, error) {
+	by := map[string][]File{}
+	for _, f := range sk.Files {
+		id, err := resolve(f)
+		if err != nil {
+			return nil, err
+		}
+		by[id] = append(by[id], f)
+	}
+	out := map[string][]any{}
+	for id, fs := range by {
+		sort.SliceStable(fs, func(i, j int) bool { return fs[i].Path < fs[j].Path })
+		for _, f := range fs {
+			e, err := EntryOf(f)
+			if err != nil {
+				return nil, err
+			}
+			out[id] = append(out[id], e)
+		}
+	}
+	return out, nil
+}
+
+// SkeletonOf is the skeleton the records' shapes spell out, files in path
+// order, each owned by the record whose shape holds it.
+func SkeletonOf(generator string, pins []records.Pin) (Skeleton, error) {
+	sk := Skeleton{Generator: generator}
+	for _, p := range pins {
+		for _, e := range p.Shape {
+			f, err := fileOf(e, p.RecordID)
+			if err != nil {
+				return Skeleton{}, err
+			}
+			sk.Files = append(sk.Files, f)
+		}
+	}
+	sort.SliceStable(sk.Files, func(i, j int) bool { return sk.Files[i].Path < sk.Files[j].Path })
+	return sk, nil
+}
