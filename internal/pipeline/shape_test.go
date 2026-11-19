@@ -493,3 +493,59 @@ func TestRenderMissingSignoffMakesNoModelCall(t *testing.T) {
 		t.Errorf("%+v", last)
 	}
 }
+
+// On the first run after an upgrade, an edit to a record's own shape made at
+// the same time is regenerated, not just re-verified: the old recording in the
+// tree holds the stub docs the body was written against.
+func TestRenderUpgradeWithAShapeEditRegeneratesThatRegion(t *testing.T) {
+	cfg, m, spec := renderSetup(t, "skeleton.json", "spec/freeq-lite.md")
+	// The fixture's Go files are stored as *.go.fixture so gofmt and go vet leave
+	// the bytes (which the region markers hash) alone.
+	for d, dst := range map[string]string{"repo": cfg.Repo, "app": cfg.Root} {
+		os.RemoveAll(dst)
+		src := filepath.Join("testdata", "premain", d)
+		err := filepath.WalkDir(src, func(p string, e os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			rel, _ := filepath.Rel(src, p)
+			to := filepath.Join(dst, strings.TrimSuffix(rel, ".fixture"))
+			if e.IsDir() {
+				return os.MkdirAll(to, 0o755)
+			}
+			b, err := os.ReadFile(p)
+			if err != nil {
+				return err
+			}
+			return os.WriteFile(to, b, 0o644)
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	log, err := evidence.Open(filepath.Join(cfg.Repo, ".graft", "evidence.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Log = log
+	editSkeleton(t, &cfg, func(sk *recording.Skeleton) {
+		f := fileOfSkeleton(t, sk, "keepalive.go")
+		f.Stubs[0].Doc += " Also answer PONG with nothing."
+	})
+	acc := accept(t, cfg, spec)
+	out, err := Run(context.Background(), cfg, acc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := m.paths; len(got) != 1 || got[0] != "keepalive_synth.go" {
+		t.Fatalf("model asked for %v, want only keepalive_synth.go", got)
+	}
+	for f, o := range byFile(out) {
+		switch {
+		case f == "keepalive_synth.go" && o.Reason != "gen_hash":
+			t.Errorf("keepalive: %+v", o)
+		case strings.HasSuffix(f, "_synth.go") && f != "keepalive_synth.go" && (o.Reason != "skeleton_hash" || o.Calls != 0):
+			t.Errorf("%s: %+v", f, o)
+		}
+	}
+}

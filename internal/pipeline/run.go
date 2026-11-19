@@ -53,7 +53,8 @@ type Config struct {
 	Contract contract.Contract
 	Samples  int // model answers drawn per attempt; 0 or 1 means one (today's behaviour)
 
-	skelHash string // render mode: the skeleton hash pinned into every evidence entry
+	shapeMoved map[string]bool // render mode: records whose own shape differs from the last render's recording
+	skelHash   string          // render mode: the skeleton hash pinned into every evidence entry
 }
 
 // Outcome is what happened to one record.
@@ -104,7 +105,7 @@ func Run(ctx context.Context, cfg Config, acc []Accepted) ([]Outcome, error) {
 	var byRec map[string]recording.Region
 	var pending map[string]bool // regions still holding their seeded placeholder
 	if cfg.Skeleton != nil {
-		if byRec, pending, cfg.skelHash, err = cfg.renderTree(ctx, store, acc); err != nil {
+		if byRec, pending, cfg.skelHash, cfg.shapeMoved, err = cfg.renderTree(ctx, store, acc); err != nil {
 			return nil, err
 		}
 	}
@@ -136,7 +137,7 @@ func Run(ctx context.Context, cfg Config, acc []Accepted) ([]Outcome, error) {
 				return out, fmt.Errorf("%s: %w: %s was edited by hand; keep the edit by revising the record, or restore the region", a.Entry.Section, converge.ErrHandEdited, r.Path)
 			}
 		}
-		body, ok, why := current(store, regions, a, file, cfg.Root)
+		body, ok, why := current(store, regions, a, file, cfg.Root, cfg.shapeMoved)
 		switch {
 		case pending[a.ID] || (!ok && why == ""):
 			why = "new"
@@ -173,7 +174,11 @@ func Run(ctx context.Context, cfg Config, acc []Accepted) ([]Outcome, error) {
 				o.NeedsEvidence = kinds
 				out = append(out, o)
 				cfg.say("%s (%s): the existing body passes its gates but needs %v evidence; no model call made\n", a.Entry.Section, file, kinds)
-				return out, fmt.Errorf("%s: needs %v evidence for the current skeleton (record it, then run again); the body was not regenerated", a.Entry.Section, kinds)
+				what := fmt.Sprintf("needs %v evidence", kinds)
+				if cfg.Skeleton != nil {
+					what += " for the current skeleton"
+				}
+				return out, fmt.Errorf("%s: %s (record it, then run again); the body was not regenerated", a.Entry.Section, what)
 			}
 			o.Regenerated = true
 			feedback = "The existing file no longer passes these checks; fix it:\n" + failing(d)
@@ -283,7 +288,7 @@ func failing(d converge.Decision) string {
 // region was written for another gen_hash, "version" for another version.
 // A region written before M11a (its marker has the shape-less gen, and the
 // record has since gained a shape) is returned with ok and why "skeleton_hash".
-func current(store records.Store, regions []converge.Region, a Accepted, file, root string) (string, bool, string) {
+func current(store records.Store, regions []converge.Region, a Accepted, file, root string, shapeMoved map[string]bool) (string, bool, string) {
 	p, err := store.Current(a.ID)
 	if err != nil {
 		return "", false, ""
@@ -297,6 +302,11 @@ func current(store records.Store, regions []converge.Region, a Accepted, file, r
 				// body is re-verified (skeleton_hash), not regenerated.
 				if r.Edited() {
 					return "", false, ""
+				}
+				if shapeMoved[a.ID] {
+					// The record's own shape changed too (not only the import):
+					// its body was written against other stubs and docs.
+					return "", false, "gen_hash"
 				}
 				body, err := converge.RegionBody(root, r)
 				return body, err == nil, "skeleton_hash"
