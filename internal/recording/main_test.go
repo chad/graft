@@ -11,11 +11,10 @@ import (
 // sedumVersion pins the sedum the recording tests run against, so the
 // recording format cannot drift underneath them.
 //
-// This is a commit of the sedum PR that adds `sedum convergence`
-// (livecodelife/sedum#68), pinned by hash because a Go proxy can serve a stale
-// resolution of a branch name. Replace it with the release tag that carries it
-// once there is one.
-const sedumVersion = "efe5d4b726fd9f78fa54aa1c68395aa9e1b83442"
+// This is the sedum release that added `sedum convergence`
+// (livecodelife/sedum#68). Tests build exactly this tag, never a sedum already
+// on PATH.
+const sedumVersion = "v0.13.0"
 
 // TestMain provisions sedum in CI without a workflow change: when CI is set
 // and sedum is not on PATH, it installs the pinned release with `go install`
