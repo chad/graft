@@ -82,14 +82,18 @@ export function init(): void { handlers.set("JOIN", channelsJoin); }
 	}
 	imp := `import { handlers } from "./running.ts";` + "\n"
 	for name, src := range map[string]string{
-		"read":          imp + `export function init(): void { handlers.get("X"); }`,
-		"alias":         `import { handlers as h } from "./running.ts";` + "\nexport function init(): void { h.set(\"X\", () => {}); }",
-		"namespace":     `import * as r from "./running.ts";` + "\nexport function init(): void { r.handlers.set(\"X\", () => {}); }",
-		"rebind":        imp + `const m = handlers; export function init(): void { m.set("X", () => {}); }`,
-		"non-literal":   imp + `export function init(): void { const k = "X"; handlers.set(k, () => {}); }`,
-		"bad name":      imp + `export function helper(): void {}` + "\nexport function init(): void { handlers.set(\"X\", () => {}); }",
-		"class":         imp + `export class C {}`,
-		"duplicate cmd": imp + `export function init(): void { handlers.set("JOIN", () => {}); }`,
+		"read":                 imp + `export function init(): void { handlers.get("X"); }`,
+		"alias":                `import { handlers as h } from "./running.ts";` + "\nexport function init(): void { h.set(\"X\", () => {}); }",
+		"namespace":            `import * as r from "./running.ts";` + "\nexport function init(): void { r.handlers.set(\"X\", () => {}); }",
+		"element access":       `import * as r from "./running.ts";` + "\nexport function init(): void { r[\"handlers\"].get(\"JOIN\"); }",
+		"element access 2":     `import * as r from "./running.ts";` + "\nexport function init(): void { r['handlers']; }",
+		"element access alone": "export function init(): void { void globalThis[\"handlers\"]; }",
+		"namespace only":       `import * as r from "./running.ts";` + "\nexport function init(): void { void r; }",
+		"rebind":               imp + `const m = handlers; export function init(): void { m.set("X", () => {}); }`,
+		"non-literal":          imp + `export function init(): void { const k = "X"; handlers.set(k, () => {}); }`,
+		"bad name":             imp + `export function helper(): void {}` + "\nexport function init(): void { handlers.set(\"X\", () => {}); }",
+		"class":                imp + `export class C {}`,
+		"duplicate cmd":        imp + `export function init(): void { handlers.set("JOIN", () => {}); }`,
 	} {
 		files := map[string]string{"running.ts": running, "a.ts": src}
 		if name == "duplicate cmd" {

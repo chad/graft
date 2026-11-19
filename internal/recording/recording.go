@@ -28,6 +28,7 @@ import (
 	"sort"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/chad/graft/internal/contract"
 	"github.com/chad/graft/internal/converge"
@@ -38,7 +39,8 @@ import (
 const SedumVersion = "0.12.2"
 
 // Decl is one fixed top-level declaration (type, var, const, or a function
-// whose whole text is part of the skeleton). Code is gofmt-formatted Go.
+// whose whole text is part of the skeleton). Code is in the generator's
+// language, written as the file should contain it.
 type Decl struct {
 	Kind     string `json:"kind"` // type | var | const | func | method
 	Name     string `json:"name"`
@@ -149,12 +151,16 @@ type Region struct {
 	Tier     string
 	Declares []string // full signatures, no body
 	Seed     []byte
+	// SynthSuffix is the generator's synth-file stem suffix (info.SynthSuffix).
+	SynthSuffix string
 }
 
 // Planned is Plan's result.
 type Planned struct {
 	Recording Recording
 	Regions   []Region
+	// SynthSuffix is the generator's synth-file stem suffix.
+	SynthSuffix string
 }
 
 // Plan is deterministic: the same input gives a byte-identical recording.
@@ -242,7 +248,7 @@ func Plan(in Input) (Planned, error) {
 		return Planned{}, err
 	}
 
-	out := Planned{Recording: Recording{
+	out := Planned{SynthSuffix: info.SynthSuffix, Recording: Recording{
 		SedumVersion: SedumVersion,
 		Complete:     true,
 		Packages:     map[string]Package{gen: {Extensions: info.Extensions}},
@@ -282,7 +288,7 @@ func Plan(in Input) (Planned, error) {
 				if err != nil {
 					return Planned{}, err
 				}
-				out.Regions = append(out.Regions, Region{Path: of.SynthPath, Owner: pins[id], Tier: in.Tier, Declares: declares, Seed: seed})
+				out.Regions = append(out.Regions, Region{Path: of.SynthPath, Owner: pins[id], Tier: in.Tier, Declares: declares, Seed: seed, SynthSuffix: info.SynthSuffix})
 			}
 		}
 		rec.Phases = []Phase{{Name: "default", Invocations: invs}}
@@ -367,11 +373,30 @@ func renderContract(in Input, info contract.Info) (map[string]contract.RenderedF
 // that still contains it is never converged. It is fixed by sedum's core.
 const Placeholder = "graft: not converged"
 
-// IsSynthPath reports whether p is a model-written synthesis file (<stem>_synth
-// plus the extension); everything else a render produces comes from sedum.
-// Plan checks that the generator's synth suffix is this one.
-func IsSynthPath(p string) bool {
-	return strings.HasSuffix(strings.TrimSuffix(p, path.Ext(p)), "_synth")
+// IsSynthPath reports whether p is a model-written synthesis file (<stem> plus
+// the generator's synth suffix plus the extension); everything else a render
+// produces comes from sedum. suffix is the generator's (Planned.SynthSuffix).
+func IsSynthPath(p, suffix string) bool {
+	return suffix != "" && strings.HasSuffix(strings.TrimSuffix(p, path.Ext(p)), suffix)
+}
+
+// containsIdent reports whether code contains name as a whole identifier: not
+// as part of a longer one. It reads no syntax, so it holds for any language.
+func containsIdent(code, name string) bool {
+	isID := func(r rune) bool { return r == '_' || r == '$' || unicode.IsLetter(r) || unicode.IsDigit(r) }
+	for i := 0; ; {
+		j := strings.Index(code[i:], name)
+		if j < 0 {
+			return false
+		}
+		a, b := i+j, i+j+len(name)
+		before, _ := utf8.DecodeLastRuneInString(code[:a])
+		after, _ := utf8.DecodeRuneInString(code[b:])
+		if (a == 0 || !isID(before)) && (b == len(code) || !isID(after)) {
+			return true
+		}
+		i = a + 1
+	}
 }
 
 // validateSkeleton checks the layout before any record is read into it: paths
@@ -399,6 +424,9 @@ func validateSkeleton(sk Skeleton) error {
 			}
 			if d.Kind != "method" && d.Receiver != "" {
 				return fmt.Errorf("recording: %s: decl %q: only methods have a receiver", f.Path, d.Name)
+			}
+			if !containsIdent(d.Code, d.Name) {
+				return fmt.Errorf("recording: %s: decl %q: its code does not contain that name as a whole identifier", f.Path, d.Name)
 			}
 		}
 		for _, s := range f.Stubs {

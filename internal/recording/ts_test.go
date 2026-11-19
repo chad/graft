@@ -49,7 +49,7 @@ func TestTypeScriptPlanRendersAndLoads(t *testing.T) {
 		t.Fatalf("packages %v, %d regions", p.Recording.Packages, len(p.Regions))
 	}
 	for _, r := range p.Regions {
-		if !strings.HasSuffix(r.Path, "_synth.ts") || !IsSynthPath(r.Path) || !bytes.Contains(r.Seed, []byte("// graft:synth:begin")) {
+		if !strings.HasSuffix(r.Path, "_synth.ts") || !IsSynthPath(r.Path, "_synth") || !bytes.Contains(r.Seed, []byte("// graft:synth:begin")) {
 			t.Errorf("region %s: %s", r.Path, r.Seed)
 		}
 	}

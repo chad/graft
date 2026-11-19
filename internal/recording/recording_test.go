@@ -481,6 +481,9 @@ func TestPlanValidation(t *testing.T) {
 		"empty scope":        simple(t, okFile, pin("r1", "imprint", "open")),
 		"no tier":            {Contract: sedumContract(t, "go"), Records: []Rec{{Pin: okPin, Section: "s"}}, Skeleton: Skeleton{Files: []File{okFile}}},
 		"dup decl":           simple(t, with(func(f *File) { f.Decls = append(f.Decls, f.Decls[0]) }), okPin),
+		"decl name":          simple(t, with(func(f *File) { f.Decls[0].Name = "Y" }), okPin),
+		"decl name prefix":   simple(t, with(func(f *File) { f.Decls[0].Code = "var XY = 1" }), okPin),
+		"decl is a helper":   simple(t, with(func(f *File) { f.Decls[0].Code = "func doBody() {}" }), okPin),
 		"decl vs stub name":  simple(t, with(func(f *File) { f.Decls = append(f.Decls, Decl{Kind: "func", Name: "Do", Code: "func Do() {}"}) }), okPin),
 		"receiver name only": simple(t, with(func(f *File) { f.Stubs[0].ReceiverName = "c" }), okPin),
 		"receiver type only": simple(t, with(func(f *File) { f.Stubs[0].ReceiverType = "*T" }), okPin),
@@ -494,6 +497,10 @@ func TestPlanValidation(t *testing.T) {
 		if _, err := Plan(in); err == nil {
 			t.Errorf("%s: Plan accepted it", name)
 		}
+	}
+	// a name inside a longer text still counts as a whole identifier
+	if _, err := Plan(simple(t, with(func(f *File) { f.Decls[0].Code = "// X is one\nvar (X, Z = 1, 2)" }), okPin)); err != nil {
+		t.Errorf("whole identifier among punctuation: %v", err)
 	}
 	// a record with no file in the skeleton
 	in := simple(t, okFile, okPin)

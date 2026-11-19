@@ -18,7 +18,7 @@ import (
 )
 
 // renderTree plans the recording from the accepted records and the skeleton,
-// renders it with sedum into cfg.Root, and seeds each region's _synth.go file
+// renders it with sedum into cfg.Root, and seeds each region's synth file
 // if it does not exist yet (a converged body is never clobbered). It returns
 // the regions by owning record id. It makes no model call.
 func (cfg Config) renderTree(ctx context.Context, store records.Store, acc []Accepted) (map[string]recording.Region, map[string]bool, error) {
@@ -84,8 +84,8 @@ func (cfg Config) renderTree(ctx context.Context, store records.Store, acc []Acc
 	}
 	by := map[string]recording.Region{}
 	for _, r := range planned.Regions {
-		if !recording.IsSynthPath(r.Path) {
-			return nil, nil, fmt.Errorf("pipeline: --render: region path %s is not a _synth file", r.Path)
+		if !recording.IsSynthPath(r.Path, planned.SynthSuffix) {
+			return nil, nil, fmt.Errorf("pipeline: --render: region path %s is not a synth file (suffix %q)", r.Path, planned.SynthSuffix)
 		}
 		by[r.Owner.RecordID] = r
 		p := filepath.Join(cfg.Root, filepath.FromSlash(r.Path))
@@ -183,6 +183,6 @@ func (cfg Config) renderPrompt(a Accepted, r recording.Region, feedback string) 
 		fmt.Fprintf(&b, "\n## Feedback on your previous attempt\n\n%s\n", feedback)
 	}
 	stem := strings.TrimSuffix(filepath.Base(r.Path), filepath.Ext(r.Path))
-	fmt.Fprintf(&b, "\nAnswer with the complete contents of `%s` in a single ```%s block, %s, then the imports you need, the helpers above with their bodies, and any private helpers (named with the prefix `%s`). Do not write the skeleton's types or stubs, and do not include any line containing \"graft:synth\" or \"sedum:\".\n", r.Path, cfg.lang().Fence, cfg.lang().Preamble, strings.TrimSuffix(stem, "_synth"))
+	fmt.Fprintf(&b, "\nAnswer with the complete contents of `%s` in a single ```%s block, %s, then the imports you need, the helpers above with their bodies, and any private helpers (named with the prefix `%s`). Do not write the skeleton's types or stubs, and do not include any line containing \"graft:synth\" or \"sedum:\".\n", r.Path, cfg.lang().Fence, cfg.lang().Preamble, strings.TrimSuffix(stem, r.SynthSuffix))
 	return b.String(), nil
 }

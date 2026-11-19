@@ -511,7 +511,7 @@ func (cfg Config) evolvePrompt(current string) string {
 func filterSynth(m map[string]string) map[string]string {
 	out := map[string]string{}
 	for f, src := range m {
-		if recording.IsSynthPath(f) {
+		if recording.IsSynthPath(f, "_synth") {
 			out[f] = src
 		}
 	}

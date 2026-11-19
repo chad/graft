@@ -28,6 +28,16 @@ for (const m of modules()) {
     if (ts.isImportSpecifier(node) && (node.propertyName?.text === "handlers" || (node.name.text === "handlers" && node.propertyName))) {
       bad(node, "import handlers under its own name");
     }
+    if (ts.isNamespaceImport(node) && /(^|\/)running(\.ts)?$/.test(node.parent.parent.moduleSpecifier.text)) {
+      bad(node, "no namespace import of ./running.ts; use `import { handlers } from \"./running.ts\"`");
+    }
+    if (
+      ts.isElementAccessExpression(node) &&
+      ts.isStringLiteralLike(node.argumentExpression) &&
+      node.argumentExpression.text === "handlers"
+    ) {
+      bad(node, 'no element access with "handlers"');
+    }
     if (
       ts.isCallExpression(node) &&
       ts.isPropertyAccessExpression(node.expression) &&

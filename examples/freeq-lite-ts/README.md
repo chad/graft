@@ -70,7 +70,13 @@ settled, and the earlier ones are part of the honest picture:
   `init()` throws at startup, before the other regions exist. The bootstrap
   `main.ts` now lets a seeded placeholder throw out of `init()` and continues
   (any other error is rethrown).
-- The plain run converged 7/7 and scored 47/47 each time it was run.
+- The plain run recorded here converged 7/7 and scored 47/47. No count is kept of any other plain runs made while the gates were settled, so this is one run, not a rate.
+
+The oracle is no longer strictly held out for this example. It scored a 45/47
+`--render` run, and `conventions.md` was then changed to state the `421` line
+format it had missed, so the final runs above were made with the oracle's
+findings in view. Treat 47/47 as "the pipeline can reach it", not as a blind
+test.
 
 n=1 per mode is a demonstration that the pipeline and `--render` work for a
 second language, not a measurement of either mode's reliability.
