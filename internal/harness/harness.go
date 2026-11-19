@@ -288,6 +288,10 @@ type oracleResult struct {
 	Checks int      `json:"checks"`
 	Passed int      `json:"passed"`
 	Failed []string `json:"failed"`
+	// Oracles that tag checks a visible smoke check also exercises report
+	// them; absent (nil) when the oracle does not.
+	Visible       *int `json:"visible"`
+	VisiblePassed *int `json:"visible_passed"`
 }
 
 // score runs the oracle: exit 0/1 with JSON is a measurement; exit 2 means
@@ -318,7 +322,7 @@ func (cfg Config) score(ctx context.Context, root, bin string) bench.Sample {
 	if err := json.Unmarshal(out.Bytes(), &r); err != nil || r.Checks == 0 {
 		return bench.Sample{Outcome: bench.Unreachable, Reason: fmt.Sprintf("oracle exit %d, unreadable output: %s", code, tail(out.String()+errb.String(), 300))}
 	}
-	s := bench.Sample{Checks: r.Checks, Passed: r.Passed, Outcome: bench.Works}
+	s := bench.Sample{Checks: r.Checks, Passed: r.Passed, Outcome: bench.Works, Visible: r.Visible, VisiblePassed: r.VisiblePassed}
 	if r.Passed < r.Checks {
 		s.Outcome = bench.Disagreed
 		s.Reason = "failed: " + strings.Join(r.Failed, ", ")
@@ -507,11 +511,14 @@ func (cfg Config) evolvePrompt(current string) string {
 		"\n\n## Current " + cfg.mainFile() + "\n\n```" + cfg.lang().Fence + "\n" + current + "```\n\n" + cfg.answerWith(true)
 }
 
-// filterSynth keeps only the model-written *_synth.go files of a snapshot.
+// filterSynth keeps only the model-written files of a snapshot: those
+// holding a graft synthesis region. That is the generator's synth file in
+// every language, whatever suffix the generator names it with; sedum-rendered
+// files carry sedum's markers, never graft's.
 func filterSynth(m map[string]string) map[string]string {
 	out := map[string]string{}
 	for f, src := range m {
-		if recording.IsSynthPath(f, "_synth") {
+		if strings.Contains(src, "graft:synth:begin") {
 			out[f] = src
 		}
 	}
