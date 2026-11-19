@@ -97,6 +97,12 @@ First run (claude sonnet, n=1, an anecdote; scored by the oracle as it was then,
 | v2 oracle, v1 server | 38/42 (the 4 topic checks fail, as they should) |
 | v2 oracle, v2 server | **42/42** |
 
+**M11a, `--render` with the skeleton as record content (n=1 anecdote).** One run
+of freeq-lite v1 with Haiku x3 on the M11a branch (skeleton imported into the
+imprints' shapes, tree planned from the records): graft exited 0, 7/7 regions
+applied, oracle 47/47, 21 model calls, cost USD 0.247, wall 258s. One run
+cannot say anything about variance; it only shows the new path works end to end.
+
 **What this does and does not show.** Topics is an *additive* change: a new
 section whose behaviour lives in a new file. For such a change the seven
 untouched files are byte-identical **by construction**, since their records did
