@@ -30,6 +30,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -329,6 +330,58 @@ func generated(file, ext string) bool {
 	return err == nil && !strings.Contains(string(b), placeholder)
 }
 
+// copyConverged copies the tree at src to dst, leaving out every section
+// that still holds the placeholder: <stem><ext> and <stem>_synth<ext> go
+// together. It returns the stems it left out. .git is skipped.
+func copyConverged(src, dst, ext string) ([]string, error) {
+	skip := map[string]bool{}
+	names, err := filepath.Glob(filepath.Join(src, "*"+ext))
+	if err != nil {
+		return nil, err
+	}
+	for _, n := range names {
+		b, err := os.ReadFile(n)
+		if err != nil {
+			return nil, err
+		}
+		if strings.Contains(string(b), placeholder) {
+			skip[strings.TrimSuffix(strings.TrimSuffix(filepath.Base(n), ext), "_synth")] = true
+		}
+	}
+	err = filepath.WalkDir(src, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(src, p)
+		if d.IsDir() {
+			if d.Name() == ".git" {
+				return filepath.SkipDir
+			}
+			return os.MkdirAll(filepath.Join(dst, rel), 0o755)
+		}
+		if !d.Type().IsRegular() {
+			return nil
+		}
+		if filepath.Dir(rel) == "." && strings.HasSuffix(rel, ext) {
+			stem := strings.TrimSuffix(strings.TrimSuffix(rel, ext), "_synth")
+			if skip[stem] {
+				return nil
+			}
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(filepath.Join(dst, rel), b, 0o644)
+	})
+	var out []string
+	for s := range skip {
+		out = append(out, s)
+	}
+	sort.Strings(out)
+	return out, err
+}
+
 // sameSection: -only accepts a section file in any language (channels.go,
 // channels.py) or its bare stem.
 func sameSection(file, only string) bool {
@@ -376,7 +429,30 @@ func main() {
 		fmt.Println("smoke: no sections generated yet; nothing to check")
 		return
 	}
+	// The server is built and run from a copy of the tree holding only the
+	// sections generated so far: under --render every section is seeded up
+	// front, and a seeded section's placeholder (its init, say) would panic at
+	// start-up before any region could be checked. Sections only register
+	// into the core (the conventions), so dropping the unconverged ones leaves
+	// a server with exactly the generated sections' behaviour.
 	var argv []string
+	workDir := "."
+	if *bin == "" {
+		dir, err := os.MkdirTemp("", "graft-smoke-*")
+		if err != nil {
+			fail(err.Error())
+		}
+		defer os.RemoveAll(dir)
+		workDir = filepath.Join(dir, "tree")
+		dropped, err := copyConverged(".", workDir, *ext)
+		if err != nil {
+			fail(err.Error())
+		}
+		if len(dropped) > 0 {
+			// stderr: stdout's first and last lines stay the summary.
+			fmt.Fprintf(os.Stderr, "smoke: running without the sections not generated yet: %s\n", strings.Join(dropped, ", "))
+		}
+	}
 	switch {
 	case *cmdJSON != "":
 		if err := json.Unmarshal([]byte(*cmdJSON), &argv); err != nil || len(argv) == 0 {
@@ -385,13 +461,10 @@ func main() {
 	case *bin != "":
 		argv = []string{*bin}
 	default:
-		dir, err := os.MkdirTemp("", "graft-smoke-*")
-		if err != nil {
-			fail(err.Error())
-		}
-		defer os.RemoveAll(dir)
-		server := filepath.Join(dir, "server")
-		if out, err := exec.Command("go", "build", "-o", server, ".").CombinedOutput(); err != nil {
+		server := filepath.Join(filepath.Dir(workDir), "server")
+		b := exec.Command("go", "build", "-o", server, ".")
+		b.Dir = workDir
+		if out, err := b.CombinedOutput(); err != nil {
 			// Same summary shape as a run, so a ranker can read it: nothing passed.
 			nothingPassed(len(run), *asJSON, "the server does not build:\n"+string(out))
 		}
@@ -413,6 +486,7 @@ func main() {
 	}
 	full = append(full, strings.Fields(*extra)...)
 	srv := exec.Command(full[0], full[1:]...)
+	srv.Dir = workDir
 	var srvErr strings.Builder
 	srv.Stderr = &srvErr
 	// An interpreter's children may hold stderr open after the server is

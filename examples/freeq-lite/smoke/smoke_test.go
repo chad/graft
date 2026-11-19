@@ -149,3 +149,53 @@ while True:
 		t.Fatalf("took %v: the child held the suite", d)
 	}
 }
+
+// Under --render every section is seeded up front; a seeded section whose
+// init still panics with the placeholder must not stop the server, so the
+// generated sections can be checked (the Running region's gate, here).
+func TestSeededSectionsAreLeftOut(t *testing.T) {
+	if testing.Short() {
+		t.Skip("short")
+	}
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module x\n\ngo 1.22\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "running.go"), []byte(`package main
+
+import (
+	"flag"
+	"net"
+)
+
+func main() {
+	addr := flag.String("addr", ":0", "")
+	flag.Parse()
+	l, err := net.Listen("tcp", *addr)
+	if err != nil {
+		panic(err)
+	}
+	for {
+		c, _ := l.Accept()
+		go func() {
+			b := make([]byte, 4096)
+			for {
+				if _, err := c.Read(b); err != nil {
+					return
+				}
+			}
+		}()
+	}
+}
+`), 0o644)
+	os.WriteFile(filepath.Join(dir, "channels.go"), []byte("package main\n\nfunc init() { channelsInit() }\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "channels_synth.go"), []byte("package main\n\nfunc channelsInit() { panic(\"graft: not converged\") }\n"), 0o644)
+	self, _ := filepath.Abs("smoke.go")
+	cmd := exec.Command("go", "run", self)
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil || !strings.HasPrefix(string(out), "smoke: 1/1 checks passed") {
+		t.Fatalf("%v %q", err, out)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "channels_synth.go")); err != nil {
+		t.Fatal("the tree itself must not be touched")
+	}
+}

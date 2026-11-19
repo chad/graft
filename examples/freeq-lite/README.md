@@ -220,6 +220,15 @@ against a single call without them, a deliberate difference that the
 fixture digest records (the visible files are part of it) and the arm table
 names.
 
+**Under `--render`** every section is seeded up front, and a seeded
+section's `init` placeholder panics at start-up. Smoke therefore builds and
+runs a copy of the tree **without the sections that still hold the
+placeholder** (it lists them on stderr). That is the same "generated so far"
+rule it uses to pick checks. One `--render` run with the smoke gate (claude
+sonnet, sedum 0.12.2, n=1): 7/7 regions converged on the first attempt, and
+the oracle scored it 47/47. Before this fix, every `--render` run failed the
+Running region on smoke (found by livecodelife's agent's M11 Step 0).
+
 One run with the smoke gate (claude sonnet, n=1, an anecdote): 7/7 regions
 converged on the first attempt, and the held-out oracle scored it 47/47
 (with the overlap above).
