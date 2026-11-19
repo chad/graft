@@ -199,3 +199,22 @@ func main() {
 		t.Fatal("the tree itself must not be touched")
 	}
 }
+
+func TestCopyKeepsModeAndLinksDependencies(t *testing.T) {
+	src, dst := t.TempDir(), filepath.Join(t.TempDir(), "tree")
+	os.WriteFile(filepath.Join(src, "run.sh"), []byte("#!/bin/sh\n"), 0o755)
+	os.MkdirAll(filepath.Join(src, "node_modules", "dep"), 0o755)
+	os.WriteFile(filepath.Join(src, "node_modules", "dep", "index.js"), []byte("x"), 0o644)
+	if _, err := copyConverged(src, dst, ".go"); err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := os.Stat(filepath.Join(dst, "run.sh")); err != nil || fi.Mode().Perm()&0o100 == 0 {
+		t.Fatalf("exec bit lost: %v %v", fi, err)
+	}
+	if fi, err := os.Lstat(filepath.Join(dst, "node_modules")); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("node_modules should be a link: %v %v", fi, err)
+	}
+	if _, err := os.Stat(filepath.Join(dst, "node_modules", "dep", "index.js")); err != nil {
+		t.Fatal("linked dependency not reachable")
+	}
+}
