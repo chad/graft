@@ -36,7 +36,7 @@ import (
 )
 
 // SedumVersion is written into every recording.
-const SedumVersion = "0.12.2"
+const SedumVersion = "0.13.0"
 
 // Decl is one fixed top-level declaration (type, var, const, or a function
 // whose whole text is part of the skeleton). Code is in the generator's
