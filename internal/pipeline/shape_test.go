@@ -2,9 +2,12 @@ package pipeline
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -303,4 +306,98 @@ func TestRenderPreM11aEvidenceIsReverifiedWithoutAModelCall(t *testing.T) {
 		}
 	}
 	_ = n
+}
+
+var recordID = regexp.MustCompile(`prov-[0-9]{4}-[0-9a-f]{8}`)
+
+// DoD 3: freeq-lite imported from today's skeleton.json renders a tree
+// byte-identical to the one graft rendered before skeletons were record
+// content. The golden file holds the digest of every sedum-rendered file,
+// produced by the code before M11a (record ids are random and are masked).
+func TestRenderImportedFreeqLiteTreeIsByteIdentical(t *testing.T) {
+	cfg, _, spec := renderSetup(t, "skeleton.json", "spec/freeq-lite.md")
+	if _, err := Run(context.Background(), cfg, accept(t, cfg, spec)); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile("testdata/freeqlite-tree.golden.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var want map[string]string
+	if err := json.Unmarshal(b, &want); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for k, v := range snapshot(t, cfg.Root) {
+		if strings.HasSuffix(k, "_synth.go") || strings.HasPrefix(k, ".sedum") {
+			continue
+		}
+		s := sha256.Sum256([]byte(recordID.ReplaceAllString(v, "prov-ID")))
+		got[k] = hex.EncodeToString(s[:])
+	}
+	for k, w := range want {
+		if got[k] != w {
+			t.Errorf("%s differs from the pre-M11a render", k)
+		}
+	}
+	for k := range got {
+		if _, ok := want[k]; !ok {
+			t.Errorf("%s is new", k)
+		}
+	}
+}
+
+// DoD 5: the ledger-lite cross-section rules (Journal, Freezing) live in the
+// shared contract. Changing one after the code exists makes exactly the
+// region that owns the contract stale (its shape moved: regenerated) and
+// leaves every other region re-verified with no model call.
+func TestRenderLedgerLiteCrossSectionRuleEvolves(t *testing.T) {
+	const dir = "../../examples/ledger-lite/"
+	for _, tc := range []struct{ rule, stub, from, to string }{
+		{"Freezing", "Debitable", `a frozen account gives 423 "account frozen"`, `a frozen account gives 423 "account is frozen"`},
+		{"Journal", "Post", "appends one journal Entry (seq counting from 1", "appends one journal Entry (seq counting from 0"},
+	} {
+		t.Run(tc.rule, func(t *testing.T) {
+			cfg, m, spec := renderSetupIn(t, dir, "ledgerlite", "skeleton.json", "spec/ledger-lite.md")
+			acc := accept(t, cfg, spec)
+			if _, err := Run(context.Background(), cfg, acc); err != nil {
+				t.Fatal(err)
+			}
+			m.prompts, m.paths = nil, nil
+			editSkeleton(t, &cfg, func(sk *recording.Skeleton) {
+				f := fileOfSkeleton(t, sk, "running.go")
+				for i := range f.Stubs {
+					if f.Stubs[i].Name == tc.stub {
+						if !strings.Contains(f.Stubs[i].Doc, tc.from) {
+							t.Fatalf("the %s contract no longer says %q", tc.stub, tc.from)
+						}
+						f.Stubs[i].Doc = strings.Replace(f.Stubs[i].Doc, tc.from, tc.to, 1)
+					}
+				}
+			})
+			out, err := Run(context.Background(), cfg, acc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(m.paths) != 1 || m.paths[0] != "running_synth.go" {
+				t.Fatalf("model asked for %v, want only running_synth.go", m.paths)
+			}
+			others := 0
+			for f, o := range byFile(out) {
+				if f == "running_synth.go" {
+					if o.Reason != "gen_hash" {
+						t.Errorf("running: %+v", o)
+					}
+					continue
+				}
+				others++
+				if o.Reason != "skeleton_hash" || o.Calls != 0 || o.Regenerated {
+					t.Errorf("%s: %+v", f, o)
+				}
+			}
+			if others != 6 {
+				t.Errorf("%d other regions, want 6", others)
+			}
+		})
+	}
 }

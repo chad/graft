@@ -1,6 +1,7 @@
 package evidence
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -417,5 +418,45 @@ func TestStaleEvidenceNeverSatisfiesPolicy(t *testing.T) {
 	moved.GenHash = "g4"
 	if r := eval(t, Policy{"low": {TestRun}}, l, "low", moved); r.Satisfied {
 		t.Fatalf("stale pass satisfied policy: %+v", r)
+	}
+}
+
+func TestSkeletonHashMovesOnlyWhenCurrentHasOne(t *testing.T) {
+	pin := Pin{RecordID: "r", GenHash: "g", RegionHash: "x"}
+	e := Evidence{Pin: pin}
+	if e.Stale(pin) {
+		t.Error("plain evidence went stale against a plain pin")
+	}
+	cur := pin
+	cur.SkeletonHash = "s1"
+	if m := e.Moved(cur); len(m) != 1 || m[0] != "skeleton_hash" {
+		t.Errorf("evidence from before skeletons were pinned: moved %v", m)
+	}
+	e.Pin.SkeletonHash = "s1"
+	if e.Stale(cur) {
+		t.Error("matching skeleton hash is stale")
+	}
+	cur.SkeletonHash = "s2"
+	if m := e.Moved(cur); len(m) != 1 || m[0] != "skeleton_hash" {
+		t.Errorf("moved %v", m)
+	}
+	if e.Stale(pin) {
+		t.Error("evidence pinned to a skeleton went stale in a plain run")
+	}
+}
+
+func TestPlainEvidenceIDIgnoresTheSkeletonField(t *testing.T) {
+	e := Evidence{V: FormatVersion, Kind: TestRun, Verdict: Pass, Pin: Pin{RecordID: "r", GenHash: "g", RegionHash: "x"}, By: "t"}
+	id, err := computeID(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := json.Marshal(e)
+	if strings.Contains(string(b), "skeleton") {
+		t.Errorf("plain evidence encodes a skeleton field: %s", b)
+	}
+	e.Pin.SkeletonHash = "s"
+	if id2, _ := computeID(e); id2 == id {
+		t.Error("the skeleton hash is not covered by the ID")
 	}
 }
