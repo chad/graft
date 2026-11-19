@@ -1,0 +1,1 @@
+ledger-lite is one Go program: `package main`, standard library only, Go 1.22. Every file is `package main` in the module root. Each spec section is written as its own file, in spec order, by a separate author who sees the files already written. Leave no function that nothing calls, because a gate rejects dead functions. Exported methods count as used.
