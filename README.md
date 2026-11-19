@@ -25,7 +25,8 @@ profile's name. This needs a sedum that has `sedum convergence`.
 
 Examples: [`examples/freeq-lite`](examples/freeq-lite) (Go: spec, smoke suite,
 held-out oracle, bench), [`examples/freeq-lite-py`](examples/freeq-lite-py)
-(Python) and [`examples/freeq-lite-ts`](examples/freeq-lite-ts) (TypeScript,
-plain and `--render`).
+(Python), [`examples/freeq-lite-ts`](examples/freeq-lite-ts) (TypeScript,
+plain and `--render`) and [`examples/ledger-lite`](examples/ledger-lite) (a
+harder case: rules that cross sections, a stated 9/42 smoke–oracle overlap).
 
 MIT licensed.
