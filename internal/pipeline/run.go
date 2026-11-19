@@ -67,9 +67,13 @@ type Outcome struct {
 	// Reason says why the region was looked at again, in render mode: "" when
 	// it was up to date, "skeleton_hash" when only the skeleton moved (the body
 	// was re-verified under the gates with no model call), "gen_hash" when the
-	// record's own content (its shape included) moved or its version did, and
-	// "new" when the region had no body yet.
+	// record's own content (its shape included) moved, "version" when only the
+	// record's version did, and "new" when the region had no body yet.
 	Reason string
+	// NeedsEvidence lists required non-executable evidence kinds (a human
+	// sign-off) the unchanged body lacks: every gate passed, the policy is not
+	// satisfied, and no model call was made.
+	NeedsEvidence []evidence.Kind
 	// Regenerated is true when the existing body failed its re-check and the
 	// model was asked for a new one.
 	Regenerated bool
@@ -133,11 +137,12 @@ func Run(ctx context.Context, cfg Config, acc []Accepted) ([]Outcome, error) {
 			}
 		}
 		body, ok, why := current(store, regions, a, file, cfg.Root)
-		if ok && !pending[a.ID] && cfg.skelHash != "" && !cfg.skeletonCurrent(cfg.Log, a.ID, store, body) {
-			why = "skeleton_hash" // owner unchanged, but the skeleton it was verified against moved
-		} else if pending[a.ID] {
+		switch {
+		case pending[a.ID] || (!ok && why == ""):
 			why = "new"
-		} else if ok {
+		case ok && cfg.skelHash != "" && !cfg.skeletonCurrent(cfg.Log, a.ID, store, body):
+			why = "skeleton_hash" // owner unchanged, but the skeleton it was verified against moved
+		case ok:
 			why = ""
 		}
 		if cfg.Skeleton != nil {
@@ -161,6 +166,14 @@ func Run(ctx context.Context, cfg Config, acc []Accepted) ([]Outcome, error) {
 				}
 				out = append(out, o)
 				continue
+			}
+			if kinds := onlyMissingEvidence(d); len(kinds) > 0 {
+				// Every gate passed; the body is fine. The policy wants evidence a
+				// model cannot produce (a sign-off), so regenerating cannot help.
+				o.NeedsEvidence = kinds
+				out = append(out, o)
+				cfg.say("%s (%s): the existing body passes its gates but needs %v evidence; no model call made\n", a.Entry.Section, file, kinds)
+				return out, fmt.Errorf("%s: needs %v evidence for the current skeleton (record it, then run again); the body was not regenerated", a.Entry.Section, kinds)
 			}
 			o.Regenerated = true
 			feedback = "The existing file no longer passes these checks; fix it:\n" + failing(d)
@@ -235,6 +248,21 @@ func Run(ctx context.Context, cfg Config, acc []Accepted) ([]Outcome, error) {
 	return out, nil
 }
 
+// onlyMissingEvidence returns the required kinds with no fresh evidence when
+// that is the only thing wrong: every evidence entry this check wrote passed
+// and nothing required failed. Otherwise nil.
+func onlyMissingEvidence(d converge.Decision) []evidence.Kind {
+	if len(d.Result.Missing) == 0 || len(d.Result.Failing) > 0 || len(d.Evidence) == 0 {
+		return nil
+	}
+	for _, e := range d.Evidence {
+		if e.Verdict != evidence.Pass {
+			return nil
+		}
+	}
+	return d.Result.Missing
+}
+
 func failing(d converge.Decision) string {
 	var details []string
 	for _, e := range d.Evidence {
@@ -253,6 +281,8 @@ func failing(d converge.Decision) string {
 //
 // When it does not, why names the first thing that moved: "gen_hash" when the
 // region was written for another gen_hash, "version" for another version.
+// A region written before M11a (its marker has the shape-less gen, and the
+// record has since gained a shape) is returned with ok and why "skeleton_hash".
 func current(store records.Store, regions []converge.Region, a Accepted, file, root string) (string, bool, string) {
 	p, err := store.Current(a.ID)
 	if err != nil {
@@ -261,6 +291,15 @@ func current(store records.Store, regions []converge.Region, a Accepted, file, r
 	for _, r := range regions {
 		if r.Path == file && r.Owner.Record == a.ID {
 			switch {
+			case r.Owner.Gen == p.SedumGen && p.SedumGen != p.GenHash:
+				// Written before shapes were record content: the marker has the
+				// shape-less gen. Only the shape import moved gen_hash, so the
+				// body is re-verified (skeleton_hash), not regenerated.
+				if r.Edited() {
+					return "", false, ""
+				}
+				body, err := converge.RegionBody(root, r)
+				return body, err == nil, "skeleton_hash"
 			case r.Owner.Gen != p.GenHash:
 				return "", false, "gen_hash"
 			case r.Owner.Version != p.Version:
@@ -276,8 +315,9 @@ func current(store records.Store, regions []converge.Region, a Accepted, file, r
 }
 
 // skeletonCurrent reports whether the region body was last verified against
-// the current skeleton: the evidence log holds an entry for this record, its
-// current gen_hash and this exact body that pins the current skeleton hash.
+// the current skeleton: the evidence log holds a passing entry for this record, its
+// current gen_hash and spec hash and this exact body that pins the current
+// skeleton hash.
 // Evidence from before skeletons were pinned has none, so it is not current;
 // the body is re-verified under the gates (no model call) and fresh evidence
 // pins the skeleton.
@@ -288,7 +328,8 @@ func (cfg Config) skeletonCurrent(log *evidence.Log, id string, store records.St
 	}
 	rh := converge.RegionHash(body)
 	for _, e := range log.All() {
-		if e.Pin.RecordID == id && e.Pin.GenHash == p.GenHash && e.Pin.RegionHash == rh && e.Pin.SkeletonHash == cfg.skelHash {
+		if e.Verdict == evidence.Pass && e.Pin.RecordID == id && e.Pin.GenHash == p.GenHash && e.Pin.SpecHash == p.SpecHash &&
+			e.Pin.RegionHash == rh && e.Pin.SkeletonHash == cfg.skelHash {
 			return true
 		}
 	}

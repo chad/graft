@@ -2,7 +2,7 @@ module github.com/chad/graft
 
 go 1.27.4
 
-require github.com/livecodelife/provenance v0.0.0-20261119152142-b643989de248
+require github.com/livecodelife/provenance v0.0.0-20261119152809-96db85298602
 
 require (
 	golang.org/x/text v0.34.0 // indirect

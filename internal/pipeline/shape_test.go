@@ -401,3 +401,95 @@ func TestRenderLedgerLiteCrossSectionRuleEvolves(t *testing.T) {
 		})
 	}
 }
+
+// A tree converged by graft before M11a (testdata/premain: made by the code at
+// origin/main, 7 model calls) must re-verify on its first --render run with
+// no model call: the import moves every gen_hash, but the markers carry the
+// shape-less gen, so only the skeleton changed.
+func TestRenderUpgradeFromPreM11aTreeCostsNoModelCalls(t *testing.T) {
+	cfg, m, spec := renderSetup(t, "skeleton.json", "spec/freeq-lite.md")
+	// The fixture's Go files are stored as *.go.fixture so gofmt and go vet leave
+	// the bytes (which the region markers hash) alone.
+	for d, dst := range map[string]string{"repo": cfg.Repo, "app": cfg.Root} {
+		os.RemoveAll(dst)
+		src := filepath.Join("testdata", "premain", d)
+		err := filepath.WalkDir(src, func(p string, e os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			rel, _ := filepath.Rel(src, p)
+			to := filepath.Join(dst, strings.TrimSuffix(rel, ".fixture"))
+			if e.IsDir() {
+				return os.MkdirAll(to, 0o755)
+			}
+			b, err := os.ReadFile(p)
+			if err != nil {
+				return err
+			}
+			return os.WriteFile(to, b, 0o644)
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	log, err := evidence.Open(filepath.Join(cfg.Repo, ".graft", "evidence.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Log = log
+	acc := accept(t, cfg, spec)
+	out, err := Run(context.Background(), cfg, acc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.prompts) != 0 {
+		t.Fatalf("upgrading a converged tree made %d model calls", len(m.prompts))
+	}
+	n := 0
+	for f, o := range byFile(out) {
+		if !strings.HasSuffix(f, "_synth.go") {
+			continue
+		}
+		n++
+		if o.Reason != "skeleton_hash" || o.Regenerated || o.Calls != 0 || !o.Applied {
+			t.Errorf("%s: %+v", f, o)
+		}
+	}
+	if n != 7 {
+		t.Errorf("%d regions, want 7", n)
+	}
+	// The markers now carry the full gen, so the next run is quiet.
+	out, err = Run(context.Background(), cfg, acc)
+	if err != nil || len(m.prompts) != 0 {
+		t.Fatalf("second run: %v, %d calls", err, len(m.prompts))
+	}
+	for f, o := range byFile(out) {
+		if o.Reason != "" {
+			t.Errorf("second run, %s: %+v", f, o)
+		}
+	}
+	growCheck(t, cfg)
+}
+
+// M1: a body that passes every gate but lacks required non-executable
+// evidence is not sent to the model; the run says what is missing.
+func TestRenderMissingSignoffMakesNoModelCall(t *testing.T) {
+	cfg, m, spec := renderSetup(t, "skeleton.json", "spec/freeq-lite.md")
+	acc := accept(t, cfg, spec)
+	if _, err := Run(context.Background(), cfg, acc); err != nil {
+		t.Fatal(err)
+	}
+	m.prompts, m.paths = nil, nil
+	cfg.Policy = evidence.Policy{"low": {evidence.StaticAnalysis, evidence.HumanSignoff}}
+	out, err := Run(context.Background(), cfg, acc)
+	if err == nil || !strings.Contains(err.Error(), "needs [human_signoff] evidence") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(m.prompts) != 0 {
+		t.Errorf("%d model calls for evidence a model cannot produce", len(m.prompts))
+	}
+	last := out[len(out)-1]
+	if last.Regenerated || len(last.NeedsEvidence) != 1 || last.NeedsEvidence[0] != evidence.HumanSignoff {
+		t.Errorf("%+v", last)
+	}
+}

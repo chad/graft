@@ -107,14 +107,15 @@ func (cfg Config) renderTree(ctx context.Context, store records.Store, acc []Acc
 		return nilRet(err)
 	}
 	defer cleanup()
+	const imported = " (the records already carry the imported shapes; running again after the fix is safe)"
 	if err := render.Render(ctx, cfg.Sedum, cfg.Root, recPath); err != nil {
 		if errors.Is(err, render.ErrHandEdited) {
-			return nilRet(fmt.Errorf("pipeline: refusing to render before any model call: %w (restore the file, or revise the record)", err))
+			return nilRet(fmt.Errorf("pipeline: refusing to render before any model call: %w (restore the file, or revise the record)%s", err, imported))
 		}
-		return nilRet(fmt.Errorf("pipeline: --render: %w", err))
+		return nilRet(fmt.Errorf("pipeline: --render: %w%s", err, imported))
 	}
 	if err := cfg.Sedum.GrowCheck(ctx, cfg.Root); err != nil {
-		return nilRet(fmt.Errorf("pipeline: --render: grow --check after render: %w", err))
+		return nilRet(fmt.Errorf("pipeline: --render: grow --check after render: %w%s", err, imported))
 	}
 	by := map[string]recording.Region{}
 	for _, r := range planned.Regions {

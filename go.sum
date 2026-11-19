@@ -4,6 +4,8 @@ github.com/livecodelife/provenance v0.0.0-20261119144652-bdd6600cbcb3 h1:epgBcoZ
 github.com/livecodelife/provenance v0.0.0-20261119144652-bdd6600cbcb3/go.mod h1:JlhBsUu0Sv1BX7cEaOX24y0AyIpdm6MrSe7HTbeXmIo=
 github.com/livecodelife/provenance v0.0.0-20261119152142-b643989de248 h1:GQoeAG1CrV6LpUFkuszVIXHI8lRRwk1FxO2x9wkHjR4=
 github.com/livecodelife/provenance v0.0.0-20261119152142-b643989de248/go.mod h1:JlhBsUu0Sv1BX7cEaOX24y0AyIpdm6MrSe7HTbeXmIo=
+github.com/livecodelife/provenance v0.0.0-20261119152809-96db85298602 h1:M9b8g1hj39iv+xl0poK8Z6b33NjgRxALFFjIE77H62o=
+github.com/livecodelife/provenance v0.0.0-20261119152809-96db85298602/go.mod h1:JlhBsUu0Sv1BX7cEaOX24y0AyIpdm6MrSe7HTbeXmIo=
 golang.org/x/text v0.34.0 h1:oL/Qq0Kdaqxa1KbNeMKwQq0reLCCaFtqu2eNuSeNHbk=
 golang.org/x/text v0.34.0/go.mod h1:homfLqTYRFyVYemLBFl5GgL/DWEiH5wcsQ5gSh1yziA=
 gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405 h1:yhCVgyC4o1eVCa2tZl7eS0r+SDo693bJlVdllGtEeKM=

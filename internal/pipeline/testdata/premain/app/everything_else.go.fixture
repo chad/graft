@@ -1,0 +1,14 @@
+// sedum:anchor:header
+
+package main
+
+// sedum:anchor:imports
+
+// sedum:anchor:decls
+// sedum:setFunction {"v":2,"tier":"owned","record":"prov-2026-4ff4e426","gen":"sha256:a0388c39ff76e9dc17795c952a87c95b92d2f74cb3ba343bfb259dd9118dc7d1","pkg":"sha256:6589611adfb6618a7920e43f951a79901428192ea95c1084fde9f222aecd9537","id":{"file":"everything_else.go","name":"init"},"kwargs":"sha256:c043ad01ad621aab19d11739f00b5e2a0338c58dae92518e4f42b65cd2f47727","body":"sha256:1df2f22cc879491266f2128d2fa937bf78a17d0449a4b35408496538c3df1ceb"}
+// init is rendered by graft; its body is a convergence region (everything_elseInitBody).
+func init() {
+	everything_elseInitBody()
+}
+
+// /sedum:setFunction

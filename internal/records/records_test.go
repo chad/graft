@@ -407,3 +407,23 @@ func TestSkeletonHashCoversContentOnly(t *testing.T) {
 		t.Error("a record without a shape moved the skeleton hash")
 	}
 }
+
+func TestSetShapeIgnoresFormOnlyChanges(t *testing.T) {
+	s, err := OpenDir(copyFixture(t, "base"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ws := s.(ShapeStore)
+	if _, err := ws.SetShape(fixtureID, []any{shapeEntry("a.go", "line1\nline2")}, "import skeleton", "graft"); err != nil {
+		t.Fatal(err)
+	}
+	v, _ := s.Current(fixtureID)
+	// CRLF, a decomposed e and a different entry order are the same shape.
+	changed, err := ws.SetShape(fixtureID, []any{shapeEntry("a.go", "line1\r\nline2")}, "import skeleton", "graft")
+	if err != nil || changed {
+		t.Fatalf("CRLF-only change: %v %v", changed, err)
+	}
+	if again, _ := s.Current(fixtureID); again.Version != v.Version {
+		t.Error("a form-only change bumped the version")
+	}
+}

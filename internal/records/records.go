@@ -271,7 +271,9 @@ func (d *dirStore) SetShape(id string, shape []any, reason, author string) (bool
 		}
 		return false, fmt.Errorf("records: load %s: %w", id, err)
 	}
-	if record.Canonical(anyList(r.Shape)) == record.Canonical(anyList(shape)) {
+	// Compare what gen_hash covers (normalised, entries ordered by path), so an
+	// import that changes only CRLF or NFC form is not a new version.
+	if record.GenCanonical(record.GenInput{Shape: r.Shape}) == record.GenCanonical(record.GenInput{Shape: shape}) {
 		return false, nil
 	}
 	if reason == "" {
@@ -282,13 +284,6 @@ func (d *dirStore) SetShape(id string, shape []any, reason, author string) (bool
 		return false, fmt.Errorf("records: revise %s: %w", id, err)
 	}
 	return true, nil
-}
-
-func anyList(v []any) any {
-	if v == nil {
-		return []any{}
-	}
-	return v
 }
 
 // SkeletonHash is the hash of the whole skeleton the planned records carry:

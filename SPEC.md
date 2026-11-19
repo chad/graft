@@ -47,7 +47,9 @@ from the current version.
   covers it when present. A record without a shape hashes exactly as before.
   `--skeleton file.json` is an import: graft writes each entry into its
   imprint's shape as a new record version (only when it differs) and plans from
-  the records.
+  the records. **`skeleton.json` stays the source of truth for now:** a shape
+  revised in the records alone is overwritten by the next `--render` run that
+  passes a skeleton. Planning from the records alone is a follow-up (M11b).
 - Tiers: brief → blueprint → imprint. **Only imprints own code regions.**
 
 ## 4. Rendering and regions
