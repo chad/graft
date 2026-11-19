@@ -269,7 +269,13 @@ func Plan(in Input) (Planned, error) {
 		if strings.Join(paths, "\x00") != strings.Join(scope, "\x00") {
 			return Planned{}, fmt.Errorf("recording: %s affected_scope %v must equal its planned files %v, or grow --check checks nothing", id, scope, paths)
 		}
-		rec := Record{RecordID: id, Gen: pins[id].GenHash, Files: []RFile{}}
+		// sedum's markers carry the gen_hash its own provenance computes. Until
+		// sedum reads shape that is the hash without it (Pin.SedumGen).
+		sedumGen := pins[id].SedumGen
+		if sedumGen == "" {
+			sedumGen = pins[id].GenHash
+		}
+		rec := Record{RecordID: id, Gen: sedumGen, Files: []RFile{}}
 		var invs []Invocation
 		for _, f := range files {
 			rf, err := fileEntry(f.Path, gen, info)
