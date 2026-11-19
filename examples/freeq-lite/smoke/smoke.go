@@ -330,6 +330,17 @@ func generated(file, ext string) bool {
 	return err == nil && !strings.Contains(string(b), placeholder)
 }
 
+// heavyDirs are dependency directories the copy links rather than copies.
+var heavyDirs = map[string]bool{"node_modules": true, ".venv": true, "venv": true, "vendor": true}
+
+// linkDir symlinks dst to the directory src and tells the walk to skip it.
+func linkDir(src, dst string) error {
+	if err := os.Symlink(src, dst); err != nil {
+		return err
+	}
+	return filepath.SkipDir
+}
+
 // copyConverged copies the tree at src to dst, leaving out every section
 // that still holds the placeholder: <stem><ext> and <stem>_synth<ext> go
 // together. It returns the stems it left out. .git is skipped.
@@ -357,6 +368,14 @@ func copyConverged(src, dst, ext string) ([]string, error) {
 			if d.Name() == ".git" {
 				return filepath.SkipDir
 			}
+			if heavyDirs[d.Name()] && rel != "." {
+				// Dependencies, not sections: link instead of copying.
+				abs, err := filepath.Abs(p)
+				if err != nil {
+					return err
+				}
+				return linkDir(abs, filepath.Join(dst, rel))
+			}
 			return os.MkdirAll(filepath.Join(dst, rel), 0o755)
 		}
 		if !d.Type().IsRegular() {
@@ -372,7 +391,12 @@ func copyConverged(src, dst, ext string) ([]string, error) {
 		if err != nil {
 			return err
 		}
-		return os.WriteFile(filepath.Join(dst, rel), b, 0o644)
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		// Keep the mode, so an executable script stays executable.
+		return os.WriteFile(filepath.Join(dst, rel), b, info.Mode().Perm())
 	})
 	var out []string
 	for s := range skip {
