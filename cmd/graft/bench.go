@@ -284,7 +284,7 @@ func benchRun(args []string, stdout, stderr io.Writer) int {
 		ModelName: modelName, Gates: gates, Policy: evidence.Policy(cfg.Policy), Tier: cfg.Tier, Attempts: cfg.Attempts,
 		OracleArgv: []string{oracleBin}, Commit: commit, Dirty: dirty, Progress: stdout, Transcripts: *transcripts,
 		Sedum: sedum, Generators: gens, SedumVersion: sedumVer,
-		Visible: visible, Lang: profile,
+		Visible: visible, Lang: profile, Files: cfg.Files,
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

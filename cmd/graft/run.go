@@ -110,7 +110,11 @@ func runCmd(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "graft: config \"files\" has no effect with --render (the skeleton places files); remove it")
 		return 2
 	}
-	acc, err := pipeline.AcceptWith(*repo, drafts, "graft run", time.Now(), pipeline.AcceptOptions{Ext: profile.Ext, Files: cfg.Files})
+	opts := pipeline.AcceptOptions{Ext: profile.Ext, Files: cfg.Files}
+	if !*renderOn {
+		opts.Root = *root // plain mode: a new section never takes over an existing file
+	}
+	acc, err := pipeline.AcceptWith(*repo, drafts, "graft run", time.Now(), opts)
 	if err != nil {
 		fmt.Fprintf(stderr, "graft: %v\n", err)
 		return 2

@@ -97,43 +97,22 @@ func AcceptExt(repo string, drafts []drafter.Draft, author string, now time.Time
 // AcceptOptions are the per-tree choices Accept makes for new records.
 type AcceptOptions struct {
 	Ext string // source file extension (".go" when empty)
-	// Files places a section's region in a chosen file (relative to the
+	// Files places a new section's region in a chosen file (relative to the
 	// root), e.g. "http/dial_stats.go" in an existing repo whose packages
 	// live in directories. Keys are a section title, full ("wtf › Dial stats")
-	// or its last part ("Dial stats"). Sections not named get fileFor's name
-	// in the root. A record keeps its file once accepted.
+	// or, when unambiguous, its last part ("Dial stats"); a key naming no
+	// section is an error. Sections not named get fileFor's name in the root.
+	// A record keeps its file once accepted: naming a different file for it
+	// later is an error, not a silent no-op.
 	Files map[string]string
+	// Root is the code tree. When set, a new record's file must not exist
+	// yet (a section never takes over a hand-written file) and its path must
+	// not pass through a symlink.
+	Root string
 }
 
-// ErrBadFile: a configured section file that cannot be used.
+// ErrBadFile: a section file that cannot be used.
 var ErrBadFile = errors.New("pipeline: bad section file")
-
-// fileOf is the configured file for a section, if any.
-func (o AcceptOptions) fileOf(section string) (string, bool) {
-	if f, ok := o.Files[section]; ok {
-		return f, true
-	}
-	parts := strings.Split(section, " › ")
-	f, ok := o.Files[parts[len(parts)-1]]
-	return f, ok
-}
-
-// CheckFiles validates configured section files: clean, relative, inside the
-// root, with the language's extension, and no two sections in one file.
-func (o AcceptOptions) CheckFiles() error {
-	seen := map[string]string{}
-	for sec, f := range o.Files {
-		clean := path.Clean(f)
-		if f == "" || clean != f || path.IsAbs(f) || clean == ".." || strings.HasPrefix(clean, "../") || !strings.HasSuffix(f, o.ext()) {
-			return fmt.Errorf("%w: %q for %q must be a clean relative path ending in %s", ErrBadFile, f, sec, o.ext())
-		}
-		if other, ok := seen[f]; ok {
-			return fmt.Errorf("%w: %q is given to both %q and %q", ErrBadFile, f, other, sec)
-		}
-		seen[f] = sec
-	}
-	return nil
-}
 
 func (o AcceptOptions) ext() string {
 	if o.Ext == "" {
@@ -142,11 +121,138 @@ func (o AcceptOptions) ext() string {
 	return o.Ext
 }
 
-// AcceptWith is Accept with per-tree options.
-func AcceptWith(repo string, drafts []drafter.Draft, author string, now time.Time, opts AcceptOptions) ([]Accepted, error) {
-	if err := opts.CheckFiles(); err != nil {
+// lastPart is a section title's last " › " part.
+func lastPart(section string) string {
+	parts := strings.Split(section, " › ")
+	return parts[len(parts)-1]
+}
+
+// configured resolves every Files key to exactly one section: a full title
+// first, else a last part matching exactly one section.
+func (o AcceptOptions) configured(sections []string) (map[string]string, error) {
+	out := map[string]string{}
+	full := map[string]bool{}
+	byLast := map[string][]string{}
+	for _, s := range sections {
+		full[s] = true
+		byLast[lastPart(s)] = append(byLast[lastPart(s)], s)
+	}
+	keys := make([]string, 0, len(o.Files))
+	for k := range o.Files {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		sec := ""
+		switch {
+		case full[k]:
+			sec = k
+		case len(byLast[k]) == 1:
+			sec = byLast[k][0]
+		case len(byLast[k]) > 1:
+			return nil, fmt.Errorf("%w: key %q matches several sections (%s); use the full title", ErrBadFile, k, strings.Join(byLast[k], ", "))
+		default:
+			return nil, fmt.Errorf("%w: key %q names no section of the spec", ErrBadFile, k)
+		}
+		if _, dup := out[sec]; dup {
+			return nil, fmt.Errorf("%w: section %q is named twice in files", ErrBadFile, sec)
+		}
+		out[sec] = o.Files[k]
+	}
+	return out, nil
+}
+
+// checkPath: clean, relative, inside the tree, the language's extension, a
+// real file name, and no hidden component (.graft, .git, …).
+func (o AcceptOptions) checkPath(f string) error {
+	clean := path.Clean(f)
+	bad := f == "" || clean != f || path.IsAbs(f) || clean == ".." || strings.HasPrefix(clean, "../") ||
+		!strings.HasSuffix(f, o.ext()) || path.Base(f) == o.ext()
+	for _, c := range strings.Split(clean, "/") {
+		if strings.HasPrefix(c, ".") {
+			bad = true
+		}
+	}
+	if bad {
+		return fmt.Errorf("%w: %q must be a clean relative path to a %s file, with no hidden component", ErrBadFile, f, o.ext())
+	}
+	return nil
+}
+
+// checkFresh: under Root, a new record's file must not exist yet and its
+// path must not pass through a symlink.
+func (o AcceptOptions) checkFresh(f string) error {
+	if o.Root == "" {
+		return nil
+	}
+	cur := o.Root
+	for _, c := range strings.Split(f, "/") {
+		cur = filepath.Join(cur, c)
+		fi, err := os.Lstat(cur)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if fi.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("%w: %q passes through a symlink", ErrBadFile, f)
+		}
+	}
+	return fmt.Errorf("%w: %q already exists; a new section never takes over an existing (hand-written) file", ErrBadFile, f)
+}
+
+// place decides every draft's file before anything is written: an accepted
+// record keeps its file (a configured different one is an error); a new one
+// takes its configured file or fileFor's name, which must be valid, fresh
+// under Root, and not shared with any other section, accepted or new.
+func place(props []drafter.Proposal, idx *Index, opts AcceptOptions, ext string) ([]string, error) {
+	sections := make([]string, len(props))
+	for i, p := range props {
+		sections[i] = p.Draft.Section
+	}
+	conf, err := opts.configured(sections)
+	if err != nil {
 		return nil, err
 	}
+	owner := map[string]string{} // file -> section, across accepted records and this spec
+	for id, e := range idx.Records {
+		owner[e.File] = e.Section + " (" + id + ")"
+	}
+	files := make([]string, len(props))
+	for i, p := range props {
+		sec := p.Draft.Section
+		want, named := conf[sec]
+		if p.Kind != drafter.New {
+			if e, ok := idx.Records[p.RecordID]; ok {
+				if named && want != e.File {
+					return nil, fmt.Errorf("%w: %q is already placed in %s; moving a section is not supported (files names %s)", ErrBadFile, sec, e.File, want)
+				}
+				files[i] = e.File
+				continue
+			}
+		}
+		f := fileFor(sec, ext)
+		if named {
+			f = want
+		}
+		if err := opts.checkPath(f); err != nil {
+			return nil, err
+		}
+		if other, ok := owner[f]; ok {
+			return nil, fmt.Errorf("%w: %q for %q is already %s's file", ErrBadFile, f, sec, other)
+		}
+		if err := opts.checkFresh(f); err != nil {
+			return nil, err
+		}
+		owner[f] = sec
+		files[i] = f
+	}
+	return files, nil
+}
+
+// AcceptWith is Accept with per-tree options.
+func AcceptWith(repo string, drafts []drafter.Draft, author string, now time.Time, opts AcceptOptions) ([]Accepted, error) {
 	ext := opts.ext()
 	idx, err := LoadIndex(repo)
 	if err != nil {
@@ -167,6 +273,10 @@ func AcceptWith(repo string, drafts []drafter.Draft, author string, now time.Tim
 	if len(undecided) > 0 {
 		return nil, fmt.Errorf("%w:\n  %s", ErrUndecided, strings.Join(undecided, "\n  "))
 	}
+	files, err := place(props, idx, opts, ext)
+	if err != nil {
+		return nil, err
+	}
 	fs := &record.FilesStore{Root: repo}
 	var out []Accepted
 	for i, p := range props {
@@ -185,13 +295,7 @@ func AcceptWith(repo string, drafts []drafter.Draft, author string, now time.Tim
 		if !created {
 			before, _ = r.ContentHash(fs.Specs())
 		}
-		file := fileFor(d.Section, ext)
-		if f, ok := opts.fileOf(d.Section); ok {
-			file = f
-		}
-		if e, ok := idx.Records[id]; ok {
-			file = e.File // a record keeps its file
-		}
+		file := files[i]
 		r.Title = d.Section
 		r.Intent, r.Constraints = intent(d)
 		r.AffectedScope = []string{file}

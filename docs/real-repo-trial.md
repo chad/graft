@@ -2,6 +2,8 @@
 
 **Repo:** [benbjohnson/wtf](https://github.com/benbjohnson/wtf), a small but real Go web service. It has about 6,000 lines of non-test Go across the packages `wtf` (domain), `http` (gorilla/mux server, ego templates), `sqlite`, `inmem` and `cmd`. The trial ran on a scratch clone; nothing upstream was touched. Model: Claude Sonnet, n=1 per attempt (anecdotes). Cost: about $1.
 
+**Versions:** wtf at upstream `05bc90c`. Attempt A used graft as of #29 (`d7b8ddf`); attempt B used #33's first version (`8e7065d`). No transcripts were kept, so the attempts are reported from graft's output and the trees they left.
+
 **The feature:** one new spec section, "Dial stats". It defines `GET /dials/{id}/stats`, returning JSON with members, min, max and mean of the dial's membership values. Visibility and 404s must match the dial view.
 
 ## Before anything ran
@@ -16,8 +18,13 @@ The service needs `make`, which generates Go from its ego templates, before it b
 
 ## Attempt B: with what a real repo needs
 Three things were supplied by the human, the way a user of graft would:
-1. **Placement:** a new config key, `"files": {"Dial stats": "http/dial_stats.go"}`, added in this PR.
-2. **A wiring hook:** one hand-written line in `registerDialRoutes`, `s.registerDialStatsRoutes(r)`. The conventions name the function the section must define.
+1. **Placement:** a new config key, `"files": {"Dial stats": "http/dial_stats.go"}`, added in #33. Placement is checked before anything is written:
+   - the path must be clean, relative, have the right extension and no hidden component, and not pass through a symlink;
+   - it must not already exist, since a section never takes over a hand-written file;
+   - it must not be shared with any other section;
+   - every key must name exactly one section;
+   - once a record is accepted its file is sticky, and naming a different one is an error.
+2. **A wiring hook:** one line in `registerDialRoutes`, `s.registerDialStatsRoutes(r)`, **added and committed by hand before graft ran**. Until graft generates the function, that line leaves the repo not building. The conventions name the function the section must define.
 3. **An acceptance test:** a hand-written `http/dial_stats_test.go` (stats for 3 members, an empty dial, an unknown dial → 404), run by the `go test ./...` gate.
 
 **Result:**

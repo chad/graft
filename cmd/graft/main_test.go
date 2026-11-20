@@ -95,3 +95,16 @@ func TestRunLanguageProfileRefusals(t *testing.T) {
 		}
 	}
 }
+
+func TestRunFilesRefusedWithRender(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(dir+"/spec.md", []byte("# T\n\n## Core\n\n- It must run\n"), 0o644)
+	os.WriteFile(dir+"/conv.md", []byte("c\n"), 0o644)
+	os.WriteFile(dir+"/graft.json", []byte(`{"tier":"low","conventions":"conv.md","model":{"argv":["true"]},"policy":{"low":["static_analysis"]},
+"gates":[{"label":"g","argv":["true"],"kind":"static_analysis"}],"files":{"Core":"x/core.go"}}`), 0o644)
+	var out, errb bytes.Buffer
+	code := run([]string{"run", "--config", dir + "/graft.json", "--spec", dir + "/spec.md", "--repo", dir + "/r", "--root", dir + "/a", "--accept", "--render"}, &out, &errb)
+	if code != 2 || !strings.Contains(errb.String(), "has no effect with --render") {
+		t.Fatalf("exit %d, stderr %q", code, errb.String())
+	}
+}
