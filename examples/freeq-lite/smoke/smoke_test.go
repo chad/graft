@@ -218,3 +218,18 @@ func TestCopyKeepsModeAndLinksDependencies(t *testing.T) {
 		t.Fatal("linked dependency not reachable")
 	}
 }
+
+func TestCopyKeepsSymlinkedDependencyDir(t *testing.T) {
+	src, dst, store := t.TempDir(), filepath.Join(t.TempDir(), "tree"), t.TempDir()
+	os.MkdirAll(filepath.Join(store, "dep"), 0o755)
+	os.WriteFile(filepath.Join(store, "dep", "index.js"), []byte("x"), 0o644)
+	if err := os.Symlink(store, filepath.Join(src, "node_modules")); err != nil {
+		t.Skip(err)
+	}
+	if _, err := copyConverged(src, dst, ".go"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dst, "node_modules", "dep", "index.js")); err != nil {
+		t.Fatalf("a symlinked node_modules (pnpm) must stay reachable in the copy: %v", err)
+	}
+}

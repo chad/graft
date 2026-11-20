@@ -1,0 +1,47 @@
+package main
+
+import "strings"
+
+// messagesPrivmsg handles PRIVMSG. Unknown commands and the not-registered
+// rule are handled by running.go's dispatch, so only registered clients get here.
+func messagesPrivmsg(s *Server, c *Client, m Message) {
+	if len(m.Params) < 2 || m.Params[1] == "" {
+		s.Reply(c, "412", "No text to send")
+		return
+	}
+	target, text := m.Params[0], m.Params[1]
+	key := strings.ToLower(target)
+
+	if strings.HasPrefix(target, "#") {
+		ch := s.channels[key]
+		if ch == nil {
+			c.Send(":" + serverName + " 401 " + c.Nick + " " + target + " :No such nick/channel")
+			return
+		}
+		if !c.channels[key] {
+			c.Send(":" + serverName + " 404 " + c.Nick + " " + target + " :Cannot send to channel")
+			return
+		}
+		line := ":" + c.Prefix() + " PRIVMSG " + ch.name + " :" + text
+		for _, mem := range ch.members {
+			if mem != c {
+				mem.Send(line)
+			}
+		}
+		return
+	}
+
+	dst := s.clients[key]
+	if dst == nil || !dst.Registered {
+		c.Send(":" + serverName + " 401 " + c.Nick + " " + target + " :No such nick/channel")
+		return
+	}
+	if dst == c {
+		return
+	}
+	dst.Send(":" + c.Prefix() + " PRIVMSG " + dst.Nick + " :" + text)
+}
+
+func messagesInitBody() {
+	handlers["PRIVMSG"] = messagesPrivmsg
+}

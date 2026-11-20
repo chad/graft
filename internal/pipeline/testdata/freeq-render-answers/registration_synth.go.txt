@@ -1,0 +1,114 @@
+package main
+
+import "strings"
+
+// registrationValidNick: 1 to 16 chars, starts with a letter, then letters, digits, '_' or '-'.
+func registrationValidNick(n string) bool {
+	if len(n) < 1 || len(n) > 16 {
+		return false
+	}
+	for i := 0; i < len(n); i++ {
+		ch := n[i]
+		letter := (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
+		if i == 0 {
+			if !letter {
+				return false
+			}
+			continue
+		}
+		if !letter && !(ch >= '0' && ch <= '9') && ch != '_' && ch != '-' {
+			return false
+		}
+	}
+	return true
+}
+
+// registrationComplete sends the welcome once both NICK and USER are in.
+func registrationComplete(s *Server, c *Client) {
+	if c.Registered || c.Nick == "" || c.User == "" {
+		return
+	}
+	c.Registered = true
+	s.Reply(c, "001", "Welcome to freeq-lite "+c.Nick)
+}
+
+// registrationRename changes a registered client's nick and informs
+// the user and everyone sharing a channel, each once.
+func registrationRename(s *Server, c *Client, nn string) {
+	oldPrefix := c.Prefix()
+	oldKey := strings.ToLower(c.Nick)
+	newKey := strings.ToLower(nn)
+	if s.clients[oldKey] == c {
+		delete(s.clients, oldKey)
+	}
+	s.clients[newKey] = c
+	c.Nick = nn
+	targets := map[*Client]bool{c: true}
+	for name := range c.channels {
+		ch := s.channels[name]
+		if ch == nil {
+			continue
+		}
+		for k, m := range ch.members {
+			if m == c {
+				delete(ch.members, k)
+			}
+		}
+		ch.members[newKey] = c
+		for _, m := range ch.members {
+			targets[m] = true
+		}
+	}
+	line := ":" + oldPrefix + " NICK " + nn
+	for t := range targets {
+		t.Send(line)
+	}
+}
+
+func registrationNick(s *Server, c *Client, m Message) {
+	if len(m.Params) < 1 || m.Params[0] == "" {
+		s.Reply(c, "431", "No nickname given")
+		return
+	}
+	nn := m.Params[0]
+	if !registrationValidNick(nn) {
+		c.Send(":" + serverName + " 432 * " + nn + " :Erroneous nickname")
+		return
+	}
+	key := strings.ToLower(nn)
+	if other, used := s.clients[key]; used && other != c {
+		c.Send(":" + serverName + " 433 * " + nn + " :Nickname is already in use")
+		return
+	}
+	if c.Registered {
+		registrationRename(s, c, nn)
+		return
+	}
+	if c.Nick != "" {
+		old := strings.ToLower(c.Nick)
+		if s.clients[old] == c {
+			delete(s.clients, old)
+		}
+	}
+	c.Nick = nn
+	s.clients[key] = c
+	registrationComplete(s, c)
+}
+
+func registrationUser(s *Server, c *Client, m Message) {
+	if c.Registered {
+		s.Reply(c, "462", "You may not reregister")
+		return
+	}
+	if len(m.Params) < 4 {
+		s.Reply(c, "461", "Not enough parameters")
+		return
+	}
+	c.User = m.Params[0]
+	registrationComplete(s, c)
+}
+
+func registrationInitBody() {
+	handlers["NICK"] = registrationNick
+	handlers["USER"] = registrationUser
+}

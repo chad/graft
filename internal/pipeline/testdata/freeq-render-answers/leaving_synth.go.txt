@@ -1,0 +1,20 @@
+package main
+
+// leavingQuit handles QUIT. Disconnect (running_synth.go) removes the client
+// from the nick table and every channel, tells channel peers once, and closes
+// the queue so the writer flushes the ERROR line before closing the connection.
+// The read loop sees the client is gone and stops; its final Disconnect is a no-op.
+func leavingQuit(s *Server, c *Client, m Message) {
+	reason := "Client quit"
+	if len(m.Params) > 0 {
+		reason = m.Params[0]
+	}
+	c.Send("ERROR :Closing link")
+	s.Disconnect(c, reason)
+}
+
+func leavingInitBody() {
+	handlers["QUIT"] = leavingQuit
+	// A connection that drops without QUIT is handled by serve in running_synth.go,
+	// which calls Disconnect with "Connection closed".
+}

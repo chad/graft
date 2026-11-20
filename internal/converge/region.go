@@ -56,6 +56,10 @@ var (
 	ErrDuplicateRegion = errors.New("converge: two synthesis regions for one record in a file")
 )
 
+// HasRegion reports whether src holds a graft synthesis region (a begin
+// marker), i.e. whether the file is model-written in part or whole.
+func HasRegion(src string) bool { return strings.Contains(src, beginTag) }
+
 // HashBody is the hash a marker stores for a region body.
 func HashBody(body string) string {
 	sum := sha256.Sum256([]byte(body))

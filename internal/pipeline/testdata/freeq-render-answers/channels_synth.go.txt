@@ -1,0 +1,107 @@
+package main
+
+import (
+	"sort"
+	"strings"
+)
+
+// channelsValidName: starts with '#', 2 to 32 chars, no spaces, commas or control characters.
+func channelsValidName(n string) bool {
+	if len(n) < 2 || len(n) > 32 || n[0] != '#' {
+		return false
+	}
+	for i := 0; i < len(n); i++ {
+		ch := n[i]
+		if ch <= 0x20 || ch == 0x7f || ch == ',' {
+			return false
+		}
+	}
+	return true
+}
+
+// channelsSendNames sends the 353 and 366 lines for a channel name to c.
+func channelsSendNames(s *Server, c *Client, name string) {
+	display := name
+	if ch := s.channels[strings.ToLower(name)]; ch != nil {
+		display = ch.name
+		nicks := make([]string, 0, len(ch.members))
+		for _, m := range ch.members {
+			nicks = append(nicks, m.Nick)
+		}
+		sort.Strings(nicks)
+		c.Send(":" + serverName + " 353 " + c.Nick + " = " + display + " :" + strings.Join(nicks, " "))
+	}
+	c.Send(":" + serverName + " 366 " + c.Nick + " " + display + " :End of /NAMES list")
+}
+
+func channelsJoin(s *Server, c *Client, m Message) {
+	if len(m.Params) < 1 {
+		s.Reply(c, "461", "Not enough parameters")
+		return
+	}
+	name := m.Params[0]
+	if !channelsValidName(name) {
+		c.Send(":" + serverName + " 403 " + c.Nick + " " + name + " :No such channel")
+		return
+	}
+	key := strings.ToLower(name)
+	if c.channels[key] {
+		return
+	}
+	ch := s.channels[key]
+	if ch == nil {
+		ch = &channel{name: name, members: map[string]*Client{}}
+		s.channels[key] = ch
+	}
+	ch.members[strings.ToLower(c.Nick)] = c
+	c.channels[key] = true
+	line := ":" + c.Prefix() + " JOIN " + ch.name
+	for _, mem := range ch.members {
+		mem.Send(line)
+	}
+	channelsSendNames(s, c, ch.name)
+}
+
+func channelsPart(s *Server, c *Client, m Message) {
+	if len(m.Params) < 1 {
+		s.Reply(c, "461", "Not enough parameters")
+		return
+	}
+	name := m.Params[0]
+	key := strings.ToLower(name)
+	ch := s.channels[key]
+	if ch == nil || !c.channels[key] {
+		c.Send(":" + serverName + " 442 " + c.Nick + " " + name + " :You're not on that channel")
+		return
+	}
+	line := ":" + c.Prefix() + " PART " + ch.name
+	if len(m.Params) > 1 {
+		line += " :" + m.Params[1]
+	}
+	for _, mem := range ch.members {
+		mem.Send(line)
+	}
+	for k, mem := range ch.members {
+		if mem == c {
+			delete(ch.members, k)
+		}
+	}
+	delete(c.channels, key)
+	if len(ch.members) == 0 {
+		delete(s.channels, key)
+	}
+}
+
+func channelsNames(s *Server, c *Client, m Message) {
+	if len(m.Params) < 1 {
+		s.Reply(c, "461", "Not enough parameters")
+		return
+	}
+	channelsSendNames(s, c, m.Params[0])
+}
+
+func channelsInitBody() {
+	handlers["JOIN"] = channelsJoin
+	handlers["PART"] = channelsPart
+	handlers["NAMES"] = channelsNames
+}

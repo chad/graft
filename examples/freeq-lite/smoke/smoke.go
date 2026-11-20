@@ -378,6 +378,15 @@ func copyConverged(src, dst, ext string) ([]string, error) {
 			}
 			return os.MkdirAll(filepath.Join(dst, rel), 0o755)
 		}
+		if d.Type()&os.ModeSymlink != 0 {
+			// Keep links (a pnpm-style node_modules is one), pointing at
+			// the same absolute target as in the tree.
+			target, err := filepath.EvalSymlinks(p)
+			if err != nil {
+				return nil // dangling: the tree could not use it either
+			}
+			return os.Symlink(target, filepath.Join(dst, rel))
+		}
 		if !d.Type().IsRegular() {
 			return nil
 		}

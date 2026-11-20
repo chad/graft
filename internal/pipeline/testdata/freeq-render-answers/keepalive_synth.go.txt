@@ -1,0 +1,11 @@
+package main
+
+func keepaliveInitBody() {
+	handlers["PING"] = func(s *Server, c *Client, m Message) {
+		token := ""
+		if len(m.Params) > 0 {
+			token = m.Params[0]
+		}
+		c.Send(":" + serverName + " PONG " + serverName + " :" + token)
+	}
+}
