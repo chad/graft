@@ -704,3 +704,16 @@ func TestConvergeCheckCommitEquivalent(t *testing.T) {
 		t.Fatalf("err = %v applied = %v", err, d.Applied)
 	}
 }
+
+func TestHasRegion(t *testing.T) {
+	for src, want := range map[string]bool{
+		"// graft:synth:begin {\"record\":\"x\"}\npackage main\n": true,
+		"package main\n\t# graft:synth:begin {}\n":                true,
+		"package main\nconst t = \"graft:synth:begin {}\"\n":      false,
+		"package main\n": false,
+	} {
+		if got := HasRegion(src); got != want {
+			t.Errorf("HasRegion(%q) = %v, want %v", src, got, want)
+		}
+	}
+}

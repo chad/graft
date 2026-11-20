@@ -4,13 +4,15 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"strings"
+	"regexp"
 	"testing"
 	"time"
 
 	"github.com/chad/graft/internal/converge"
 	"github.com/chad/graft/internal/evidence"
 )
+
+var smokeSummary = regexp.MustCompile(`smoke: (\d+)/(\d+) checks passed`)
 
 // recordedModel answers each region with the body a real --render run wrote
 // for it (testdata/freeq-render-answers, from a sonnet run that scored 47/47
@@ -53,6 +55,9 @@ func TestRunRenderWithSmokeGate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%v\n%+v", err, out)
 	}
+	if len(out) != 7 {
+		t.Fatalf("%d outcomes, want 7 regions", len(out))
+	}
 	for _, o := range out {
 		if !o.Applied || o.Attempts > 1 {
 			t.Errorf("%s: applied=%v attempts=%d last failure: %s", o.Section, o.Applied, o.Attempts, firstLine(o.LastFailure))
@@ -63,8 +68,12 @@ func TestRunRenderWithSmokeGate(t *testing.T) {
 	}
 	// Every eval verdict must come from a smoke run that actually ran checks.
 	for _, e := range cfg.Log.All() {
-		if e.Kind == evidence.Eval && (e.Verdict != evidence.Pass || !strings.Contains(e.Detail, "checks passed")) {
-			t.Errorf("eval evidence: %s %s", e.Verdict, firstLine(e.Detail))
+		if e.Kind != evidence.Eval {
+			continue
+		}
+		m := smokeSummary.FindStringSubmatch(e.Detail)
+		if e.Verdict != evidence.Pass || m == nil || m[1] == "0" || m[1] != m[2] {
+			t.Errorf("eval evidence must be a passing smoke run with checks: %s %s", e.Verdict, firstLine(e.Detail))
 		}
 	}
 }

@@ -251,6 +251,30 @@ func linkDir(src, dst string) error {
 	return filepath.SkipDir
 }
 
+// copyLink recreates the link at p (inside the tree rooted at srcRoot) as
+// dst. A link into the tree stays relative, so the copy never reads the
+// original tree (where left-out sections still exist); a link out of the
+// tree (a pnpm-style node_modules) keeps its absolute target. Dangling links
+// and loops are dropped: the tree could not use them either.
+func copyLink(srcRoot, p, dst string) error {
+	target, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		return nil
+	}
+	dir, err := filepath.EvalSymlinks(filepath.Dir(p))
+	if err != nil {
+		return nil
+	}
+	if in, err := filepath.Rel(srcRoot, target); err == nil && in != ".." && !strings.HasPrefix(in, ".."+string(filepath.Separator)) {
+		rel, err := filepath.Rel(dir, target)
+		if err != nil {
+			return nil
+		}
+		return os.Symlink(rel, dst)
+	}
+	return os.Symlink(target, dst)
+}
+
 // copyConverged copies the tree at src to dst, leaving out every section
 // that still holds the placeholder: <stem><ext> and <stem>_synth<ext> go
 // together. It returns the stems it left out. .git is skipped.
@@ -268,6 +292,13 @@ func copyConverged(src, dst, ext string) ([]string, error) {
 		if strings.Contains(string(b), placeholder) {
 			skip[strings.TrimSuffix(strings.TrimSuffix(filepath.Base(n), ext), "_synth")] = true
 		}
+	}
+	srcRoot, err := filepath.Abs(src)
+	if err == nil {
+		srcRoot, err = filepath.EvalSymlinks(srcRoot)
+	}
+	if err != nil {
+		return nil, err
 	}
 	err = filepath.WalkDir(src, func(p string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -288,23 +319,18 @@ func copyConverged(src, dst, ext string) ([]string, error) {
 			}
 			return os.MkdirAll(filepath.Join(dst, rel), 0o755)
 		}
-		if d.Type()&os.ModeSymlink != 0 {
-			// Keep links (a pnpm-style node_modules is one), pointing at
-			// the same absolute target as in the tree.
-			target, err := filepath.EvalSymlinks(p)
-			if err != nil {
-				return nil // dangling: the tree could not use it either
-			}
-			return os.Symlink(target, filepath.Join(dst, rel))
-		}
-		if !d.Type().IsRegular() {
-			return nil
-		}
+		// A left-out section stays out whether its files are regular files or links.
 		if filepath.Dir(rel) == "." && strings.HasSuffix(rel, ext) {
 			stem := strings.TrimSuffix(strings.TrimSuffix(rel, ext), "_synth")
 			if skip[stem] {
 				return nil
 			}
+		}
+		if d.Type()&os.ModeSymlink != 0 {
+			return copyLink(srcRoot, p, filepath.Join(dst, rel))
+		}
+		if !d.Type().IsRegular() {
+			return nil
 		}
 		b, err := os.ReadFile(p)
 		if err != nil {

@@ -233,3 +233,33 @@ func TestCopyKeepsSymlinkedDependencyDir(t *testing.T) {
 		t.Fatalf("a symlinked node_modules (pnpm) must stay reachable in the copy: %v", err)
 	}
 }
+
+// Links in the copy: a left-out section's linked file stays out, and a link
+// inside the tree stays relative (never reaching back into the original).
+func TestCopyLinksRespectLeftOutSectionsAndStayInside(t *testing.T) {
+	src, dst := t.TempDir(), filepath.Join(t.TempDir(), "tree")
+	os.MkdirAll(filepath.Join(src, "real"), 0o755)
+	os.WriteFile(filepath.Join(src, "real", "x_synth.go"), []byte("package main\n// graft: not converged\n"), 0o644)
+	os.WriteFile(filepath.Join(src, "real", "data.txt"), []byte("d"), 0o644)
+	if err := os.Symlink(filepath.Join("real", "x_synth.go"), filepath.Join(src, "x_synth.go")); err != nil {
+		t.Skip(err)
+	}
+	os.Symlink(filepath.Join("real", "data.txt"), filepath.Join(src, "data.txt"))
+	dropped, err := copyConverged(src, dst, ".go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(dropped) != 1 || dropped[0] != "x" {
+		t.Fatalf("dropped %v", dropped)
+	}
+	if _, err := os.Lstat(filepath.Join(dst, "x_synth.go")); err == nil {
+		t.Fatal("a left-out section's symlinked file must not be copied")
+	}
+	l, err := os.Readlink(filepath.Join(dst, "data.txt"))
+	if err != nil || filepath.IsAbs(l) {
+		t.Fatalf("in-tree link must stay relative: %q %v", l, err)
+	}
+	if b, err := os.ReadFile(filepath.Join(dst, "data.txt")); err != nil || string(b) != "d" {
+		t.Fatalf("in-tree link must resolve inside the copy: %q %v", b, err)
+	}
+}
