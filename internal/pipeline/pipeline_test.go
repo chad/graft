@@ -282,3 +282,26 @@ func TestPythonProfile(t *testing.T) {
 		t.Fatal("a python prompt must not ask for a package clause")
 	}
 }
+
+func TestSectionFilesPlaceRegions(t *testing.T) {
+	cfg, root := setup(t)
+	opts := AcceptOptions{Files: map[string]string{"Extra": "extra/twice.go"}}
+	acc, err := AcceptWith(cfg.Repo, drafter.Drafts(spec), "test", time.Now(), opts)
+	if err != nil || acc[0].Entry.File != "core.go" || acc[1].Entry.File != "extra/twice.go" {
+		t.Fatalf("%v %+v", err, acc)
+	}
+	// Once accepted, a record keeps its file even if the option changes.
+	acc2, err := AcceptWith(cfg.Repo, drafter.Drafts(spec), "test", time.Now(), AcceptOptions{})
+	if err != nil || acc2[1].Entry.File != "extra/twice.go" {
+		t.Fatalf("%v %+v", err, acc2)
+	}
+	_ = root
+	for _, bad := range []map[string]string{
+		{"Extra": "../x.go"}, {"Extra": "/abs.go"}, {"Extra": "x.py"}, {"Extra": "a//b.go"},
+		{"Core": "same.go", "Extra": "same.go"},
+	} {
+		if _, err := AcceptWith(t.TempDir(), drafter.Drafts(spec), "test", time.Now(), AcceptOptions{Files: bad}); !errors.Is(err, ErrBadFile) {
+			t.Errorf("%v: %v", bad, err)
+		}
+	}
+}

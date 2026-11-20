@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -90,6 +91,63 @@ func Accept(repo string, drafts []drafter.Draft, author string, now time.Time) (
 
 // AcceptExt is Accept for a target language whose source files end in ext.
 func AcceptExt(repo string, drafts []drafter.Draft, author string, now time.Time, ext string) ([]Accepted, error) {
+	return AcceptWith(repo, drafts, author, now, AcceptOptions{Ext: ext})
+}
+
+// AcceptOptions are the per-tree choices Accept makes for new records.
+type AcceptOptions struct {
+	Ext string // source file extension (".go" when empty)
+	// Files places a section's region in a chosen file (relative to the
+	// root), e.g. "http/dial_stats.go" in an existing repo whose packages
+	// live in directories. Keys are a section title, full ("wtf › Dial stats")
+	// or its last part ("Dial stats"). Sections not named get fileFor's name
+	// in the root. A record keeps its file once accepted.
+	Files map[string]string
+}
+
+// ErrBadFile: a configured section file that cannot be used.
+var ErrBadFile = errors.New("pipeline: bad section file")
+
+// fileOf is the configured file for a section, if any.
+func (o AcceptOptions) fileOf(section string) (string, bool) {
+	if f, ok := o.Files[section]; ok {
+		return f, true
+	}
+	parts := strings.Split(section, " › ")
+	f, ok := o.Files[parts[len(parts)-1]]
+	return f, ok
+}
+
+// CheckFiles validates configured section files: clean, relative, inside the
+// root, with the language's extension, and no two sections in one file.
+func (o AcceptOptions) CheckFiles() error {
+	seen := map[string]string{}
+	for sec, f := range o.Files {
+		clean := path.Clean(f)
+		if f == "" || clean != f || path.IsAbs(f) || clean == ".." || strings.HasPrefix(clean, "../") || !strings.HasSuffix(f, o.ext()) {
+			return fmt.Errorf("%w: %q for %q must be a clean relative path ending in %s", ErrBadFile, f, sec, o.ext())
+		}
+		if other, ok := seen[f]; ok {
+			return fmt.Errorf("%w: %q is given to both %q and %q", ErrBadFile, f, other, sec)
+		}
+		seen[f] = sec
+	}
+	return nil
+}
+
+func (o AcceptOptions) ext() string {
+	if o.Ext == "" {
+		return ".go"
+	}
+	return o.Ext
+}
+
+// AcceptWith is Accept with per-tree options.
+func AcceptWith(repo string, drafts []drafter.Draft, author string, now time.Time, opts AcceptOptions) ([]Accepted, error) {
+	if err := opts.CheckFiles(); err != nil {
+		return nil, err
+	}
+	ext := opts.ext()
 	idx, err := LoadIndex(repo)
 	if err != nil {
 		return nil, err
@@ -128,6 +186,9 @@ func AcceptExt(repo string, drafts []drafter.Draft, author string, now time.Time
 			before, _ = r.ContentHash(fs.Specs())
 		}
 		file := fileFor(d.Section, ext)
+		if f, ok := opts.fileOf(d.Section); ok {
+			file = f
+		}
 		if e, ok := idx.Records[id]; ok {
 			file = e.File // a record keeps its file
 		}

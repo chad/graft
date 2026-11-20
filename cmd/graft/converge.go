@@ -34,6 +34,9 @@ type convergeConfig struct {
 	Attempts    int      `json:"attempts"`
 	Module      string   `json:"module"`
 	Skeleton    string   `json:"skeleton"` // path, relative to the config file (graft run --render)
+	// Files places sections' regions in chosen files (graft run, plain mode):
+	// section title (or its last part) → path relative to the root.
+	Files map[string]string `json:"files"`
 	// Language is the target language profile; absent means Go.
 	Language *lang.Profile `json:"language"`
 
@@ -55,7 +58,7 @@ func loadConvergeConfig(path string) (convergeConfig, []converge.Gate, error) {
 	// encoding/json alone is not strict: it matches keys case-insensitively,
 	// lets a duplicate key win silently, accepts null and ignores trailing data.
 	if err := strictCheck(b, map[string][]string{
-		"":         {"policy", "gates", "model", "conventions", "visible", "tier", "attempts", "module", "skeleton", "language"},
+		"":         {"policy", "gates", "model", "conventions", "visible", "tier", "attempts", "module", "skeleton", "language", "files"},
 		"language": {"name", "ext", "fence", "comment", "preamble", "bootstrap", "build", "run"},
 		"gates[]":  {"label", "argv", "kind", "timeout_sec"},
 		"model":    {"argv", "timeout_sec"},
