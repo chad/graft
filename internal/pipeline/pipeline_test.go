@@ -356,3 +356,17 @@ func TestSectionInSubpackageConverges(t *testing.T) {
 		t.Fatalf("%v\n%s", err, b)
 	}
 }
+
+func TestSectionFilesNitRefusals(t *testing.T) {
+	if _, err := AcceptWith(t.TempDir(), drafter.Drafts(spec), "test", time.Now(), AcceptOptions{Files: map[string]string{"Extra": `a\b.go`}}); !errors.Is(err, ErrBadFile) {
+		t.Errorf("backslash path: %v", err)
+	}
+	twoExtras := "# T\n\n## A\n\n### Extra\n\n- It must do a\n\n## B\n\n### Extra\n\n- It must do b\n"
+	_, err := AcceptWith(t.TempDir(), drafter.Drafts(twoExtras), "test", time.Now(), AcceptOptions{})
+	if !errors.Is(err, ErrBadFile) || !strings.Contains(err.Error(), "full title") {
+		t.Errorf("default-name collision must point at files and full titles: %v", err)
+	}
+	if err := (AcceptOptions{Files: map[string]string{"Nope": "n.go"}}).CheckConfigured(drafter.Drafts(spec)); !errors.Is(err, ErrBadFile) {
+		t.Errorf("dry-run check: %v", err)
+	}
+}

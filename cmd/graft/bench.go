@@ -155,6 +155,12 @@ func benchRun(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "graft: %v\n", err)
 		return 2
 	}
+	for _, a := range arms {
+		if a == bench.ArmGraftRender && len(cfg.Files) > 0 {
+			fmt.Fprintln(stderr, "graft: config \"files\" has no effect on the graft-render arm (the skeleton places files); drop the arm or the key")
+			return 2
+		}
+	}
 	oracleSrc, err := dirSource(filepath.Join(base, cf.Oracle))
 	if err != nil {
 		fmt.Fprintf(stderr, "graft: oracle: %v\n", err)

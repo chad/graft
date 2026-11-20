@@ -98,10 +98,11 @@ func AcceptExt(repo string, drafts []drafter.Draft, author string, now time.Time
 type AcceptOptions struct {
 	Ext string // source file extension (".go" when empty)
 	// Files places a new section's region in a chosen file (relative to the
-	// root), e.g. "http/dial_stats.go" in an existing repo whose packages
-	// live in directories. Keys are a section title, full ("wtf › Dial stats")
-	// or, when unambiguous, its last part ("Dial stats"); a key naming no
-	// section is an error. Sections not named get fileFor's name in the root.
+	// root, forward slashes), e.g. "http/dial_stats.go" in an existing repo
+	// whose packages live in directories. A key is a section's full title,
+	// including the top heading ("wtf › API › Dial stats"), or, when
+	// unambiguous, its last part only ("Dial stats"); a middle form
+	// ("API › Dial stats") or a key naming no section is an error. Sections not named get fileFor's name in the root.
 	// A record keeps its file once accepted: naming a different file for it
 	// later is an error, not a silent no-op.
 	Files map[string]string
@@ -162,11 +163,30 @@ func (o AcceptOptions) configured(sections []string) (map[string]string, error) 
 	return out, nil
 }
 
-// checkPath: clean, relative, inside the tree, the language's extension, a
-// real file name, and no hidden component (.graft, .git, …).
+// CheckConfigured checks the Files keys and paths against a spec's drafts,
+// without the records or the tree: what a dry run can say.
+func (o AcceptOptions) CheckConfigured(drafts []drafter.Draft) error {
+	sections := make([]string, len(drafts))
+	for i, d := range drafts {
+		sections[i] = d.Section
+	}
+	conf, err := o.configured(sections)
+	if err != nil {
+		return err
+	}
+	for _, f := range conf {
+		if err := o.checkPath(f); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// checkPath: clean, relative (forward slashes only), inside the tree, the
+// language's extension, a real file name, and no hidden component.
 func (o AcceptOptions) checkPath(f string) error {
 	clean := path.Clean(f)
-	bad := f == "" || clean != f || path.IsAbs(f) || clean == ".." || strings.HasPrefix(clean, "../") ||
+	bad := f == "" || strings.Contains(f, "\\") || clean != f || path.IsAbs(f) || clean == ".." || strings.HasPrefix(clean, "../") ||
 		!strings.HasSuffix(f, o.ext()) || path.Base(f) == o.ext()
 	for _, c := range strings.Split(clean, "/") {
 		if strings.HasPrefix(c, ".") {
@@ -240,7 +260,11 @@ func place(props []drafter.Proposal, idx *Index, opts AcceptOptions, ext string)
 			return nil, err
 		}
 		if other, ok := owner[f]; ok {
-			return nil, fmt.Errorf("%w: %q for %q is already %s's file", ErrBadFile, f, sec, other)
+			hint := ""
+			if !named {
+				hint = "; place one of them with \"files\" in graft.json, keyed by its full title"
+			}
+			return nil, fmt.Errorf("%w: %q for %q is already %s's file%s", ErrBadFile, f, sec, other, hint)
 		}
 		if err := opts.checkFresh(f); err != nil {
 			return nil, err
