@@ -23,6 +23,8 @@ file names and extensions from `sedum convergence render`. A skeleton may name
 its generator package (`"generator": "typescript"`); it defaults to the
 profile's name. This needs a sedum that has `sedum convergence`.
 
+**Existing repos.** In a repo whose packages live in directories, place a section's region with `"files": {"<section>": "pkg/file.go"}` in `graft.json`. See [docs/real-repo-trial.md](docs/real-repo-trial.md) for a trial in a real Go service, and for what a user still has to supply: placement, a wiring hook and an acceptance test.
+
 Examples: [`examples/freeq-lite`](examples/freeq-lite) (Go: spec, smoke suite,
 held-out oracle, bench), [`examples/freeq-lite-py`](examples/freeq-lite-py)
 (Python), [`examples/freeq-lite-ts`](examples/freeq-lite-ts) (TypeScript,

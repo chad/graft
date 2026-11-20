@@ -77,6 +77,8 @@ type Config struct {
 	SedumVersion string
 	// Visible checks shown to the graft arm's model (never the oracle).
 	Visible map[string]string
+	// Files places sections' regions (graft.json "files"), plain graft arm.
+	Files map[string]string
 	// Lang is the target language (zero value: Go). It decides file names,
 	// the build command and how the oracle starts the program.
 	Lang lang.Profile
@@ -480,7 +482,11 @@ func (cfg Config) graftStep(ctx context.Context, repo, root, spec string, skel *
 	if skel != nil && (cfg.Sedum == nil || cfg.Generators == "") {
 		return infraPrefix + "graft-render needs sedum and its generators"
 	}
-	acc, err := pipeline.AcceptExt(repo, drafter.Drafts(spec), "graft bench", time.Now(), cfg.lang().Ext)
+	opts := pipeline.AcceptOptions{Ext: cfg.lang().Ext}
+	if skel == nil {
+		opts.Files, opts.Root = cfg.Files, root
+	}
+	acc, err := pipeline.AcceptWith(repo, drafter.Drafts(spec), "graft bench", time.Now(), opts)
 	if err != nil {
 		return "accept: " + err.Error()
 	}

@@ -282,3 +282,77 @@ func TestPythonProfile(t *testing.T) {
 		t.Fatal("a python prompt must not ask for a package clause")
 	}
 }
+
+func TestSectionFilesPlaceRegions(t *testing.T) {
+	cfg, _ := setup(t)
+	opts := AcceptOptions{Files: map[string]string{"Extra": "extra/twice.go"}}
+	acc, err := AcceptWith(cfg.Repo, drafter.Drafts(spec), "test", time.Now(), opts)
+	if err != nil || acc[0].Entry.File != "core.go" || acc[1].Entry.File != "extra/twice.go" {
+		t.Fatalf("%v %+v", err, acc)
+	}
+	// Sticky: dropping the key keeps the file; naming another file is an error.
+	if acc2, err := AcceptWith(cfg.Repo, drafter.Drafts(spec), "test", time.Now(), AcceptOptions{}); err != nil || acc2[1].Entry.File != "extra/twice.go" {
+		t.Fatalf("%v %+v", err, acc2)
+	}
+	if _, err := AcceptWith(cfg.Repo, drafter.Drafts(spec), "test", time.Now(), AcceptOptions{Files: map[string]string{"Extra": "other.go"}}); !errors.Is(err, ErrBadFile) {
+		t.Fatalf("moving an accepted section must be refused: %v", err)
+	}
+}
+
+func TestSectionFilesRefusals(t *testing.T) {
+	twoExtras := "# T\n\n## A\n\n### Extra\n\n- It must do a\n\n## B\n\n### Extra\n\n- It must do b\n"
+	root := t.TempDir()
+	os.WriteFile(filepath.Join(root, "main.go"), []byte("package main\n"), 0o644)
+	os.MkdirAll(filepath.Join(root, "real"), 0o755)
+	os.Symlink(filepath.Join(root, "real"), filepath.Join(root, "link"))
+	cases := []struct {
+		spec  string
+		files map[string]string
+		want  string
+	}{
+		{spec, map[string]string{"Extra": "core.go"}, "already"},                    // Core's default name
+		{spec, map[string]string{"Core": "same.go", "Extra": "same.go"}, "already"}, // two configured
+		{spec, map[string]string{"Extra": "main.go"}, "already exists"},             // a hand-written file
+		{spec, map[string]string{"Extra": "link/e.go"}, "symlink"},
+		{spec, map[string]string{"Extra": ".graft/x.go"}, "hidden"},
+		{spec, map[string]string{"Extra": ".go"}, "clean relative"},
+		{spec, map[string]string{"Extra": "../x.go"}, "clean relative"},
+		{spec, map[string]string{"Extra": "/abs.go"}, "clean relative"},
+		{spec, map[string]string{"Extra": "x.py"}, "clean relative"},
+		{spec, map[string]string{"Extra": "a//b.go"}, "clean relative"},
+		{spec, map[string]string{"Nope": "n.go"}, "names no section"},
+		{twoExtras, map[string]string{"Extra": "x/e.go"}, "several sections"},
+	}
+	for _, c := range cases {
+		_, err := AcceptWith(t.TempDir(), drafter.Drafts(c.spec), "test", time.Now(), AcceptOptions{Files: c.files, Root: root})
+		if !errors.Is(err, ErrBadFile) || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%v: %v (want %q)", c.files, err, c.want)
+		}
+	}
+	// Default names are held to the same rule: a hand-written core.go is not taken over.
+	os.WriteFile(filepath.Join(root, "core.go"), []byte("package main\n"), 0o644)
+	if _, err := AcceptWith(t.TempDir(), drafter.Drafts(spec), "test", time.Now(), AcceptOptions{Root: root}); !errors.Is(err, ErrBadFile) {
+		t.Errorf("default name over a hand-written file: %v", err)
+	}
+}
+
+// A section placed in a subdirectory package converges there, end to end.
+func TestSectionInSubpackageConverges(t *testing.T) {
+	cfg, root := setup(t)
+	cfg.Spec = spec
+	cfg.Model = &scripted{bodies: map[string][]string{
+		"core.go":        {"package main\n\nimport \"fmt\"\n\nfunc main() { fmt.Println(\"hello\") }\n"},
+		"extra/twice.go": {"package extra\n\n// Twice returns twice its argument.\nfunc Twice(x int) int { return x * 2 }\n"},
+	}, calls: map[string]int{}}
+	acc, err := AcceptWith(cfg.Repo, drafter.Drafts(spec), "test", time.Now(), AcceptOptions{Files: map[string]string{"Extra": "extra/twice.go"}, Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Run(context.Background(), cfg, acc); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(root, "extra", "twice.go"))
+	if err != nil || !strings.Contains(string(b), "package extra") || !strings.Contains(string(b), "graft:synth:begin") {
+		t.Fatalf("%v\n%s", err, b)
+	}
+}
