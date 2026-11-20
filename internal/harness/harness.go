@@ -518,7 +518,7 @@ func (cfg Config) evolvePrompt(current string) string {
 func filterSynth(m map[string]string) map[string]string {
 	out := map[string]string{}
 	for f, src := range m {
-		if strings.Contains(src, "graft:synth:begin") {
+		if converge.HasRegion(src) {
 			out[f] = src
 		}
 	}

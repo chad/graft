@@ -1,0 +1,10 @@
+package main
+
+// everything_elseInitBody registers nothing: the single statement of this
+// section (an unknown command after registration is answered with
+// "421 <nick> <command> :Unknown command", command as the client sent it)
+// is already handled by runningDispatch in running_synth.go, which looks the
+// command up in handlers and replies 421 when there is no entry. Registering
+// a handler here would only shadow that behaviour.
+func everything_elseInitBody() {
+}
