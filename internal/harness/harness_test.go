@@ -323,3 +323,17 @@ func TestFilterSynthIsSuffixIndependent(t *testing.T) {
 		t.Fatalf("%v", got)
 	}
 }
+
+// The graft arm places sections by the config's "files": the model is only
+// answered for app.go, so the sample works only if Core was placed there.
+func TestGraftArmUsesFiles(t *testing.T) {
+	c := cfg(t, answer{map[string]string{"app.go": good}}, fakeOracle)
+	c.Files = map[string]string{"Core": "app.go"}
+	if s := Sample(context.Background(), c, bench.ArmGraft); s.Outcome != bench.Works {
+		t.Fatalf("%+v", s)
+	}
+	c.Files = nil
+	if s := Sample(context.Background(), c, bench.ArmGraft); s.Outcome == bench.Works {
+		t.Fatalf("without files Core is core.go, which the model is not answered for: %+v", s)
+	}
+}

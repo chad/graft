@@ -99,6 +99,16 @@ func runCmd(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	drafts := drafter.Drafts(string(spec))
+	if *renderOn && len(cfg.Files) > 0 {
+		fmt.Fprintln(stderr, "graft: config \"files\" has no effect with --render (the skeleton places files); remove it")
+		return 2
+	}
+	opts := pipeline.AcceptOptions{Ext: profile.Ext, Files: cfg.Files}
+	// Bad keys and paths show on a dry run too, not only with --accept.
+	if err := opts.CheckConfigured(drafts); err != nil {
+		fmt.Fprintf(stderr, "graft: %v\n", err)
+		return 2
+	}
 	if !*accept {
 		for _, p := range drafter.Map(drafts, nil) {
 			fmt.Fprintf(stdout, "%s — %s\n", p.Draft.Section, p.Kind)
@@ -106,11 +116,6 @@ func runCmd(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "graft: nothing written; review the drafts above and re-run with --accept")
 		return 2
 	}
-	if *renderOn && len(cfg.Files) > 0 {
-		fmt.Fprintln(stderr, "graft: config \"files\" has no effect with --render (the skeleton places files); remove it")
-		return 2
-	}
-	opts := pipeline.AcceptOptions{Ext: profile.Ext, Files: cfg.Files}
 	if !*renderOn {
 		opts.Root = *root // plain mode: a new section never takes over an existing file
 	}
