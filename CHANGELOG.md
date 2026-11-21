@@ -19,5 +19,6 @@ The first tagged release. graft turns a markdown spec into code, one region per 
 **Known limits:**
 - Under a tier that requires `human_signoff`, a **new** body can't land yet. A sign-off covers a region already in the tree; signing a checked candidate before it's applied is planned.
 - `graft draft --skeleton` (M11b) isn't built yet.
+- sedum doesn't read shape from the records yet, so graft keeps a second, shape-less hash just for sedum.
 - The prompt includes every source file under the root.
 - On graft's own yardsticks, graft doesn't beat one-shot generation on correctness. What it adds is the guarantees above.
