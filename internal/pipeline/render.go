@@ -9,10 +9,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/chad/graft/internal/contract"
 	"github.com/chad/graft/internal/converge"
+	"github.com/chad/graft/internal/drafter"
+	"github.com/chad/graft/internal/lang"
 	"github.com/chad/graft/internal/recording"
 	"github.com/chad/graft/internal/records"
 	"github.com/chad/graft/internal/render"
@@ -78,11 +81,11 @@ func (cfg Config) renderTree(ctx context.Context, store records.Store, acc []Acc
 		return nilRet(err)
 	}
 	setRecs()
-	gen := cfg.Skeleton.Generator
-	if gen == "" {
-		gen = cfg.lang().Name
+	accIDs := make([]string, len(acc))
+	for i, a := range acc {
+		accIDs[i] = a.ID
 	}
-	skelHash, err := records.SkeletonHash(gen, pins)
+	skelHash, err := SkeletonHashOf(store, SkeletonGenerator(cfg.Skeleton, cfg.lang()), accIDs)
 	if err != nil {
 		return nilRet(err)
 	}
@@ -222,6 +225,62 @@ func (cfg Config) renderPrompt(a Accepted, r recording.Region, feedback string) 
 	stem := strings.TrimSuffix(filepath.Base(r.Path), filepath.Ext(r.Path))
 	fmt.Fprintf(&b, "\nAnswer with the complete contents of `%s` in a single ```%s block, %s, then the imports you need, the helpers above with their bodies, and any private helpers (named with the prefix `%s`). Do not write the skeleton's types or stubs, and do not include any line containing \"graft:synth\" or \"sedum:\".\n", r.Path, cfg.lang().Fence, cfg.lang().Preamble, strings.TrimSuffix(stem, r.SynthSuffix))
 	return b.String(), nil
+}
+
+// SkeletonGenerator is the generator name the skeleton hash covers: the
+// skeleton's own, else the language profile's name. `graft run --render` and
+// `graft signoff --render` both take it from here.
+func SkeletonGenerator(sk *recording.Skeleton, profile lang.Profile) string {
+	if sk != nil && sk.Generator != "" {
+		return sk.Generator
+	}
+	return profile.Name
+}
+
+// SkeletonHashOf is THE skeleton hash: the one `graft run --render` pins into
+// every evidence entry (renderTree calls it with the records accepted in the
+// run) and `graft signoff` pins into a sign-off (with SpecRecordIDs for the
+// same spec). One function, so the two cannot drift. ids are the records the
+// current spec resolves to; a record outside that set contributes nothing even
+// if its shape is still in the store.
+func SkeletonHashOf(store records.Store, generator string, ids []string) (string, error) {
+	pins := make([]records.Pin, len(ids))
+	for i, id := range ids {
+		p, err := store.Current(id)
+		if err != nil {
+			return "", err
+		}
+		pins[i] = p
+	}
+	return records.SkeletonHash(generator, pins)
+}
+
+// ErrSpecNotAccepted: a section of the spec has no accepted record yet.
+var ErrSpecNotAccepted = errors.New("pipeline: the spec has sections with no accepted record; run graft run --accept first")
+
+// SpecRecordIDs resolves, read-only, the records the spec's drafts map to, in
+// spec order: the set `graft run` accepts and hashes the skeleton over. It
+// writes nothing. A spec that does not map cleanly onto accepted records
+// (a new section, an undecided draft) is an error: run would first accept
+// something new, so the skeleton hash cannot be known yet.
+func SpecRecordIDs(repo string, drafts []drafter.Draft) ([]string, error) {
+	idx, err := LoadIndex(repo)
+	if err != nil {
+		return nil, err
+	}
+	var accepted []drafter.Accepted
+	for id, e := range idx.Records {
+		accepted = append(accepted, drafter.Accepted{ID: id, DerivedFrom: e.DerivedFrom, Anchor: e.Anchor})
+	}
+	sort.Slice(accepted, func(i, j int) bool { return accepted[i].ID < accepted[j].ID })
+	var ids []string
+	for _, p := range drafter.Map(drafts, accepted) {
+		if p.Kind != drafter.Revise {
+			return nil, fmt.Errorf("%w: %s: %s", ErrSpecNotAccepted, p.Draft.Section, p.Kind)
+		}
+		ids = append(ids, p.RecordID)
+	}
+	return ids, nil
 }
 
 // currentPins reads the current pin of every accepted record, in order.
