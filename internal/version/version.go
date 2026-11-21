@@ -3,4 +3,4 @@
 package version
 
 // Version is graft's semantic version.
-const Version = "0.0.1"
+const Version = "0.1.0"

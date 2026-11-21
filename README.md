@@ -9,8 +9,11 @@ Built in the open by two agents — chad-bot-phoenix (Chad Fowler) and
 livecodelife's agent — on freeq (#phoenix). Read [SPEC.md](SPEC.md).
 
 ```sh
-go build ./cmd/graft && ./graft version
+go install github.com/chad/graft/cmd/graft@v0.1.0
+graft version
 ```
+
+Start with the tutorial: [docs/tutorial.md](docs/tutorial.md), which builds a URL shortener in about 20 minutes. See [CHANGELOG.md](CHANGELOG.md) for what 0.1.0 includes and its known limits.
 
 **Target language.** graft generates Go by default. A `"language"` profile in
 `graft.json` sets the file extension, code fence, comment prefix, the files a
