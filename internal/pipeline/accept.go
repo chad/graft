@@ -227,7 +227,11 @@ func (o AcceptOptions) checkFresh(f string) error {
 // record keeps its file (a configured different one is an error); a new one
 // takes its configured file or fileFor's name, which must be valid, fresh
 // under Root, and not shared with any other section, accepted or new.
-func place(props []drafter.Proposal, idx *Index, opts AcceptOptions, ext string) ([]string, error) {
+//
+// An accepted record's file is its affected_scope: the record, not the
+// index or the config, is the source of truth. The index is a cache of it and
+// must agree; "files" in graft.json only seeds a new record's scope.
+func place(props []drafter.Proposal, idx *Index, opts AcceptOptions, ext string, scopeOf func(id string) ([]string, error)) ([]string, error) {
 	sections := make([]string, len(props))
 	for i, p := range props {
 		sections[i] = p.Draft.Section
@@ -236,9 +240,24 @@ func place(props []drafter.Proposal, idx *Index, opts AcceptOptions, ext string)
 	if err != nil {
 		return nil, err
 	}
-	owner := map[string]string{} // file -> section, across accepted records and this spec
+	// file -> section, across accepted records (by their records) and this spec
+	owner := map[string]string{}
+	recordFile := func(id string) (string, error) {
+		scope, err := scopeOf(id)
+		if err != nil {
+			return "", err
+		}
+		if len(scope) != 1 {
+			return "", fmt.Errorf("%w: record %s has affected_scope %v; graft places each record in exactly one file", ErrBadFile, id, scope)
+		}
+		return scope[0], nil
+	}
 	for id, e := range idx.Records {
-		owner[e.File] = e.Section + " (" + id + ")"
+		f, err := recordFile(id)
+		if err != nil {
+			return nil, err
+		}
+		owner[f] = e.Section + " (" + id + ")"
 	}
 	files := make([]string, len(props))
 	for i, p := range props {
@@ -246,10 +265,17 @@ func place(props []drafter.Proposal, idx *Index, opts AcceptOptions, ext string)
 		want, named := conf[sec]
 		if p.Kind != drafter.New {
 			if e, ok := idx.Records[p.RecordID]; ok {
-				if named && want != e.File {
-					return nil, fmt.Errorf("%w: %q is already placed in %s; moving a section is not supported (files names %s)", ErrBadFile, sec, e.File, want)
+				file, err := recordFile(p.RecordID)
+				if err != nil {
+					return nil, err
 				}
-				files[i] = e.File
+				if file != e.File {
+					return nil, fmt.Errorf("%w: record %s places %q in %s but the index says %s; the record is the source of truth: fix or rebuild .graft/accepted.json", ErrBadFile, p.RecordID, sec, file, e.File)
+				}
+				if named && want != file {
+					return nil, fmt.Errorf("%w: %q is already placed in %s (its record's affected_scope); moving a section is not supported (files names %s)", ErrBadFile, sec, file, want)
+				}
+				files[i] = file
 				continue
 			}
 		}
@@ -298,7 +324,14 @@ func AcceptWith(repo string, drafts []drafter.Draft, author string, now time.Tim
 	if len(undecided) > 0 {
 		return nil, fmt.Errorf("%w:\n  %s", ErrUndecided, strings.Join(undecided, "\n  "))
 	}
-	files, err := place(props, idx, opts, ext)
+	fs0 := &record.FilesStore{Root: repo}
+	files, err := place(props, idx, opts, ext, func(id string) ([]string, error) {
+		r, _, err := fs0.Load(id)
+		if err != nil {
+			return nil, fmt.Errorf("pipeline: load %s: %w", id, err)
+		}
+		return r.AffectedScope, nil
+	})
 	if err != nil {
 		return nil, err
 	}

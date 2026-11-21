@@ -14,6 +14,8 @@ import (
 	"github.com/chad/graft/internal/drafter"
 	"github.com/chad/graft/internal/evidence"
 	"github.com/chad/graft/internal/lang"
+	"github.com/chad/graft/internal/records"
+	"github.com/livecodelife/provenance/record"
 )
 
 const spec = `# Tiny
@@ -368,5 +370,78 @@ func TestSectionFilesNitRefusals(t *testing.T) {
 	}
 	if err := (AcceptOptions{Files: map[string]string{"Nope": "n.go"}}).CheckConfigured(drafter.Drafts(spec)); !errors.Is(err, ErrBadFile) {
 		t.Errorf("dry-run check: %v", err)
+	}
+}
+
+// The record's affected_scope is where an accepted section lives; an index
+// that disagrees with it is refused rather than trusted.
+func TestPlacementIsTheRecords(t *testing.T) {
+	cfg, _ := setup(t)
+	acc, err := AcceptWith(cfg.Repo, drafter.Drafts(spec), "test", time.Now(), AcceptOptions{Files: map[string]string{"Extra": "extra/twice.go"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, _ := records.OpenDir(cfg.Repo)
+	if p, _ := s.Current(acc[1].ID); len(p.AffectedScope) != 1 || p.AffectedScope[0] != "extra/twice.go" {
+		t.Fatalf("the placement must be in the record: %+v", p.AffectedScope)
+	}
+	idx, _ := LoadIndex(cfg.Repo)
+	e := idx.Records[acc[1].ID]
+	e.File = "tampered.go"
+	idx.Records[acc[1].ID] = e
+	if err := idx.save(cfg.Repo); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AcceptWith(cfg.Repo, drafter.Drafts(spec), "test", time.Now(), AcceptOptions{}); !errors.Is(err, ErrBadFile) || !strings.Contains(err.Error(), "source of truth") {
+		t.Fatalf("an index disagreeing with the record must be refused: %v", err)
+	}
+}
+
+// A record whose affected_scope is not exactly one file is refused, and
+// nothing is revised (the index does not silently win).
+func TestPlacementNeedsExactlyOneFile(t *testing.T) {
+	cfg, _ := setup(t)
+	acc, err := AcceptWith(cfg.Repo, drafter.Drafts(spec), "test", time.Now(), AcceptOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fs := &record.FilesStore{Root: cfg.Repo}
+	r, doc, err := fs.Load(acc[1].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.AffectedScope = []string{"extra.go", "other.go"}
+	if _, err := record.Commit(fs, r, doc, record.Bump{Reason: "test", Author: "test", Now: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	s, _ := records.OpenDir(cfg.Repo)
+	before, _ := s.Current(acc[1].ID)
+	if _, err := AcceptWith(cfg.Repo, drafter.Drafts(spec), "test", time.Now(), AcceptOptions{}); !errors.Is(err, ErrBadFile) || !strings.Contains(err.Error(), "exactly one file") {
+		t.Fatalf("want a refusal: %v", err)
+	}
+	if after, _ := s.Current(acc[1].ID); after.Version != before.Version {
+		t.Fatalf("a refused accept revised the record: v%d -> v%d", before.Version, after.Version)
+	}
+}
+
+// Collisions are checked against the records' files, not the index: a
+// section no longer in the spec still owns its file.
+func TestCollisionsUseTheRecords(t *testing.T) {
+	cfg, _ := setup(t)
+	if _, err := AcceptWith(cfg.Repo, drafter.Drafts(spec), "test", time.Now(), AcceptOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	idx, _ := LoadIndex(cfg.Repo)
+	for id, e := range idx.Records {
+		if e.File == "extra.go" {
+			e.File = "stale.go" // the index lies; the record still says extra.go
+			idx.Records[id] = e
+		}
+	}
+	idx.save(cfg.Repo)
+	v2 := "# Tiny\n\n## Core\n\n- The program must print \"hello\" when run\n\n## Later\n\n- The program must also define a function Thrice\n"
+	_, err := AcceptWith(cfg.Repo, drafter.Drafts(v2), "test", time.Now(), AcceptOptions{Files: map[string]string{"Later": "extra.go"}})
+	if !errors.Is(err, ErrBadFile) || !strings.Contains(err.Error(), "already") {
+		t.Fatalf("the removed section's record still owns extra.go: %v", err)
 	}
 }
