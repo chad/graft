@@ -156,10 +156,7 @@ func runCmd(args []string, stdout, stderr io.Writer) int {
 			return 2
 		}
 	}
-	lp := *logPath
-	if lp == "" {
-		lp = filepath.Join(*repo, ".graft", "evidence.jsonl")
-	}
+	lp := evidenceLogPath(*repo, *logPath)
 	if err := os.MkdirAll(filepath.Dir(lp), 0o755); err != nil {
 		fmt.Fprintf(stderr, "graft: %v\n", err)
 		return 2
@@ -210,4 +207,14 @@ func skeletonFile(cfgSkeleton, cfgPath, flagValue string) string {
 		cfgSkeleton = "skeleton.json"
 	}
 	return filepath.Join(filepath.Dir(cfgPath), cfgSkeleton)
+}
+
+// evidenceLogPath is the evidence log of a provenance repo: the flag if given,
+// else <repo>/.graft/evidence.jsonl. graft run and graft signoff both use it,
+// so a sign-off lands in the log that run reads.
+func evidenceLogPath(repo, flagValue string) string {
+	if flagValue != "" {
+		return flagValue
+	}
+	return filepath.Join(repo, ".graft", "evidence.jsonl")
 }

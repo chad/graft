@@ -467,3 +467,37 @@ func TestSignoffCLIEndToEndJSONAndHelp(t *testing.T) {
 		t.Fatalf("%v %d", err, len(log.All()))
 	}
 }
+
+// With no --log, a sign-off lands in the log graft run reads
+// (<repo>/.graft/evidence.jsonl), and the converger reading that log sees it.
+func TestSignoffDefaultLogIsTheOneRunReads(t *testing.T) {
+	e := newSoEnv(t, false)
+	var args []string
+	for i := 0; i < len(e.args("--yes")); i++ {
+		a := e.args("--yes")
+		if a[i] == "--log" {
+			i++
+			continue
+		}
+		args = append(args, a[i])
+	}
+	code, out, errs := runWith("", args)
+	if code != 0 {
+		t.Fatalf("exit %d\n%s%s", code, out, errs)
+	}
+	runLog := evidenceLogPath(e.rec, "") // what graft run opens when --log is not given
+	if !strings.Contains(out, runLog) {
+		t.Fatalf("output does not name the log %s:\n%s", runLog, out)
+	}
+	e.log = runLog
+	if so := e.lastSignoff(t); so.Pin.RecordID != soID {
+		t.Fatalf("%+v", so)
+	}
+	d, err := e.converge(t, soBody)
+	if err != nil || !d.Applied {
+		t.Fatalf("converger on run's log: %v %+v", err, d)
+	}
+	if _, err := os.Stat(filepath.Join(".graft", "evidence.jsonl")); err == nil {
+		t.Fatal("wrote ./.graft/evidence.jsonl in the current directory")
+	}
+}

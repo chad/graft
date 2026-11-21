@@ -35,8 +35,13 @@ here. graft shows the region and what is pinned, then asks for confirmation
 --by is whatever you type. It is recorded as given and is NOT authenticated:
 graft does not verify who you are, and the log is not tamper-proof (SPEC §7).
 
+The log defaults to <records>/.graft/evidence.jsonl, the log graft run reads
+(not graft converge's default, which is relative to the current directory).
+
 Use --render when the tree was made by 'graft run --render', so the sign-off
-pins the skeleton like the rest of that tree's evidence.
+pins the skeleton like the rest of that tree's evidence. The skeleton hash is
+computed from the records' shapes; the skeleton file is read only for its
+generator name.
 
 exit codes:
   0  recorded
@@ -149,7 +154,7 @@ func signoffCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs.Usage = func() { fmt.Fprint(stderr, signoffUsage); fs.PrintDefaults() }
 	cfgPath := fs.String("config", "graft.json", "policy (shown for context) and language")
 	recDir := fs.String("records", ".", "provenance repo root (records layer)")
-	logPath := fs.String("log", ".graft/evidence.jsonl", "evidence log (relative to the current directory, not --root)")
+	logFlag := fs.String("log", "", "evidence log (default <records>/.graft/evidence.jsonl, the log graft run reads)")
 	root := fs.String("root", ".", "working tree")
 	id := fs.String("record", "", "owning record id")
 	file := fs.String("path", "", "file holding the region, relative to --root")
@@ -215,11 +220,12 @@ func signoffCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 2
 	}
 	// The log is verified here; evidence.Open refuses a damaged one.
-	if err := os.MkdirAll(dirOf(*logPath), 0o755); err != nil {
+	logPath := evidenceLogPath(*recDir, *logFlag)
+	if err := os.MkdirAll(dirOf(logPath), 0o755); err != nil {
 		fmt.Fprintf(stderr, "graft: %v\n", err)
 		return 2
 	}
-	log, err := evidence.Open(*logPath)
+	log, err := evidence.Open(logPath)
 	if err != nil {
 		fmt.Fprintf(stderr, "graft: %v\n", err)
 		return 2
@@ -230,7 +236,7 @@ func signoffCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if *asJSON {
 		ui = stderr
 	}
-	showSignoff(ui, st, in, log, cfg.Policy, *by, *note)
+	showSignoff(ui, st, in, log, logPath, cfg.Policy, *by, *note)
 	if !*yes {
 		if !stdinIsTTY(stdin) {
 			fmt.Fprintln(stderr, "graft: refused: stdin is not a terminal; pass --yes to record the sign-off without a prompt")
@@ -265,7 +271,7 @@ func signoffCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		enc.Encode(e)
 		return 0
 	}
-	fmt.Fprintf(stdout, "signed off %s (record %s v%d) by %q; evidence %.12s (by is not authenticated)\n", in.file, in.id, st.Pin.Version, strings.TrimSpace(*by), e.ID)
+	fmt.Fprintf(stdout, "signed off %s (record %s v%d) by %q; evidence %.12s in %s (by is not authenticated)\n", in.file, in.id, st.Pin.Version, strings.TrimSpace(*by), e.ID, logPath)
 	return 0
 }
 
@@ -274,7 +280,7 @@ func pinSummary(p evidence.Pin) string {
 }
 
 // showSignoff prints what the human is signing off on.
-func showSignoff(w io.Writer, st signoffState, in signoffInputs, log *evidence.Log, policy map[string][]evidence.Kind, by, note string) {
+func showSignoff(w io.Writer, st signoffState, in signoffInputs, log *evidence.Log, logPath string, policy map[string][]evidence.Kind, by, note string) {
 	p := st.Pin
 	fmt.Fprintf(w, "Sign-off for record %s v%d, %s\n", p.RecordID, p.Version, in.file)
 	fmt.Fprintf(w, "--- region body ---\n%s--- end of region ---\n", st.Body)
@@ -322,6 +328,7 @@ func showSignoff(w io.Writer, st signoffState, in signoffInputs, log *evidence.L
 			fmt.Fprintf(w, "  tier %q also requires, with no fresh evidence: %s\n", st.Region.Owner.Tier, strings.Join(missing, ", "))
 		}
 	}
+	fmt.Fprintf(w, "log: %s\n", logPath)
 	fmt.Fprintf(w, "by: %q   (recorded as typed; NOT authenticated)\n", strings.TrimSpace(by))
 	if note != "" {
 		fmt.Fprintf(w, "note: %s\n", note)
