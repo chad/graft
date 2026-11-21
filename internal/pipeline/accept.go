@@ -240,9 +240,24 @@ func place(props []drafter.Proposal, idx *Index, opts AcceptOptions, ext string,
 	if err != nil {
 		return nil, err
 	}
-	owner := map[string]string{} // file -> section, across accepted records and this spec
+	// file -> section, across accepted records (by their records) and this spec
+	owner := map[string]string{}
+	recordFile := func(id string) (string, error) {
+		scope, err := scopeOf(id)
+		if err != nil {
+			return "", err
+		}
+		if len(scope) != 1 {
+			return "", fmt.Errorf("%w: record %s has affected_scope %v; graft places each record in exactly one file", ErrBadFile, id, scope)
+		}
+		return scope[0], nil
+	}
 	for id, e := range idx.Records {
-		owner[e.File] = e.Section + " (" + id + ")"
+		f, err := recordFile(id)
+		if err != nil {
+			return nil, err
+		}
+		owner[f] = e.Section + " (" + id + ")"
 	}
 	files := make([]string, len(props))
 	for i, p := range props {
@@ -250,16 +265,12 @@ func place(props []drafter.Proposal, idx *Index, opts AcceptOptions, ext string,
 		want, named := conf[sec]
 		if p.Kind != drafter.New {
 			if e, ok := idx.Records[p.RecordID]; ok {
-				file := e.File
-				scope, err := scopeOf(p.RecordID)
+				file, err := recordFile(p.RecordID)
 				if err != nil {
 					return nil, err
 				}
-				if len(scope) == 1 {
-					if scope[0] != e.File {
-						return nil, fmt.Errorf("%w: record %s places %q in %s but the index says %s; the record is the source of truth: fix or rebuild .graft/accepted.json", ErrBadFile, p.RecordID, sec, scope[0], e.File)
-					}
-					file = scope[0]
+				if file != e.File {
+					return nil, fmt.Errorf("%w: record %s places %q in %s but the index says %s; the record is the source of truth: fix or rebuild .graft/accepted.json", ErrBadFile, p.RecordID, sec, file, e.File)
 				}
 				if named && want != file {
 					return nil, fmt.Errorf("%w: %q is already placed in %s (its record's affected_scope); moving a section is not supported (files names %s)", ErrBadFile, sec, file, want)
