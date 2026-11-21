@@ -33,6 +33,16 @@ passes it. A shape (skeleton) edit re-verifies every region with no model call,
 and only the regions that fail (a region whose own shape moved, or whose body no
 longer passes the gates) regenerate.
 
+`graft draft --skeleton --config graft.json --spec SPEC.md --out proposal.json`
+asks a model (`skeleton_model` in the config, default opus) to propose the
+skeleton. It never applies it: it validates the proposal (drafted decls are
+types, consts and vars only, checked by the profile's `decl_check`; a sedum
+render and the build gate on a scratch tree), writes `proposal.json` and a
+coverage report that flags statements no stub owns (the mapping is the model's
+claim), and exits 4 if any are unowned. Accept it with
+`graft run --render --skeleton proposal.json --accept ...`. A language profile
+needs a `decl_check` command to draft; Go ships one.
+
 **Existing repos.** In a repo whose packages live in directories, place a section's region with `"files": {"<section>": "pkg/file.go"}` in `graft.json`. A key is the section's full title, including the top heading, or its last part alone when that is unambiguous. A new section never takes over an existing file, and once accepted its file is fixed: it is the record's `affected_scope`, which is the source of truth (the index only caches it, and must agree). See [docs/real-repo-trial.md](docs/real-repo-trial.md) for a trial in a real Go service, and for what a user still has to supply: placement, a wiring hook and an acceptance test.
 
 **Signing off.** A tier that requires `human_signoff` is satisfied only by

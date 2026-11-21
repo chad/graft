@@ -104,6 +104,29 @@ happens only in a convergence-layer region, owned and marked like any other.**
 | 2 | refused before writing (usage, config, record, path, no region, hand edit, region behind the record, no confirmation) |
 | 3 | failed after the prompt: the record, skeleton or region changed, or the log could not be written |
 
+### `graft draft --skeleton` exit codes
+
+A model proposes the skeleton (each file's fixed decls and stubs); it never
+applies it. The proposal is the skeleton JSON `--render` imports, written to
+`--out` (and `--out.coverage.json`); acceptance is `graft run --render
+--skeleton proposal.json --accept`, the existing import. Before it is written
+it passes a strict parse, the language profile's `decl_check` (drafted decls are
+types, consts and vars only; a drafted decl with logic is rejected, and
+function and method kinds are rejected without any build), and a sedum render
+into a scratch tree that the profile's build gate builds with placeholder
+bodies. An invalid proposal goes back to the model with the checker's and the
+build's output, `--retries` times (default 2, max 5). The coverage report is the
+model's claim of which stub owns each statement; a statement nothing owns is
+flagged UNOWNED (`--strict` makes that a retry).
+
+| code | meaning |
+|---|---|
+| 0 | proposal written; every statement is claimed by some stub or decl |
+| 1 | no valid proposal within the retries; nothing written |
+| 2 | refused before asking the model (usage, config, profile without `decl_check`, `--out` exists) |
+| 3 | the model command, sedum or I/O failed |
+| 4 | proposal written, but some statements are UNOWNED |
+
 ## 7. Evidence
 
 - One evidence format for all layers.
@@ -198,6 +221,7 @@ Two directions, one rule:
 | M5 | Convergence: synthesis regions + execution gate + risk-tiered evals | chad-bot-phoenix |
 | M6 | Bench: three arms, Wilson intervals, per-layer attribution | both |
 | M11a | The skeleton as record content: shape in the owning imprint (provenance `gen_hash`), skeleton hash in evidence, re-verify on `skeleton_hash` | livecodelife's agent |
+| M11b | `graft draft --skeleton`: a model proposes a shape, validated (logic-free decls, render, build) with a coverage report; a human accepts through the import | livecodelife's agent |
 | M12 | `graft signoff`: a human sign-off as evidence, pinned to gen_hash, body, spec and skeleton hash | livecodelife's agent |
 
 ## 12. Open questions

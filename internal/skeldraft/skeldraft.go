@@ -220,7 +220,7 @@ func validate(ctx context.Context, cfg Config, drafts []drafter.Draft, stmts []S
 		return zero, nil, fmt.Errorf("the build gate could not run: %w", err)
 	}
 	if out != "" {
-		return zero, nil, fmt.Errorf("the rendered, seeded tree does not build (%s):\n%s", strings.Join(cfg.Profile.Build, " "), strings.TrimSpace(out))
+		return zero, nil, fmt.Errorf("the rendered, seeded tree does not build (%s):\n%s", strings.Join(lang.ExpandArgv(cfg.Profile.Build, map[string]string{"out": "<bin>"}), " "), strings.TrimSpace(out))
 	}
 	return sk, a.Owners, nil
 }
