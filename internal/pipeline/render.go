@@ -279,16 +279,14 @@ func (cfg Config) importSkeleton(store records.Store, acc []Accepted) error {
 	// part-way through the writes themselves leaves some records revised:
 	// nothing is planned or rendered from that state (the error stops the
 	// run), and because the import is idempotent the next run completes it.
-	for _, a := range acc {
-		if _, err := store.Current(a.ID); err != nil {
-			return fmt.Errorf("pipeline: --render: before importing the skeleton: %w", err)
-		}
+	if _, err := cfg.currentPins(store, acc); err != nil {
+		return fmt.Errorf("pipeline: --render: before importing the skeleton: %w", err)
 	}
 	done := 0
 	for _, a := range acc {
 		changed, err := ws.SetShape(a.ID, shapes[a.ID], "import skeleton", "graft")
 		if err != nil {
-			return fmt.Errorf("pipeline: --render: skeleton import stopped after %d of %d records were revised (nothing was rendered; re-run to complete it): %w", done, len(acc), err)
+			return fmt.Errorf("pipeline: --render: skeleton import stopped after revising %d record(s) (nothing was rendered; re-run to complete it): %w", done, err)
 		}
 		if changed {
 			done++

@@ -19,7 +19,11 @@
 // skeleton fixes them).
 import { modules, line, finish, ts } from "./lib.mjs";
 
-const ALWAYS = new Set(["main", "init", "toString", "toJSON", "valueOf", "toLocaleString", "then", "catch", "finally"]);
+const ALWAYS = new Set(["main", "init"]);
+// Protocol methods the runtime calls by name: exempt only as methods (class
+// or object-literal members), never as top-level functions.
+const PROTOCOL = new Set(["toString", "toJSON", "valueOf", "toLocaleString", "then", "catch", "finally", "next", "return", "throw"]);
+const isMember = (fn) => ts.isMethodDeclaration(fn.node) || ts.isPropertyDeclaration(fn.node) || ts.isPropertyAssignment(fn.node);
 const mods = modules();
 
 // Every function-like declaration: [name, node, file, sf].
@@ -28,7 +32,7 @@ for (const m of mods) {
   const visit = (node) => {
     if ((ts.isFunctionDeclaration(node) || ts.isMethodDeclaration(node)) && node.name && ts.isIdentifier(node.name)) {
       fns.push({ name: node.name.text, node, m });
-    } else if ((ts.isVariableDeclaration(node) || ts.isPropertyDeclaration(node)) && ts.isIdentifier(node.name) && node.initializer &&
+    } else if ((ts.isVariableDeclaration(node) || ts.isPropertyDeclaration(node) || ts.isPropertyAssignment(node)) && ts.isIdentifier(node.name) && node.initializer &&
                (ts.isArrowFunction(node.initializer) || ts.isFunctionExpression(node.initializer))) {
       fns.push({ name: node.name.text, node, m });
     }
@@ -69,7 +73,9 @@ const isDeclName = (id) => {
     (ts.isFunctionDeclaration(p) || ts.isMethodDeclaration(p) || ts.isVariableDeclaration(p) || ts.isParameter(p) ||
      ts.isPropertyDeclaration(p) || ts.isPropertyAssignment(p) || ts.isPropertySignature(p) || ts.isMethodSignature(p) ||
      ts.isGetAccessorDeclaration(p) || ts.isSetAccessorDeclaration(p) || ts.isEnumMember(p) || ts.isLabeledStatement(p)) &&
-    p.name === id
+    p.name === id ||
+    // A destructuring key ({ aFn: x } = src) names a property, not the function.
+    (ts.isBindingElement(p) && p.propertyName === id)
   );
 };
 
@@ -81,7 +87,7 @@ const exportedCore = (fn) =>
 
 const problems = [];
 for (const fn of fns) {
-  if (ALWAYS.has(fn.name) || exportedCore(fn)) continue;
+  if (ALWAYS.has(fn.name) || exportedCore(fn) || (PROTOCOL.has(fn.name) && isMember(fn))) continue;
   if (!used(fn)) problems.push(`${fn.m.file}:${line(fn.m.sf, fn.node)}: ${fn.name} is never used; remove it (or use it)`);
 }
 finish(problems, "no dead functions");

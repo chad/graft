@@ -577,7 +577,7 @@ func TestSkeletonImportInterruptedIsCompletedByTheNextRun(t *testing.T) {
 	}
 	ws := &failingShapes{ShapeStore: s.(records.ShapeStore), n: 3}
 	err = cfg.importSkeleton(ws, acc)
-	if err == nil || !strings.Contains(err.Error(), "re-run to complete") || !strings.Contains(err.Error(), "2 of 7") {
+	if err == nil || !strings.Contains(err.Error(), "re-run to complete") || !strings.Contains(err.Error(), "revising 2 record(s)") {
 		t.Fatalf("want an interrupted-import error naming the progress: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(cfg.Root, "running.go")); err == nil {

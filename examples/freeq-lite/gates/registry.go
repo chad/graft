@@ -28,6 +28,7 @@ func main() {
 	var problems []string
 	parsed := map[string]*ast.File{}
 	declarer := ""
+	lenShadowed := false
 	for _, f := range files {
 		af, err := parser.ParseFile(fset, f, nil, 0)
 		if err != nil {
@@ -36,6 +37,26 @@ func main() {
 		}
 		parsed[f] = af
 		for _, d := range af.Decls {
+			// A package-level len in any file shadows the builtin everywhere.
+			if fd, ok := d.(*ast.FuncDecl); ok && fd.Recv == nil && fd.Name.Name == "len" {
+				lenShadowed = true
+			}
+			if g, ok := d.(*ast.GenDecl); ok {
+				for _, sp := range g.Specs {
+					switch s := sp.(type) {
+					case *ast.ValueSpec:
+						for _, n := range s.Names {
+							if n.Name == "len" {
+								lenShadowed = true
+							}
+						}
+					case *ast.TypeSpec:
+						if s.Name.Name == "len" {
+							lenShadowed = true
+						}
+					}
+				}
+			}
 			if g, ok := d.(*ast.GenDecl); ok && g.Tok == token.VAR {
 				for _, sp := range g.Specs {
 					for _, n := range sp.(*ast.ValueSpec).Names {
@@ -106,7 +127,7 @@ func main() {
 					}
 				case *ast.CallExpr:
 					// len(handlers) reads the registry and cannot alias it.
-					if fn, ok := x.Fun.(*ast.Ident); ok && fn.Name == "len" && fn.Obj == nil && len(x.Args) == 1 {
+					if fn, ok := x.Fun.(*ast.Ident); ok && fn.Name == "len" && fn.Obj == nil && !lenShadowed && len(x.Args) == 1 {
 						if id, ok := x.Args[0].(*ast.Ident); ok && id.Name == "handlers" {
 							allowed[id] = true
 						}

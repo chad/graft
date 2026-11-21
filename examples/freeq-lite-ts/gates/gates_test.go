@@ -119,16 +119,19 @@ export function init(): void { aUsed(); }
 		t.Fatalf("good tree rejected: %s", out)
 	}
 	for name, src := range map[string]string{
-		"dead":          `export function aDead(): void {}`,
-		"recursion":     `export function aRec(n: number): number { return n ? aRec(n - 1) : 0; }`,
-		"string":        `export function aStr(): void {}` + "\nexport const s = \"aStr\";",
-		"sink":          `export function aSink(): void {}` + "\nlet _: unknown;\n_ = aSink;",
-		"void":          `export function aVoid(): void {}` + "\nvoid aVoid;",
-		"nested":        `export function aOuter(): void { function inner(): void {} }` + "\nexport function init(): void { aOuter(); }",
-		"object key":    `export function aKey(): void {}` + "\nexport const o = { aKey: 1 };",
-		"class key":     `export function aField(): void {}` + "\nexport class C { aField = 1; }",
-		"dead method":   `export class C { aMethod(): void {} }` + "\nexport function init(): void { new C(); }",
-		"dead field fn": `export class C { aArrow = (): void => {}; }` + "\nexport function init(): void { new C(); }",
+		"dead":              `export function aDead(): void {}`,
+		"recursion":         `export function aRec(n: number): number { return n ? aRec(n - 1) : 0; }`,
+		"string":            `export function aStr(): void {}` + "\nexport const s = \"aStr\";",
+		"sink":              `export function aSink(): void {}` + "\nlet _: unknown;\n_ = aSink;",
+		"void":              `export function aVoid(): void {}` + "\nvoid aVoid;",
+		"nested":            `export function aOuter(): void { function inner(): void {} }` + "\nexport function init(): void { aOuter(); }",
+		"object key":        `export function aKey(): void {}` + "\nexport const o = { aKey: 1 };",
+		"class key":         `export function aField(): void {}` + "\nexport class C { aField = 1; }",
+		"dead method":       `export class C { aMethod(): void {} }` + "\nexport function init(): void { new C(); }",
+		"dead field fn":     `export class C { aArrow = (): void => {}; }` + "\nexport function init(): void { new C(); }",
+		"destructuring key": `export function aFn(): void {}` + "\nconst src = { aFn: 1 };\nexport const { aFn: x } = src;",
+		"dead object arrow": `export const o = { aArrow: (): void => {} };` + "\nexport function init(): void { void o; }",
+		"top-level then":    `export function then(): void {}`,
 	} {
 		if out, pass := gate(t, "unused.mjs", map[string]string{"running.ts": running, "a.ts": src}); pass {
 			t.Errorf("%s accepted: %s", name, out)

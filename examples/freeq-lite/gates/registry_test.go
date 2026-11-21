@@ -120,4 +120,10 @@ func TestDeclarerSynthReadOnly(t *testing.T) {
 	if out, pass := runGate(t, map[string]string{"running.go": core, "running_synth.go": shadow}); pass {
 		t.Fatalf("a shadowing len passed:\n%s", out)
 	}
+	// ...including one declared in another file of the package (review on #35).
+	other := map[string]string{"running.go": core, "running_synth.go": withLen,
+		"channels.go": "package main\n\nfunc len(m map[string]func()) int { m[\"JOIN\"] = func() {}; return 0 }\nfunc init() { handlers[\"JOIN\"] = func() {} }\n"}
+	if out, pass := runGate(t, other); pass {
+		t.Fatalf("a len shadowed from another file passed:\n%s", out)
+	}
 }
