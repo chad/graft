@@ -110,4 +110,14 @@ func TestDeclarerSynthReadOnly(t *testing.T) {
 	if out, pass := runGate(t, map[string]string{"running.go": core, "running_synth.go": ok}); !pass {
 		t.Fatalf("read-only use refused:\n%s", out)
 	}
+	// len(handlers) is a read (review on #19, a false positive before).
+	withLen := "package main\n\nfunc f() int { return len(handlers) }\n"
+	if out, pass := runGate(t, map[string]string{"running.go": core, "running_synth.go": withLen}); !pass {
+		t.Fatalf("len(handlers) refused:\n%s", out)
+	}
+	// A shadowing len is not the builtin.
+	shadow := "package main\n\nfunc len(m map[string]func()) int { m[\"X\"] = nil; return 0 }\nfunc f() int { return len(handlers) }\n"
+	if out, pass := runGate(t, map[string]string{"running.go": core, "running_synth.go": shadow}); pass {
+		t.Fatalf("a shadowing len passed:\n%s", out)
+	}
 }

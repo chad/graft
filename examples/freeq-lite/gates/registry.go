@@ -57,7 +57,7 @@ func main() {
 		// Aliases, parenthesised forms, passing the map anywhere (reflect,
 		// helpers) and reassigning the whole map are all refused.
 		// The declarer's own _synth.go (model-written in render mode) gets read
-		// access only: handlers[k] reads and `range handlers`. No aliasing, no
+		// access only: handlers[k] reads, `range handlers` and len(handlers). No aliasing, no
 		// writes, no clear, no passing the map anywhere.
 		if f == strings.TrimSuffix(declarer, ".go")+"_synth.go" && f != declarer {
 			writes := map[ast.Expr]bool{}
@@ -104,12 +104,19 @@ func main() {
 					if id, ok := x.X.(*ast.Ident); ok && id.Name == "handlers" {
 						allowed[id] = true
 					}
+				case *ast.CallExpr:
+					// len(handlers) reads the registry and cannot alias it.
+					if fn, ok := x.Fun.(*ast.Ident); ok && fn.Name == "len" && fn.Obj == nil && len(x.Args) == 1 {
+						if id, ok := x.Args[0].(*ast.Ident); ok && id.Name == "handlers" {
+							allowed[id] = true
+						}
+					}
 				}
 				return true
 			})
 			ast.Inspect(af, func(n ast.Node) bool {
 				if id, ok := n.(*ast.Ident); ok && id.Name == "handlers" && !allowed[id] && id.Obj == nil {
-					problems = append(problems, fmt.Sprintf("%s:%d: %s may only read handlers (index or range); it must not alias, write, clear or pass it", f, fset.Position(id.Pos()).Line, f))
+					problems = append(problems, fmt.Sprintf("%s:%d: %s may only read handlers (index, range or len); it must not alias, write, clear or pass it", f, fset.Position(id.Pos()).Line, f))
 				}
 				return true
 			})

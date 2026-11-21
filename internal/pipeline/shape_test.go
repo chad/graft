@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -547,5 +548,63 @@ func TestRenderUpgradeWithAShapeEditRegeneratesThatRegion(t *testing.T) {
 		case strings.HasSuffix(f, "_synth.go") && f != "keepalive_synth.go" && (o.Reason != "skeleton_hash" || o.Calls != 0):
 			t.Errorf("%s: %+v", f, o)
 		}
+	}
+}
+
+// failingShapes fails the n-th shape write.
+type failingShapes struct {
+	records.ShapeStore
+	n, calls int
+}
+
+func (f *failingShapes) SetShape(id string, shape []any, reason, author string) (bool, error) {
+	f.calls++
+	if f.calls == f.n {
+		return false, errors.New("disk full")
+	}
+	return f.ShapeStore.SetShape(id, shape, reason, author)
+}
+
+// An import interrupted part-way stops the run before anything is rendered,
+// says so, and the next run completes it to the same records a clean import
+// gives.
+func TestSkeletonImportInterruptedIsCompletedByTheNextRun(t *testing.T) {
+	cfg, _, spec := renderSetup(t, "skeleton.json", "spec/freeq-lite.md")
+	acc := accept(t, cfg, spec)
+	s, err := records.OpenDir(cfg.Repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ws := &failingShapes{ShapeStore: s.(records.ShapeStore), n: 3}
+	err = cfg.importSkeleton(ws, acc)
+	if err == nil || !strings.Contains(err.Error(), "re-run to complete") || !strings.Contains(err.Error(), "2 of 7") {
+		t.Fatalf("want an interrupted-import error naming the progress: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(cfg.Root, "running.go")); err == nil {
+		t.Fatal("nothing may be rendered from a partial import")
+	}
+	if _, err := Run(context.Background(), cfg, acc); err != nil {
+		t.Fatal(err)
+	}
+	shaped := 0
+	for _, a := range acc {
+		if p, _ := s.Current(a.ID); len(p.Shape) > 0 {
+			shaped++
+		}
+	}
+	if shaped != len(cfg.Skeleton.Files) {
+		t.Fatalf("%d records carry a shape after the completing run, want %d", shaped, len(cfg.Skeleton.Files))
+	}
+}
+
+// A record that cannot be read stops the import before any record is revised.
+func TestSkeletonImportChecksEveryRecordFirst(t *testing.T) {
+	cfg, _, spec := renderSetup(t, "skeleton.json", "spec/freeq-lite.md")
+	acc := accept(t, cfg, spec)
+	acc[len(acc)-1].ID = "prov-2026-deadbeef"
+	s, _ := records.OpenDir(cfg.Repo)
+	ws := &failingShapes{ShapeStore: s.(records.ShapeStore)}
+	if err := cfg.importSkeleton(ws, acc[:]); err == nil || ws.calls != 0 {
+		t.Fatalf("err=%v, %d shape writes; want an error before any write", err, ws.calls)
 	}
 }

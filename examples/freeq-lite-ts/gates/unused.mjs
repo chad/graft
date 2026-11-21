@@ -7,13 +7,19 @@
 // - a reference from inside the function itself (recursion);
 // - a string literal;
 // - `_ = f` or `void f`, which only silence a checker.
+// A name used only as an object or class key ({ fname: 1 }, a property
+// declaration's name, an interface member) is not a use either: it names a
+// property, not the function. Class methods and function-valued class fields
+// are functions like any other; constructors, accessors and the well-known
+// protocol methods the runtime calls (toString, toJSON, valueOf, …) count as
+// used.
 // `main` and `init` count as used: main.ts calls them. So do the functions
 // running.ts exports: they are the core's API for the other modules, which may
 // not be written yet when running.ts is checked (and under --render the
 // skeleton fixes them).
 import { modules, line, finish, ts } from "./lib.mjs";
 
-const ALWAYS = new Set(["main", "init"]);
+const ALWAYS = new Set(["main", "init", "toString", "toJSON", "valueOf", "toLocaleString", "then", "catch", "finally"]);
 const mods = modules();
 
 // Every function-like declaration: [name, node, file, sf].
@@ -22,7 +28,7 @@ for (const m of mods) {
   const visit = (node) => {
     if ((ts.isFunctionDeclaration(node) || ts.isMethodDeclaration(node)) && node.name && ts.isIdentifier(node.name)) {
       fns.push({ name: node.name.text, node, m });
-    } else if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer &&
+    } else if ((ts.isVariableDeclaration(node) || ts.isPropertyDeclaration(node)) && ts.isIdentifier(node.name) && node.initializer &&
                (ts.isArrowFunction(node.initializer) || ts.isFunctionExpression(node.initializer))) {
       fns.push({ name: node.name.text, node, m });
     }
@@ -56,11 +62,13 @@ const used = (fn) => {
   }
   return false;
 };
-// A declaration's own name is not a use of it.
+// A declaration's own name, or a key, is not a use of the function.
 const isDeclName = (id) => {
   const p = id.parent;
   return (
-    (ts.isFunctionDeclaration(p) || ts.isMethodDeclaration(p) || ts.isVariableDeclaration(p) || ts.isParameter(p) || ts.isPropertyDeclaration(p)) &&
+    (ts.isFunctionDeclaration(p) || ts.isMethodDeclaration(p) || ts.isVariableDeclaration(p) || ts.isParameter(p) ||
+     ts.isPropertyDeclaration(p) || ts.isPropertyAssignment(p) || ts.isPropertySignature(p) || ts.isMethodSignature(p) ||
+     ts.isGetAccessorDeclaration(p) || ts.isSetAccessorDeclaration(p) || ts.isEnumMember(p) || ts.isLabeledStatement(p)) &&
     p.name === id
   );
 };
