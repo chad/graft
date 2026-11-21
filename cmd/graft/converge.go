@@ -28,6 +28,11 @@ type convergeConfig struct {
 		Argv       []string `json:"argv"`
 		TimeoutSec int      `json:"timeout_sec"`
 	} `json:"model"`
+	// SkeletonModel is the model graft draft --skeleton asks (default: a stronger one).
+	SkeletonModel *struct {
+		Argv       []string `json:"argv"`
+		TimeoutSec int      `json:"timeout_sec"`
+	} `json:"skeleton_model"`
 	Conventions string   `json:"conventions"` // path, relative to the config file
 	Visible     []string `json:"visible"`     // files shown to the model as checks it must pass, relative to the config
 	Tier        string   `json:"tier"`
@@ -58,10 +63,11 @@ func loadConvergeConfig(path string) (convergeConfig, []converge.Gate, error) {
 	// encoding/json alone is not strict: it matches keys case-insensitively,
 	// lets a duplicate key win silently, accepts null and ignores trailing data.
 	if err := strictCheck(b, map[string][]string{
-		"":         {"policy", "gates", "model", "conventions", "visible", "tier", "attempts", "module", "skeleton", "language", "files"},
-		"language": {"name", "ext", "fence", "comment", "preamble", "bootstrap", "build", "run"},
-		"gates[]":  {"label", "argv", "kind", "timeout_sec"},
-		"model":    {"argv", "timeout_sec"},
+		"":               {"policy", "gates", "model", "conventions", "visible", "tier", "attempts", "module", "skeleton", "language", "files", "skeleton_model"},
+		"language":       {"name", "ext", "fence", "comment", "preamble", "bootstrap", "build", "run", "decl_check"},
+		"gates[]":        {"label", "argv", "kind", "timeout_sec"},
+		"model":          {"argv", "timeout_sec"},
+		"skeleton_model": {"argv", "timeout_sec"},
 	}); err != nil {
 		return c, nil, fmt.Errorf("%s: %w", path, err)
 	}
