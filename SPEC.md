@@ -139,15 +139,22 @@ happens only in a convergence-layer region, owned and marked like any other.**
 - **Human sign-off** (`graft signoff`, M12) records `human_signoff` evidence
   through the same append-only log. It shows the human the region body and what
   it pins, then pins the record's `gen_hash` and version, the region's body hash
-  (the bytes on disk, never a caller-supplied value), the spec hash and, with
-  `--render`, the skeleton hash (`pipeline.SkeletonHashOf`, the function
-  `graft run --render` pins with), so it goes stale on the same moves as any
-  evidence. It refuses a missing or hand-edited region, a region written for a
-  `gen_hash` other than the record's current one, and a record, skeleton or
-  region that changed while the human was being asked. It does not stand in for
-  the gates: a tier still needs its executable kinds from a run. **`--by` is
-  caller-supplied and NOT authenticated**; the entry says who typed a name, not
-  who they are (a signature over the entry is open, §12).
+  (the bytes on disk, never a caller-supplied value), the spec hash and, in
+  render mode, the skeleton hash. There is ONE skeleton-hash function,
+  `pipeline.SkeletonHashOf`: `graft run --render` calls it over the records
+  its spec resolves to, and `graft signoff` calls it over the same set
+  (`pipeline.SpecRecordIDs`, from the spec `graft run` was given, `--spec`),
+  not over every record in the index, so a removed section's record does not
+  change it. Render mode is detected (graft.json names a skeleton, or a record
+  carries a shape), never chosen by a flag. A sign-off goes stale on the same
+  moves as any evidence. It refuses a missing or hand-edited region, a region
+  written for a `gen_hash` other than the record's current one, and a record,
+  skeleton or region that changed while the human was being asked. It does not
+  stand in for the gates: a tier still needs its executable kinds from a run.
+  **`--by` is caller-supplied and NOT authenticated**; the entry says who typed
+  a name, not who they are (a signature over the entry is open, §12).
+  `graft converge` does not compare `skeleton_hash` (it has no skeleton); a
+  render tree's regions are converged by `graft run --render`.
 - The evidence log requires a unix platform (flock).
 - An unknown risk tier is an error, never "requires nothing".
 

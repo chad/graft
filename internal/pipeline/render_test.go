@@ -406,13 +406,9 @@ func TestSkeletonHashOfMatchesWhatRunPins(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	idx, err := LoadIndex(cfg.Repo)
+	ids, err := SpecRecordIDs(cfg.Repo, drafter.Drafts(spec))
 	if err != nil {
 		t.Fatal(err)
-	}
-	var ids []string
-	for id := range idx.Records {
-		ids = append(ids, id)
 	}
 	want, err := SkeletonHashOf(store, SkeletonGenerator(cfg.Skeleton, cfg.lang()), ids)
 	if err != nil || want == "" {

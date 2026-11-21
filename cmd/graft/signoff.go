@@ -9,10 +9,15 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
+	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/chad/graft/internal/converge"
+	"github.com/chad/graft/internal/drafter"
 	"github.com/chad/graft/internal/evidence"
 	"github.com/chad/graft/internal/lang"
 	"github.com/chad/graft/internal/pipeline"
@@ -38,9 +43,12 @@ graft does not verify who you are, and the log is not tamper-proof (SPEC §7).
 The log defaults to <records>/.graft/evidence.jsonl, the log graft run reads
 (not graft converge's default, which is relative to the current directory).
 
-Use --render when the tree was made by 'graft run --render', so the sign-off
-pins the skeleton like the rest of that tree's evidence. The skeleton hash is
-computed from the records' shapes; the skeleton file is read only for its
+Render mode is detected, not chosen: when graft.json names a "skeleton" or the
+records carry a shape (the tree was made by 'graft run --render'), the sign-off
+pins the skeleton hash exactly as graft run does, and --spec (the spec graft
+run was given) is required, because the hash covers the records that spec
+resolves to. The hash is computed from those records' shapes; the skeleton
+file (graft.json "skeleton", else skeleton.json beside it) is read only for its
 generator name.
 
 exit codes:
@@ -80,7 +88,8 @@ type signoffInputs struct {
 	file    string // slash path relative to root
 	id      string
 	render  bool
-	genName string // render: the skeleton generator's name
+	genName string   // render: the skeleton generator's name
+	ids     []string // render: the records the spec resolves to
 }
 
 // readSignoff reads the record, region and (render) skeleton hash and builds
@@ -117,23 +126,34 @@ func readSignoff(in signoffInputs) (signoffState, error) {
 	s.Pin = evidence.Pin{RecordID: in.id, Version: cur.Version, GenHash: cur.GenHash,
 		RegionHash: converge.RegionHash(s.Body), SpecHash: cur.SpecHash}
 	if in.render {
-		idx, err := pipeline.LoadIndex(in.repo)
-		if err != nil {
-			return s, err
-		}
-		if _, ok := idx.Records[in.id]; !ok {
-			return s, fmt.Errorf("record %s is not in the accepted index of %s; --render needs it", in.id, in.repo)
-		}
-		ids := make([]string, 0, len(idx.Records))
-		for id := range idx.Records {
-			ids = append(ids, id)
-		}
-		sort.Strings(ids)
-		if s.Pin.SkeletonHash, err = pipeline.SkeletonHashOf(in.store, in.genName, ids); err != nil {
+		if s.Pin.SkeletonHash, err = pipeline.SkeletonHashOf(in.store, in.genName, in.ids); err != nil {
 			return s, err
 		}
 	}
 	return s, nil
+}
+
+// isRenderMode: the tree was made by graft run --render when graft.json names
+// a skeleton or any accepted record carries a shape (the skeleton is record
+// content since M11a). Plain runs write no shapes.
+func isRenderMode(store records.Store, repo string, cfg convergeConfig) (bool, error) {
+	if cfg.Skeleton != "" {
+		return true, nil
+	}
+	idx, err := pipeline.LoadIndex(repo)
+	if err != nil {
+		return false, err
+	}
+	for id := range idx.Records {
+		p, err := store.Current(id)
+		if err != nil {
+			return false, err
+		}
+		if len(p.Shape) > 0 {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // cleanRelPath accepts only a slash-separated path inside the root.
@@ -161,18 +181,13 @@ func signoffCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	by := fs.String("by", "", "who signs off; recorded as given, NOT authenticated")
 	note := fs.String("note", "", "free text recorded with the sign-off")
 	yes := fs.Bool("yes", false, "skip the confirmation prompt (required when stdin is not a terminal)")
-	renderOn := fs.Bool("render", false, "the tree was made by graft run --render: pin the skeleton hash")
-	skelPath := fs.String("skeleton", "", "skeleton JSON for --render (default: graft.json \"skeleton\", else skeleton.json beside it); only its generator name is used")
+	specPath := fs.String("spec", "", "the spec graft run was given; required in render mode (detected), where the skeleton hash covers the records it resolves to")
 	asJSON := fs.Bool("json", false, "print the recorded evidence as JSON")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 	if *id == "" || *file == "" || strings.TrimSpace(*by) == "" || fs.NArg() != 0 {
 		fmt.Fprint(stderr, signoffUsage)
-		return 2
-	}
-	if !*renderOn && *skelPath != "" {
-		fmt.Fprintln(stderr, "graft: --skeleton has no effect without --render")
 		return 2
 	}
 	if strings.ContainsAny(*by+*note, "\r\n\x00") || len(*by) > 200 {
@@ -194,17 +209,29 @@ func signoffCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "graft: %v\n", err)
 		return 2
 	}
-	in := signoffInputs{store: store, repo: *recDir, root: *root, file: rel, id: *id, render: *renderOn}
-	if *renderOn {
+	in := signoffInputs{store: store, repo: *recDir, root: *root, file: rel, id: *id}
+	if in.render, err = isRenderMode(store, *recDir, cfg); err != nil {
+		fmt.Fprintf(stderr, "graft: %v\n", err)
+		return 2
+	}
+	switch {
+	case in.render && *specPath == "":
+		fmt.Fprintln(stderr, "graft: refused: this is a render tree (graft.json names a skeleton, or the records carry a shape); pass --spec, the spec graft run was given, so the skeleton hash is the one graft run pins")
+		return 2
+	case !in.render && *specPath != "":
+		fmt.Fprintln(stderr, "graft: refused: --spec only applies to a render tree, and this one is not (no skeleton in graft.json, no record has a shape)")
+		return 2
+	}
+	if in.render {
 		profile, err := lang.Resolve(cfg.Language)
 		if err != nil {
 			fmt.Fprintf(stderr, "graft: %v\n", err)
 			return 2
 		}
-		sp := skeletonFile(cfg.Skeleton, *cfgPath, *skelPath)
+		sp := skeletonFile(cfg.Skeleton, *cfgPath, "")
 		sb, err := os.ReadFile(sp)
 		if err != nil {
-			fmt.Fprintf(stderr, "graft: skeleton: %v\n", err)
+			fmt.Fprintf(stderr, "graft: skeleton: %v (set \"skeleton\" in graft.json; its generator name is part of the hash)\n", err)
 			return 2
 		}
 		sk, err := recording.LoadSkeleton(sb)
@@ -213,6 +240,19 @@ func signoffCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			return 2
 		}
 		in.genName = pipeline.SkeletonGenerator(&sk, profile)
+		spec, err := os.ReadFile(*specPath)
+		if err != nil {
+			fmt.Fprintf(stderr, "graft: %v\n", err)
+			return 2
+		}
+		if in.ids, err = pipeline.SpecRecordIDs(*recDir, drafter.Drafts(string(spec))); err != nil {
+			fmt.Fprintf(stderr, "graft: refused: %v\n", err)
+			return 2
+		}
+		if !slices.Contains(in.ids, in.id) {
+			fmt.Fprintf(stderr, "graft: refused: record %s is not one of the records the spec resolves to\n", in.id)
+			return 2
+		}
 	}
 	st, err := readSignoff(in)
 	if err != nil {
@@ -283,7 +323,7 @@ func pinSummary(p evidence.Pin) string {
 func showSignoff(w io.Writer, st signoffState, in signoffInputs, log *evidence.Log, logPath string, policy map[string][]evidence.Kind, by, note string) {
 	p := st.Pin
 	fmt.Fprintf(w, "Sign-off for record %s v%d, %s\n", p.RecordID, p.Version, in.file)
-	fmt.Fprintf(w, "--- region body ---\n%s--- end of region ---\n", st.Body)
+	fmt.Fprintf(w, "--- region body ---\n%s--- end of region ---\n", visible(st.Body))
 	fmt.Fprintf(w, "pinned: gen_hash %s\n        region_hash %s\n        spec_hash %s\n", p.GenHash, p.RegionHash, orNone(p.SpecHash))
 	if in.render {
 		fmt.Fprintf(w, "        skeleton_hash %s\n", p.SkeletonHash)
@@ -301,6 +341,18 @@ func showSignoff(w io.Writer, st signoffState, in signoffInputs, log *evidence.L
 		kinds = append(kinds, string(k))
 	}
 	sort.Strings(kinds)
+	var prior []evidence.Evidence
+	for _, e := range log.Fresh(p) {
+		if e.Kind == evidence.HumanSignoff {
+			prior = append(prior, e)
+		}
+	}
+	if len(prior) > 0 {
+		fmt.Fprintln(w, "already signed off (fresh), signing again adds another entry:")
+		for _, e := range prior {
+			fmt.Fprintf(w, "  %s by %q at %s\n", e.Verdict, e.By, e.At.Format(time.RFC3339))
+		}
+	}
 	fmt.Fprintln(w, "other fresh evidence for this region:")
 	n := 0
 	for _, k := range kinds {
@@ -340,4 +392,26 @@ func orNone(s string) string {
 		return "none (the record has no specs)"
 	}
 	return s
+}
+
+// visible makes s safe to print to a terminal: control characters other than
+// newline and tab (an escape sequence in a region body, say) are shown as
+// \xNN or \uNNNN, never interpreted.
+func visible(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r == '\n' || r == '\t':
+			b.WriteRune(r)
+		case r == utf8.RuneError || unicode.IsControl(r) || r == '\u2028' || r == '\u2029' || (r >= 0x200b && r <= 0x200f) || (r >= 0x202a && r <= 0x202e) || (r >= 0x2066 && r <= 0x2069):
+			if r < 0x100 {
+				fmt.Fprintf(&b, "\\x%02x", r)
+			} else {
+				fmt.Fprintf(&b, "\\u%04x", r)
+			}
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
