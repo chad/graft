@@ -32,7 +32,8 @@ import (
 	"github.com/chad/graft/internal/recording"
 )
 
-// DefaultRetries is how many times an invalid proposal goes back to the model.
+// DefaultRetries is the CLI's default for how many times an invalid proposal
+// goes back to the model. Config.Retries is taken literally: 0 is no retry.
 const DefaultRetries = 2
 
 // MaxRetries caps --retries.
@@ -59,7 +60,7 @@ type Config struct {
 	Profile     lang.Profile
 	Spec        string
 	Conventions string
-	Retries     int  // 0 means DefaultRetries
+	Retries     int  // times an invalid proposal goes back to the model; 0 means none (one call)
 	Strict      bool // an unowned statement counts as invalid and is retried
 
 	// FileFor is the one file a section owns (a record's affected_scope is
@@ -112,6 +113,26 @@ func (r Result) Unowned() []Owner {
 	return out
 }
 
+// Dangling lists the statements whose model claim names a stub or decl that
+// is not in the proposal (even when another claim for it is valid).
+func (r Result) Dangling() []Owner {
+	var out []Owner
+	for _, o := range r.Coverage {
+		if len(o.Dangling) > 0 {
+			out = append(out, o)
+		}
+	}
+	return out
+}
+
+func danglingList(os []Owner) string {
+	var s []string
+	for _, o := range os {
+		s = append(s, o.Statement.ID+" -> "+strings.Join(o.Dangling, ", "))
+	}
+	return strings.Join(s, "; ")
+}
+
 // Statements numbers every drafted statement of the spec, in order.
 func Statements(drafts []drafter.Draft) []Statement {
 	var out []Statement
@@ -136,9 +157,6 @@ func Draft(ctx context.Context, cfg Config) (Result, error) {
 		return res, fmt.Errorf("skeldraft: the %s language profile has no decl_check, so it cannot draft a skeleton (a drafted decl must be proven free of logic)", cfg.Profile.Name)
 	}
 	retries := cfg.Retries
-	if retries == 0 {
-		retries = DefaultRetries
-	}
 	if retries < 0 || retries > MaxRetries {
 		return res, fmt.Errorf("skeldraft: retries must be 0..%d", MaxRetries)
 	}
@@ -156,11 +174,16 @@ func Draft(ctx context.Context, cfg Config) (Result, error) {
 			return res, fmt.Errorf("%w: %v", ErrModel, err)
 		}
 		sk, owners, err := validate(ctx, cfg, drafts, stmts, ans)
+		if errors.Is(err, ErrTool) {
+			return res, err // a broken tool is not the model's fault: no feedback, no retry
+		}
 		if err == nil {
 			res.Skeleton = sk
 			res.Coverage = coverage(stmts, sk, owners)
 			if cfg.Strict && len(res.Unowned()) > 0 {
 				err = fmt.Errorf("%d statement(s) have no owning stub or decl (--strict): %s", len(res.Unowned()), ids(res.Unowned()))
+			} else if cfg.Strict && len(res.Dangling()) > 0 {
+				err = fmt.Errorf("claims naming a stub or decl that is not in the proposal (--strict): %s", danglingList(res.Dangling()))
 			} else {
 				return res, nil
 			}
@@ -206,7 +229,7 @@ func validate(ctx context.Context, cfg Config, drafts []drafter.Draft, stmts []S
 	if len(decls) > 0 {
 		out, err := cfg.Check(ctx, decls)
 		if err != nil {
-			return zero, nil, fmt.Errorf("decl_check could not run: %w", err)
+			return zero, nil, toolErr("decl_check", err)
 		}
 		if out != "" {
 			return zero, nil, fmt.Errorf("decl_check rejected the drafted decls (decls are types, consts and signatures only; no logic):\n%s", strings.TrimSpace(out))
@@ -220,12 +243,19 @@ func validate(ctx context.Context, cfg Config, drafts []drafter.Draft, stmts []S
 	defer cleanup()
 	out, err := cfg.Build(ctx, root)
 	if err != nil {
-		return zero, nil, fmt.Errorf("the build gate could not run: %w", err)
+		return zero, nil, toolErr("the build gate", err)
 	}
 	if out != "" {
 		return zero, nil, fmt.Errorf("the rendered, seeded tree does not build (%s):\n%s", strings.Join(lang.ExpandArgv(cfg.Profile.Build, map[string]string{"out": "<bin>"}), " "), strings.TrimSpace(out))
 	}
 	return sk, a.Owners, nil
+}
+
+func toolErr(what string, err error) error {
+	if errors.Is(err, ErrTool) {
+		return err
+	}
+	return fmt.Errorf("%w: %s could not run: %v", ErrTool, what, err)
 }
 
 func parse(resp string) (answer, error) {

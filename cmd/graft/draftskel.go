@@ -50,8 +50,8 @@ exit codes:
   1  no valid proposal within the retries (nothing written)
   2  usage or config error, or --out exists (use --force)
   3  the model command, sedum or I/O failed
-  4  proposal written, but some statements are UNOWNED (review them; --strict
-     makes this a retry instead)
+  4  proposal written, but some statements are UNOWNED or carry a DANGLING claim
+     (review them; --strict makes this a retry instead)
 `
 
 // defaultSkeletonModel is the model drafting uses when none is configured: a
@@ -78,6 +78,7 @@ func draftSkeletonCmd(args []string, stdout, stderr io.Writer) int {
 	modelArg := fs.String("model", "", "model command, split on spaces (default: config skeleton_model, else opus)")
 	retries := fs.Int("retries", skeldraft.DefaultRetries, "times an invalid proposal goes back to the model (max 5)")
 	strict := fs.Bool("strict", false, "an UNOWNED statement is a retry, not just a flag")
+	records := fs.String("records", "", "provenance repo: a section that already has a record is drafted at that record's file (its affected_scope)")
 	force := fs.Bool("force", false, "overwrite --out and its coverage file")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -104,6 +105,10 @@ func draftSkeletonCmd(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "graft: %v\n", err)
 		return 2
 	}
+	if len(cfg.Files) > 0 {
+		fmt.Fprintln(stderr, "graft: config \"files\" has no effect with a drafted skeleton (under --render the skeleton places files, one per section, at the path derived from the section); remove it")
+		return 2
+	}
 	if cfg.Conventions == "" {
 		fmt.Fprintln(stderr, "graft: graft draft --skeleton needs conventions in the config")
 		return 2
@@ -125,6 +130,12 @@ func draftSkeletonCmd(args []string, stdout, stderr io.Writer) int {
 	}
 	if len(profile.DeclCheck) == 0 {
 		fmt.Fprintf(stderr, "graft: the %s language profile has no decl_check, so it cannot draft a skeleton\n", profile.Name)
+		return 2
+	}
+	drafts := drafter.Drafts(string(spec))
+	placed, err := pipeline.SectionFiles(*records, drafts, profile.Ext)
+	if err != nil {
+		fmt.Fprintf(stderr, "graft: %v\n", err)
 		return 2
 	}
 	argv, timeout := defaultSkeletonModel, 10*time.Minute
@@ -159,10 +170,10 @@ func draftSkeletonCmd(args []string, stdout, stderr io.Writer) int {
 		Model:   model.Command{Argv: argv, Timeout: timeout},
 		Profile: profile, Spec: string(spec), Conventions: string(conv),
 		Retries: *retries, Strict: *strict,
-		FileFor: func(s string) string { return pipeline.SectionFile(s, profile.Ext) },
+		FileFor: func(s string) string { return placed[s] },
 		Check:   skeldraft.ExecCheck(profile),
 		Scratch: func(ctx context.Context, drafts []drafter.Draft, sk recording.Skeleton) (string, func(), error) {
-			return pipeline.RenderScratch(ctx, pcfg, drafts, sk)
+			return pipeline.RenderScratch(ctx, pcfg, drafts, placed, sk)
 		},
 		Build: skeldraft.ExecBuild(profile),
 	})
@@ -190,7 +201,7 @@ func draftSkeletonCmd(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprint(stdout, res.Report())
 	fmt.Fprintf(stdout, "proposal: %s (validated: decls logic-free, sedum render, seeded tree builds)\nnothing applied; to accept: graft run --render --skeleton %s --accept ...\n", *out, *out)
-	if u := res.Unowned(); len(u) > 0 {
+	if len(res.Unowned()) > 0 || len(res.Dangling()) > 0 {
 		return 4
 	}
 	return 0

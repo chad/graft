@@ -28,8 +28,11 @@ func (r Result) Report() string {
 			fmt.Fprintf(&b, "       -> %s [claimed]\n", strings.Join(o.Claimed, ", "))
 		}
 		if len(o.Dangling) > 0 {
-			fmt.Fprintf(&b, "       (ignored claim naming nothing in the proposal: %s)\n", strings.Join(o.Dangling, ", "))
+			fmt.Fprintf(&b, "       -> DANGLING claim, names nothing in the proposal: %s\n", strings.Join(o.Dangling, ", "))
 		}
+	}
+	if d := r.Dangling(); len(d) > 0 {
+		fmt.Fprintf(&b, "DANGLING: %d statement(s) with a claim naming nothing in the proposal: %s\n", len(d), danglingList(d))
 	}
 	if u := r.Unowned(); len(u) > 0 {
 		fmt.Fprintf(&b, "UNOWNED: %d of %d statement(s): %s\n", len(u), len(r.Coverage), ids(u))
@@ -47,13 +50,14 @@ func (r Result) ReportJSON() ([]byte, error) {
 		Type    string   `json:"type"`
 		Text    string   `json:"text"`
 		Claimed []string `json:"claimed_owners"`
-		Ignored []string `json:"ignored_claims,omitempty"`
+		Ignored []string `json:"dangling_claims,omitempty"`
 		Unowned bool     `json:"unowned"`
 	}
 	out := struct {
 		Note       string `json:"note"`
 		Statements []row  `json:"statements"`
 		Unowned    int    `json:"unowned"`
+		Dangling   int    `json:"dangling"`
 	}{Note: "claimed_owners are the drafting model's claim, not evidence; unowned is the hard signal"}
 	for _, o := range r.Coverage {
 		c := o.Claimed
@@ -62,6 +66,6 @@ func (r Result) ReportJSON() ([]byte, error) {
 		}
 		out.Statements = append(out.Statements, row{o.Statement.ID, o.Statement.Section, string(o.Statement.Type), o.Statement.Text, c, o.Dangling, o.Unowned()})
 	}
-	out.Unowned = len(r.Unowned())
+	out.Unowned, out.Dangling = len(r.Unowned()), len(r.Dangling())
 	return json.MarshalIndent(out, "", "  ")
 }

@@ -117,15 +117,15 @@ into a scratch tree that the profile's build gate builds with placeholder
 bodies. An invalid proposal goes back to the model with the checker's and the
 build's output, `--retries` times (default 2, max 5). The coverage report is the
 model's claim of which stub owns each statement; a statement nothing owns is
-flagged UNOWNED (`--strict` makes that a retry).
+flagged UNOWNED (`--strict` makes that a retry, dangling claims included). A section is placed at its record's `affected_scope` when `--records DIR` names a repo where it has a record (a scope that is not exactly one file is refused), else at the file `accept` would derive; `"files"` in the config is refused. `--retries 0` means one call.
 
 | code | meaning |
 |---|---|
 | 0 | proposal written; every statement is claimed by some stub or decl |
 | 1 | no valid proposal within the retries; nothing written |
 | 2 | refused before asking the model (usage, config, profile without `decl_check`, `--out` exists) |
-| 3 | the model command, sedum or I/O failed |
-| 4 | proposal written, but some statements are UNOWNED |
+| 3 | the model command, sedum, I/O or a tool (the decl checker or the build gate could not run) failed; never retried |
+| 4 | proposal written, but some statements are UNOWNED or carry a DANGLING claim (a claim naming a stub or decl not in the proposal) |
 
 ## 7. Evidence
 

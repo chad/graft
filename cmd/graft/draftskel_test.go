@@ -7,7 +7,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/chad/graft/internal/drafter"
+	"github.com/chad/graft/internal/pipeline"
 	"github.com/chad/graft/internal/recording"
 )
 
@@ -113,5 +116,114 @@ func TestDraftSkeletonUsage(t *testing.T) {
 	var so, se bytes.Buffer
 	if code := run([]string{"draft", "--skeleton"}, &so, &se); code != 2 || !strings.Contains(se.String(), "exit codes") || !strings.Contains(se.String(), "UNOWNED") {
 		t.Errorf("exit %d: %s", code, se.String())
+	}
+}
+
+// draftWith runs the command against a canned answer and returns exit, stdout, stderr.
+func draftWith(t *testing.T, answer string, extra ...string) (int, string, string) {
+	t.Helper()
+	cfg, spec, a, out := dsSetup(t, answer)
+	args := append([]string{"draft", "--skeleton", "--config", cfg, "--spec", spec, "--out", out, "--model", "cat " + a}, extra...)
+	var so, se bytes.Buffer
+	code := run(args, &so, &se)
+	if code != 0 && code != 4 {
+		if _, err := os.Stat(out); err == nil {
+			t.Error("a failed draft must not write the proposal")
+		}
+	}
+	return code, so.String(), se.String()
+}
+
+// The real decl_check and the real build gate sit in this path: replacing
+// either with a no-op makes these fail.
+func TestDraftSkeletonRealDeclCheckRejectsLogic(t *testing.T) {
+	ans := strings.Replace(dsGoodAnswer, `"decls":[{"kind":"const","name":"limit","code":"const limit = 16"}]`, `"decls":[{"kind":"var","name":"limit","code":"var limit = compute()"}]`, 1)
+	code, so, se := draftWith(t, ans, "--retries", "0")
+	if code != 1 || !strings.Contains(se, "decl_check rejected") || !strings.Contains(se, "one.go: limit:") {
+		t.Fatalf("exit %d\n%s\n%s", code, so, se)
+	}
+}
+
+func TestDraftSkeletonRealBuildGateRejectsATreeThatDoesNotBuild(t *testing.T) {
+	ans := strings.Replace(dsGoodAnswer, `{"name":"nick","type":"string"}`, `{"name":"nick","type":"NoSuchType"}`, 1)
+	code, so, se := draftWith(t, ans, "--retries", "0")
+	if code != 1 || !strings.Contains(se, "does not build") || !strings.Contains(se, "NoSuchType") {
+		t.Fatalf("exit %d\n%s\n%s", code, so, se)
+	}
+}
+
+func TestDraftSkeletonDanglingClaimExits4(t *testing.T) {
+	ans := strings.Replace(dsGoodAnswer, `"S1":["one.go#accept"]`, `"S1":["one.go#accept","one.go#nosuch"]`, 1)
+	code, so, _ := draftWith(t, ans)
+	if code != 4 || !strings.Contains(so, "DANGLING") || strings.Contains(so, "UNOWNED: ") && !strings.Contains(so, "UNOWNED: none") {
+		t.Fatalf("exit %d\n%s", code, so)
+	}
+}
+
+func TestDraftSkeletonZeroRetriesMakesOneCall(t *testing.T) {
+	code, so, _ := draftWith(t, "not json at all", "--retries", "0")
+	if code != 1 || !strings.Contains(so, "1 model call(s)") {
+		t.Fatalf("exit %d\n%s", code, so)
+	}
+}
+
+func TestDraftSkeletonRefusesFilesInTheConfig(t *testing.T) {
+	cfg, spec, a, out := dsSetup(t, dsGoodAnswer)
+	b, _ := os.ReadFile(cfg)
+	b = bytes.Replace(b, []byte(`"gates":[]`), []byte(`"gates":[],"files":{"One":"pkg/one.go"}`), 1)
+	if err := os.WriteFile(cfg, b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var so, se bytes.Buffer
+	code := run([]string{"draft", "--skeleton", "--config", cfg, "--spec", spec, "--out", out, "--model", "cat " + a}, &so, &se)
+	if code != 2 || !strings.Contains(se.String(), `"files" has no effect`) || strings.Contains(so.String(), "model:") {
+		t.Fatalf("exit %d\n%s\n%s", code, so.String(), se.String())
+	}
+}
+
+// A record's file is its affected_scope (since #36): a section accepted with
+// files {"One": "pkg/one.go"} is drafted at pkg/one.go, never at the derived
+// one.go, and a skeleton at the derived path is refused.
+func TestDraftSkeletonPlacesAtTheRecordsFile(t *testing.T) {
+	// pkg/one.go is a library package; the entry point lives in the root file.
+	atPkg := strings.Replace(dsGoodAnswer, `"path":"one.go"`, `"path":"pkg/one.go"`, 1)
+	atPkg = strings.Replace(atPkg, `{"name":"main","doc":"parses flags and serves"},`, "", 1)
+	atPkg = strings.Replace(atPkg, `"one.go#accept"`, `"pkg/one.go#accept"`, 1)
+	atPkg = strings.Replace(atPkg, `"stubs":[{"name":"ping"`, `"stubs":[{"name":"main","doc":"serves"},{"name":"ping"`, 1)
+	cfg, spec, a, out := dsSetup(t, atPkg)
+	repo := t.TempDir()
+	if _, err := pipeline.AcceptWith(repo, drafter.Drafts(dsSpec), "t", time.Now(), pipeline.AcceptOptions{Ext: ".go", Files: map[string]string{"One": "pkg/one.go"}}); err != nil {
+		t.Fatal(err)
+	}
+	var so, se bytes.Buffer
+	args := []string{"draft", "--skeleton", "--config", cfg, "--spec", spec, "--out", out, "--records", repo, "--model", "cat " + a}
+	if code := run(args, &so, &se); code != 0 {
+		t.Fatalf("exit %d\n%s\n%s", code, so.String(), se.String())
+	}
+	b, _ := os.ReadFile(out)
+	sk, err := recording.LoadSkeleton(b)
+	if err != nil || sk.Files[0].Path != "pkg/one.go" {
+		t.Fatalf("%v %+v", err, sk.Files)
+	}
+	// the prompt names the record's file, and the derived one is refused
+	if err := os.WriteFile(a, []byte(dsGoodAnswer), 0o644); err != nil { // answer at one.go
+		t.Fatal(err)
+	}
+	so.Reset()
+	se.Reset()
+	args = append(args, "--force", "--retries", "0")
+	if code := run(args, &so, &se); code != 1 || !strings.Contains(se.String(), `exactly the file "pkg/one.go"`) {
+		t.Fatalf("derived path with a record at pkg/one.go: exit %d\n%s\n%s", code, so.String(), se.String())
+	}
+	// a repo whose records sit at the derived path is fine with the derived path
+	repo2 := t.TempDir()
+	if _, err := pipeline.Accept(repo2, drafter.Drafts(dsSpec), "t", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	so.Reset()
+	se.Reset()
+	args = []string{"draft", "--skeleton", "--config", cfg, "--spec", spec, "--out", out, "--records", repo2, "--force", "--model", "cat " + a}
+	if code := run(args, &so, &se); code != 0 {
+		t.Fatalf("agreeing repo: exit %d\n%s\n%s", code, so.String(), se.String())
 	}
 }

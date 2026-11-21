@@ -57,7 +57,7 @@ type fakes struct {
 
 func (f *fakes) cfg(m *scripted) Config {
 	return Config{
-		Model: m, Profile: lang.Go, Spec: spec, Conventions: "conv",
+		Model: m, Profile: lang.Go, Spec: spec, Conventions: "conv", Retries: DefaultRetries,
 		FileFor: func(s string) string { return strings.ToLower(s[strings.LastIndex(s, " ")+1:]) + ".go" },
 		Check:   func(context.Context, []DeclIn) (string, error) { f.check++; return f.checkOut, nil },
 		Scratch: func(context.Context, []drafter.Draft, recording.Skeleton) (string, func(), error) {
@@ -151,38 +151,101 @@ func TestFuncKindRejectedBeforeAnyBuild(t *testing.T) {
 }
 
 func TestStructuralRejections(t *testing.T) {
-	for name, files := range map[string]string{
-		"unknown section": `{"path":"x.go","section":"app › Nope"},` + fileOne + "," + fileTwo,
-		"record key":      `{"path":"x.go","record":"prov-1"},` + fileOne + "," + fileTwo,
-		"section no file": fileOne,
-		"stub no doc":     strings.Replace(fileTwo, `"doc":"answers PING"`, `"doc":""`, 1) + "," + fileOne,
-		"duplicate path":  fileOne + "," + fileOne + "," + fileTwo,
-		"no stub":         `{"path":"one.go","section":"app › One","decls":[{"kind":"type","name":"S","code":"type S struct{}"}]},` + fileTwo,
-		"wrong path":      strings.Replace(fileOne, "one.go", "unknown.go", 1) + "," + fileTwo,
-		"two files":       fileOne + "," + strings.Replace(fileOne, "one.go", "extra.go", 1) + "," + fileTwo,
+	good := answerJSON(fileOne+","+fileTwo, goodOwners)
+	for name, c := range map[string]struct{ ans, want string }{
+		"unknown section": {answerJSON(`{"path":"x.go","section":"app › Nope","stubs":[{"name":"a","doc":"d"}]},`+fileOne+","+fileTwo, goodOwners), "not a section of the spec"},
+		// section and path are valid; only the record key is wrong
+		"record key":      {answerJSON(strings.Replace(fileOne, `"section"`, `"record":"prov-1","section"`, 1)+","+fileTwo, goodOwners), `never "record"`},
+		"section no file": {answerJSON(fileOne, goodOwners), "owns no file"},
+		"stub no doc":     {answerJSON(strings.Replace(fileTwo, `"doc":"answers PING"`, `"doc":""`, 1)+","+fileOne, goodOwners), "no doc contract"},
+		"duplicate path":  {answerJSON(fileOne+","+fileOne+","+fileTwo, goodOwners), "listed twice"},
+		"wrong path":      {answerJSON(strings.Replace(fileOne, "one.go", "unknown.go", 1)+","+fileTwo, goodOwners), "must own exactly the file"},
+		// a second file for a section, at a path that is otherwise fine
+		"two files":      {answerJSON(fileOne+","+strings.Replace(fileOne, "one.go", "extra.go", 1)+","+fileTwo, goodOwners), "more than one file"},
+		"no stub":        {answerJSON(`{"path":"one.go","section":"app › One","decls":[{"kind":"type","name":"S","code":"type S struct{}"}]},`+fileTwo, goodOwners), "at least one stub"},
+		"unknown owner":  {answerJSON(fileOne+","+fileTwo, goodOwners+`,"S99":["one.go#accept"]`), "not a statement id"},
+		"unknown field":  {strings.Replace(good, `"owners"`, `"extra": 1, "owners"`, 1), "unknown field"},
+		"unknown nested": {strings.Replace(good, `"decls"`, `"bogus": true, "decls"`, 1), "unknown field"},
+		"trailing data":  {strings.TrimSuffix(good, "\n```") + "\n{}\n```", "trailing"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := &fakes{}
-			m := &scripted{answers: []string{answerJSON(files, goodOwners)}}
-			c := f.cfg(m)
-			c.Retries = 1
-			m.answers = append(m.answers, m.answers[0])
-			if _, err := Draft(context.Background(), c); !errors.Is(err, ErrInvalid) {
-				t.Fatalf("err = %v", err)
+			m := &scripted{answers: []string{c.ans}}
+			cfg := f.cfg(m)
+			cfg.Retries = 0
+			res, err := Draft(context.Background(), cfg)
+			if !errors.Is(err, ErrInvalid) || res.Calls != 1 {
+				t.Fatalf("err = %v, calls = %d", err, res.Calls)
+			}
+			if !strings.Contains(err.Error(), c.want) {
+				t.Errorf("error lacks %q: %v", c.want, err)
 			}
 			if f.check+f.scratch+f.build != 0 {
 				t.Error("structure is checked before any subprocess")
 			}
 		})
 	}
-	// unknown JSON fields are not accepted either
-	f := &fakes{}
-	m := &scripted{answers: []string{"```json\n{\"files\":[],\"owners\":{},\"extra\":1}\n```"}}
+}
+
+func TestZeroRetriesMeansOneCall(t *testing.T) {
+	f := &fakes{buildOut: "no"}
+	bad := answerJSON(fileOne+","+fileTwo, goodOwners)
+	m := &scripted{answers: []string{bad, bad, bad}}
 	c := f.cfg(m)
-	c.Retries = 1
-	m.answers = append(m.answers, m.answers[0])
-	if _, err := Draft(context.Background(), c); !errors.Is(err, ErrInvalid) {
-		t.Fatalf("err = %v", err)
+	c.Retries = 0
+	if res, err := Draft(context.Background(), c); !errors.Is(err, ErrInvalid) || res.Calls != 1 {
+		t.Fatalf("calls=%d err=%v, want one call", res.Calls, err)
+	}
+}
+
+// A broken tool is not a verdict on the proposal: no feedback, no retry.
+func TestToolFailureIsNeverRetried(t *testing.T) {
+	good := answerJSON(fileOne+","+fileTwo, goodOwners)
+	for name, mod := range map[string]func(*Config){
+		"check": func(c *Config) {
+			c.Check = func(context.Context, []DeclIn) (string, error) { return "", errors.New("boom") }
+		},
+		"build": func(c *Config) {
+			c.Build = func(context.Context, string) (string, error) { return "", errors.New("boom") }
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := &fakes{}
+			m := &scripted{answers: []string{good, good, good}}
+			c := f.cfg(m)
+			mod(&c)
+			res, err := Draft(context.Background(), c)
+			if !errors.Is(err, ErrTool) || errors.Is(err, ErrInvalid) || res.Calls != 1 || len(m.prompts) != 1 {
+				t.Fatalf("err=%v calls=%d", err, res.Calls)
+			}
+		})
+	}
+}
+
+func TestBrokenGoCheckerIsAToolErrorNotARejection(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("needs go")
+	}
+	saved := lang.GoDeclCheckSource
+	defer func() { lang.GoDeclCheckSource = saved }()
+	lang.GoDeclCheckSource = "package main\nfunc main( {\n"
+	out, err := ExecCheck(lang.Go)(context.Background(), []DeclIn{{"a.go", "type", "T", "type T struct{}"}})
+	if !errors.Is(err, ErrTool) || out != "" {
+		t.Fatalf("out=%q err=%v: a checker that does not compile is a tool error", out, err)
+	}
+}
+
+func TestGoCheckerIgnoresTheUsersGoEnv(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("needs go")
+	}
+	t.Setenv("GOFLAGS", "-badflag")
+	t.Setenv("GOPROXY", "https://invalid.example")
+	t.Setenv("GO111MODULE", "on")
+	t.Setenv("GOWORK", "/nonexistent/go.work")
+	out, err := ExecCheck(lang.Go)(context.Background(), []DeclIn{{"a.go", "type", "T", "type T struct{}"}})
+	if err != nil || out != "" {
+		t.Fatalf("out=%q err=%v", out, err)
 	}
 }
 
@@ -199,13 +262,40 @@ func TestUnownedStatementFlagged(t *testing.T) {
 		t.Fatalf("unowned = %+v", u)
 	}
 	rep := res.Report()
-	for _, want := range []string{"the model's claim", "UNOWNED: 2 of 3", "S2, S3", "ignored claim naming nothing", "one.go#accept [claimed]"} {
+	for _, want := range []string{"the model's claim", "UNOWNED: 2 of 3", "S2, S3", "DANGLING claim", "one.go#accept [claimed]"} {
 		if !strings.Contains(rep, want) {
 			t.Errorf("report lacks %q:\n%s", want, rep)
 		}
 	}
 	if j, err := res.ReportJSON(); err != nil || !strings.Contains(string(j), `"unowned": 2`) {
 		t.Errorf("%v %s", err, j)
+	}
+}
+
+// One valid claim next to a dangling one is not "unowned", but it is not clean.
+func TestDanglingClaimBesideAValidOneIsReported(t *testing.T) {
+	f := &fakes{}
+	m := &scripted{answers: []string{answerJSON(fileOne+","+fileTwo, `"S1":["one.go#accept","one.go#nosuch"],"S2":["one.go#accept"],"S3":["two.go#ping"]`)}}
+	res, err := Draft(context.Background(), f.cfg(m))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Unowned()) != 0 || len(res.Dangling()) != 1 {
+		t.Fatalf("unowned=%d dangling=%d", len(res.Unowned()), len(res.Dangling()))
+	}
+	rep := res.Report()
+	if !strings.Contains(rep, "DANGLING: 1 statement(s)") || !strings.Contains(rep, "S1 -> one.go#nosuch") {
+		t.Errorf("report:\n%s", rep)
+	}
+	if j, _ := res.ReportJSON(); !strings.Contains(string(j), `"dangling": 1`) {
+		t.Errorf("%s", j)
+	}
+	// --strict turns it into a retry
+	m2 := &scripted{answers: []string{m.answers[0], answerJSON(fileOne+","+fileTwo, goodOwners)}}
+	c := f.cfg(m2)
+	c.Strict = true
+	if res, err := Draft(context.Background(), c); err != nil || res.Calls != 2 || len(res.Dangling()) != 0 {
+		t.Fatalf("strict: %v %+v", err, res)
 	}
 }
 
@@ -261,18 +351,19 @@ func TestGoDeclCheck(t *testing.T) {
 		t.Fatalf("logic-free decls rejected: %v %q", err, out)
 	}
 	for name, d := range map[string]DeclIn{
-		"const call":      {"a.go", "const", "L", `const L = len("a")`},
-		"const conv":      {"a.go", "const", "D", "const D = time.Duration(5)"},
-		"var call":        {"a.go", "var", "x", "var x = make(map[string]int)"},
-		"var func lit":    {"a.go", "var", "f", "var f = func() int { return 1 }"},
-		"var filled":      {"a.go", "var", "m", `var m = map[string]int{"a": 1}`},
-		"var value":       {"a.go", "var", "v", "var v = 5"},
-		"array len call":  {"a.go", "type", "A", `type A [len("ab")]int`},
-		"a func":          {"a.go", "type", "F", "func F() {}"},
-		"a method":        {"a.go", "type", "F", "func (s *S) F() {}"},
-		"kind mismatch":   {"a.go", "type", "K", "const K = 1"},
-		"does not parse":  {"a.go", "type", "P", "type P struct {"},
-		"import in decls": {"a.go", "type", "I", `import "os"`},
+		"const call":            {"a.go", "const", "L", `const L = len("a")`},
+		"const conv":            {"a.go", "const", "D", "const D = time.Duration(5)"},
+		"var call":              {"a.go", "var", "x", "var x = make(map[string]int)"},
+		"var func lit":          {"a.go", "var", "f", "var f = func() int { return 1 }"},
+		"var filled":            {"a.go", "var", "m", `var m = map[string]int{"a": 1}`},
+		"var value":             {"a.go", "var", "v", "var v = 5"},
+		"array len call":        {"a.go", "type", "A", `type A [len("ab")]int`},
+		"a func":                {"a.go", "type", "F", "func F() {}"},
+		"a method":              {"a.go", "type", "F", "func (s *S) F() {}"},
+		"kind mismatch":         {"a.go", "type", "K", "const K = 1"},
+		"does not parse":        {"a.go", "type", "P", "type P struct {"},
+		"type param constraint": {"a.go", "type", "G", `type G[P interface{ ~[len("a")]int }] struct{}`},
+		"import in decls":       {"a.go", "type", "I", `import "os"`},
 	} {
 		out, err := check(context.Background(), []DeclIn{d})
 		if err != nil || !strings.Contains(out, "a.go: "+d.Name+": ") {
@@ -300,5 +391,16 @@ func TestDeclLogicRejectedAndFedBack(t *testing.T) {
 	}
 	if p := m.prompts[1]; !strings.Contains(p, "one.go: limit:") || !strings.Contains(p, "initialiser") {
 		t.Errorf("the checker's stderr must be fed back:\n%s", p)
+	}
+}
+
+// GOPROXY, GOWORK and GO111MODULE cannot be observed to matter from a passing
+// build, so the pin itself is asserted; GOFLAGS is checked by behaviour above.
+func TestGoEnvPinsTheCheckerBuild(t *testing.T) {
+	have := strings.Join(goEnv, " ")
+	for _, want := range []string{"GOFLAGS=", "GOPROXY=off", "GOWORK=off", "GO111MODULE=off"} {
+		if !strings.Contains(have+" ", want+" ") {
+			t.Errorf("goEnv lacks %s: %v", want, goEnv)
+		}
 	}
 }

@@ -92,7 +92,11 @@ func check(d decl) []string {
 func checkSpec(tok token.Token, sp ast.Spec) []string {
 	switch s := sp.(type) {
 	case *ast.TypeSpec:
-		return noLogic(s.Type, "type")
+		out := noLogic(s.Type, "type")
+		if s.TypeParams != nil { // constraints can hold array lengths too
+			out = append(out, noLogic(s.TypeParams, "type parameter list")...)
+		}
+		return out
 	case *ast.ValueSpec:
 		var out []string
 		if s.Type != nil {
