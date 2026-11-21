@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased (0.2.0)
+
+- **One gen_hash (M13).** sedum 0.14 reads a record's shape, so its markers carry the same `gen_hash` graft computes. graft drops `Pin.SedumGen`, the second, shape-less hash it kept for sedum.
+- **Requires sedum >= 0.14.0.** graft refuses an older sedum with a clear error (`graft needs sedum >= 0.14.0, found 0.13.0`) before it renders anything, in `graft run --render`, `graft bench` and `graft draft --skeleton`.
+- **Upgrading from 0.1.0:** 0.1.0 render trees re-render once on upgrade, with no model calls. sedum's files get markers that carry the full gen_hash; every synth body is byte-identical, and only a region that then fails its gates is regenerated.
+- Trees made before M11a (never released) are no longer upgraded cheaply: their markers carry a shape-less gen on every region, so the regions regenerate.
+
 ## 0.1.0
 
 The first tagged release. graft turns a markdown spec into code, one region per section. Each region lands only when its gates pass, and is regenerated only when its record changes or it stops passing.

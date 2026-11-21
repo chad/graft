@@ -64,8 +64,8 @@ from the current version.
 - **A region depends on the whole skeleton**, not just its owner's shape: the
   shared types it uses (`Client` in `running.go`) live in another record's
   file. So in render mode every region's evidence also pins a **skeleton hash**
-  (§7). sedum's own markers keep carrying the `gen_hash` without the shape until
-  sedum's provenance reads it (`records.Pin.SedumGen`).
+  (§7). sedum (>= 0.14.0) reads the shape too, so its own markers carry the same
+  `gen_hash` as graft's: there is one definition.
 
 ## 5. Escalation ladder (when no catalog action fits)
 

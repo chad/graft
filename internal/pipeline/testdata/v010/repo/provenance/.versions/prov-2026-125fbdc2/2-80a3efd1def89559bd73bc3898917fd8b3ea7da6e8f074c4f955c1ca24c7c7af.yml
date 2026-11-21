@@ -1,0 +1,130 @@
+id: prov-2026-125fbdc2
+version: 2
+content_hash: sha256:80a3efd1def89559bd73bc3898917fd8b3ea7da6e8f074c4f955c1ca24c7c7af
+parent_hash: sha256:80a3efd1def89559bd73bc3898917fd8b3ea7da6e8f074c4f955c1ca24c7c7af
+reason: import skeleton
+author: graft
+created_at: "2026-11-21T05:11:40Z"
+spec_hashes: []
+content:
+  id: prov-2026-125fbdc2
+  title: freeq-lite › Running
+  type: imprint
+  created_at: "2026-11-21"
+  author: test
+  intent: |-
+    freeq-lite › Running
+    - [DEFINITION] The server is a single Go program that listens for TCP connections on the address given by its `-addr` flag, which defaults to `:6667`
+    - [REQUIREMENT] Every message is one line ending in CRLF; a line ending in a bare LF is also accepted
+    - [REQUIREMENT] A line longer than 512 bytes is ignored
+    - [DEFINITION] Commands are case-insensitive; `nick`, `NICK` and `Nick` are the same command
+    - [REQUIREMENT] The server's name is `freeq-lite`, and every reply the server itself sends starts with `:freeq-lite`, except the `ERROR` line it sends when closing a connection
+  affected_scope:
+    - running.go
+  shape:
+    - decls:
+        - code: const serverName = "freeq-lite"
+          kind: const
+          name: serverName
+        - code: |-
+            type Server struct {
+            	mu       sync.Mutex
+            	clients  map[string]*Client
+            	channels map[string]*channel
+            }
+          kind: type
+          name: Server
+        - code: |-
+            type channel struct {
+            	name    string
+            	members map[string]*Client
+            }
+          kind: type
+          name: channel
+        - code: |-
+            type Client struct {
+            	Nick       string
+            	User       string
+            	Registered bool
+            	channels   map[string]bool
+            	conn       net.Conn
+            	out        chan string
+            }
+          kind: type
+          name: Client
+        - code: |-
+            type Message struct {
+            	Command string
+            	Params  []string
+            }
+          kind: type
+          name: Message
+        - code: var handlers = map[string]func(s *Server, c *Client, m Message){}
+          kind: var
+          name: handlers
+        - code: |-
+            func main() {
+            	addr := flag.String("addr", ":6667", "listen address")
+            	flag.Parse()
+            	s := &Server{clients: map[string]*Client{}, channels: map[string]*channel{}}
+            	ln, err := net.Listen("tcp", *addr)
+            	if err != nil {
+            		log.Fatal(err)
+            	}
+            	for {
+            		conn, err := ln.Accept()
+            		if err != nil {
+            			log.Fatal(err)
+            		}
+            		go s.serve(conn)
+            	}
+            }
+          kind: func
+          name: main
+      imports:
+        - flag
+        - log
+        - net
+        - sync
+      path: running.go
+      stubs:
+        - doc: 'serve runs one connection: it sets c.conn, reads CRLF or bare-LF lines, dispatches through handlers, and calls Disconnect when the connection ends.'
+          name: serve
+          params:
+            - name: conn
+              type: net.Conn
+          receiver_name: s
+          receiver_type: '*Server'
+        - doc: Send queues one protocol line for c. line carries no trailing CRLF and is already complete, including any leading ':'; Send only appends CRLF.
+          name: Send
+          params:
+            - name: line
+              type: string
+          receiver_name: c
+          receiver_type: '*Client'
+        - doc: 'Reply sends c a line from the server itself, built in full: ":" + serverName + " " + code + " " + target + " :" + text, where target is c.Nick, or "*" before c has a nick.'
+          name: Reply
+          params:
+            - name: c
+              type: '*Client'
+            - name: code
+              type: string
+            - name: text
+              type: string
+          receiver_name: s
+          receiver_type: '*Server'
+        - doc: Prefix returns c's prefix, nick!user@freeq-lite, WITHOUT the leading ':'. Every sender of a prefixed line adds the ':' itself (":" + c.Prefix() + " JOIN ..."), including QUIT.
+          name: Prefix
+          receiver_name: c
+          receiver_type: '*Client'
+          results:
+            - string
+        - doc: Disconnect removes c from the server and from every channel, tells the channel peers ":" + c.Prefix() + " QUIT :" + reason (once each), then closes c.conn.
+          name: Disconnect
+          params:
+            - name: c
+              type: '*Client'
+            - name: reason
+              type: string
+          receiver_name: s
+          receiver_type: '*Server'

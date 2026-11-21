@@ -1,0 +1,26 @@
+id: prov-2026-132b11fc
+version: 2
+content_hash: sha256:38f96aa81451f773d44e693eb943d3c17ad78f2f4f01031d15d62d0730ef5d8d
+parent_hash: sha256:38f96aa81451f773d44e693eb943d3c17ad78f2f4f01031d15d62d0730ef5d8d
+reason: import skeleton
+author: graft
+created_at: "2026-11-21T05:11:40Z"
+spec_hashes: []
+content:
+  id: prov-2026-132b11fc
+  title: freeq-lite › Leaving
+  type: imprint
+  created_at: "2026-11-21"
+  author: test
+  intent: |-
+    freeq-lite › Leaving
+    - [REQUIREMENT] `QUIT` or `QUIT :<reason>` closes the connection: the server sends `ERROR :Closing link` and then closes it
+    - [REQUIREMENT] Everyone who shared a channel with the user receives `:<prefix> QUIT :<reason>` once, with `Client quit` as the reason when none was given
+    - [REQUIREMENT] A connection that drops without `QUIT` is treated the same way, with `Connection closed` as the reason
+    - [REQUIREMENT] After a user leaves, their nick is free again and they are no longer a member of any channel
+  affected_scope:
+    - leaving.go
+  shape:
+    - path: leaving.go
+      stubs:
+        - name: init

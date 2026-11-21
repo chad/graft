@@ -2,8 +2,6 @@ package pipeline
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
@@ -87,9 +85,6 @@ func TestRenderImportWritesShapesAndReimportIsANoop(t *testing.T) {
 		p, _ := s.Current(a.ID)
 		if len(p.Shape) > 0 {
 			shaped++
-		}
-		if p.GenHash == p.SedumGen && len(p.Shape) > 0 {
-			t.Errorf("%s: the shape did not reach gen_hash", a.ID)
 		}
 	}
 	if shaped != len(cfg.Skeleton.Files) {
@@ -311,21 +306,31 @@ func TestRenderPreM11aEvidenceIsReverifiedWithoutAModelCall(t *testing.T) {
 
 var recordID = regexp.MustCompile(`prov-[0-9]{4}-[0-9a-f]{8}`)
 
-// DoD 3: freeq-lite imported from today's skeleton.json renders a tree
-// byte-identical to the one graft rendered before skeletons were record
-// content. The golden file holds the digest of every sedum-rendered file,
-// produced by the code before M11a (record ids are random and are masked).
+// freeq-lite imported from today's skeleton.json renders the tree graft 0.1.0
+// rendered (testdata/v010, made by graft v0.1.0 and sedum 0.13.0), byte for
+// byte, except sedum's marker gen: it is now the full gen_hash, shape included,
+// where 0.13.0 wrote the shape-less hash. Record ids are random and are masked
+// as well.
 func TestRenderImportedFreeqLiteTreeIsByteIdentical(t *testing.T) {
 	cfg, _, spec := renderSetup(t, "skeleton.json", "spec/freeq-lite.md")
 	if _, err := Run(context.Background(), cfg, accept(t, cfg, spec)); err != nil {
 		t.Fatal(err)
 	}
-	b, err := os.ReadFile("testdata/freeqlite-tree.golden.json")
-	if err != nil {
-		t.Fatal(err)
+	mask := func(v string) string {
+		return recordID.ReplaceAllString(sedumGen.ReplaceAllString(v, "${1}GEN"), "prov-ID")
 	}
-	var want map[string]string
-	if err := json.Unmarshal(b, &want); err != nil {
+	want := map[string]string{}
+	src := filepath.Join("testdata", "v010", "app")
+	err := filepath.WalkDir(src, func(p string, e os.DirEntry, err error) error {
+		rel, _ := filepath.Rel(src, p)
+		if err != nil || e.IsDir() || strings.HasPrefix(rel, ".sedum") || strings.HasSuffix(rel, "_synth.go.fixture") {
+			return err
+		}
+		b, err := os.ReadFile(p)
+		want[strings.TrimSuffix(rel, ".fixture")] = mask(string(b))
+		return err
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
 	got := map[string]string{}
@@ -333,12 +338,14 @@ func TestRenderImportedFreeqLiteTreeIsByteIdentical(t *testing.T) {
 		if strings.HasSuffix(k, "_synth.go") || strings.HasPrefix(k, ".sedum") {
 			continue
 		}
-		s := sha256.Sum256([]byte(recordID.ReplaceAllString(v, "prov-ID")))
-		got[k] = hex.EncodeToString(s[:])
+		got[k] = mask(v)
+	}
+	if len(want) < 8 {
+		t.Fatalf("only %d files in the 0.1.0 tree", len(want))
 	}
 	for k, w := range want {
 		if got[k] != w {
-			t.Errorf("%s differs from the pre-M11a render", k)
+			t.Errorf("%s differs from the 0.1.0 render", k)
 		}
 	}
 	for k := range got {
@@ -403,17 +410,15 @@ func TestRenderLedgerLiteCrossSectionRuleEvolves(t *testing.T) {
 	}
 }
 
-// A tree converged by graft before M11a (testdata/premain: made by the code at
-// origin/main, 7 model calls) must re-verify on its first --render run with
-// no model call: the import moves every gen_hash, but the markers carry the
-// shape-less gen, so only the skeleton changed.
-func TestRenderUpgradeFromPreM11aTreeCostsNoModelCalls(t *testing.T) {
-	cfg, m, spec := renderSetup(t, "skeleton.json", "spec/freeq-lite.md")
-	// The fixture's Go files are stored as *.go.fixture so gofmt and go vet leave
-	// the bytes (which the region markers hash) alone.
+// installV010 replaces cfg's repo and tree with one made by graft v0.1.0 and
+// sedum 0.13.0 (testdata/v010: the first release's own output, 7 model calls).
+// The fixture's Go files are stored as *.go.fixture so gofmt and go vet leave
+// the bytes (which the region markers hash) alone.
+func installV010(t *testing.T, cfg *Config) {
+	t.Helper()
 	for d, dst := range map[string]string{"repo": cfg.Repo, "app": cfg.Root} {
 		os.RemoveAll(dst)
-		src := filepath.Join("testdata", "premain", d)
+		src := filepath.Join("testdata", "v010", d)
 		err := filepath.WalkDir(src, func(p string, e os.DirEntry, err error) error {
 			if err != nil {
 				return err
@@ -438,28 +443,91 @@ func TestRenderUpgradeFromPreM11aTreeCostsNoModelCalls(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg.Log = log
+}
+
+var sedumGen = regexp.MustCompile(`("record":"(prov-[0-9]{4}-[0-9a-f]{8})","gen":")(sha256:[0-9a-f]{64})`)
+
+// sedumMarkerGens maps each record to the gen its sedum markers carry in the
+// tree's sedum-rendered files (never the synth files).
+func sedumMarkerGens(t *testing.T, root string) map[string]map[string]bool {
+	t.Helper()
+	out := map[string]map[string]bool{}
+	for f, content := range snapshot(t, root) {
+		if strings.HasPrefix(f, ".sedum") || strings.HasSuffix(f, "_synth.go") || !strings.HasSuffix(f, ".go") {
+			continue
+		}
+		for _, m := range sedumGen.FindAllStringSubmatch(content, -1) {
+			if out[m[2]] == nil {
+				out[m[2]] = map[string]bool{}
+			}
+			out[m[2]][m[3]] = true
+		}
+	}
+	return out
+}
+
+// A tree made by graft 0.1.0 and sedum 0.13.0 has sedum markers whose gen is
+// the shape-less hash. After upgrading to sedum 0.14, graft's first run
+// re-renders sedum's files (their markers now carry gen_hash) with no model
+// call and leaves every synth body byte-identical; the next run is quiet.
+func TestRenderUpgradeFromV010TreeCostsNoModelCalls(t *testing.T) {
+	cfg, m, spec := renderSetup(t, "skeleton.json", "spec/freeq-lite.md")
+	installV010(t, &cfg)
 	acc := accept(t, cfg, spec)
+	store, err := records.OpenDir(cfg.Repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := snapshot(t, cfg.Root)
+	oldGens := sedumMarkerGens(t, cfg.Root)
+	for _, a := range acc {
+		p, _ := store.Current(a.ID)
+		if len(p.Shape) == 0 || oldGens[a.ID][p.GenHash] {
+			t.Fatalf("fixture is not a 0.1.0 tree: %s shape %d, sedum gens %v, gen_hash %s", a.ID, len(p.Shape), oldGens[a.ID], p.GenHash)
+		}
+	}
 	out, err := Run(context.Background(), cfg, acc)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(m.prompts) != 0 {
-		t.Fatalf("upgrading a converged tree made %d model calls", len(m.prompts))
+		t.Fatalf("upgrading a 0.1.0 tree made %d model calls", len(m.prompts))
 	}
-	n := 0
 	for f, o := range byFile(out) {
-		if !strings.HasSuffix(f, "_synth.go") {
-			continue
-		}
-		n++
-		if o.Reason != "skeleton_hash" || o.Regenerated || o.Calls != 0 || !o.Applied {
+		if strings.HasSuffix(f, "_synth.go") && (o.Regenerated || o.Calls != 0 || !o.Applied) {
 			t.Errorf("%s: %+v", f, o)
 		}
 	}
-	if n != 7 {
-		t.Errorf("%d regions, want 7", n)
+	after := snapshot(t, cfg.Root)
+	n := 0
+	for f, b := range before {
+		if strings.HasSuffix(f, "_synth.go") {
+			n++
+			if after[f] != b {
+				t.Errorf("%s changed on upgrade", f)
+			}
+		}
 	}
-	// The markers now carry the full gen, so the next run is quiet.
+	if n != 7 {
+		t.Errorf("%d synth files, want 7", n)
+	}
+	// Sedum's files were re-rendered: every marker now carries the record's
+	// gen_hash, and nothing else about the code moved.
+	for _, a := range acc {
+		p, _ := store.Current(a.ID)
+		g := sedumMarkerGens(t, cfg.Root)[a.ID]
+		if len(g) != 1 || !g[p.GenHash] {
+			t.Errorf("%s: sedum markers carry %v, want only %s", a.ID, g, p.GenHash)
+		}
+	}
+	mask := func(s string) string { return sedumGen.ReplaceAllString(s, "${1}GEN") }
+	for f, b := range before {
+		if !strings.HasSuffix(f, "_synth.go") && strings.HasSuffix(f, ".go") && mask(after[f]) != mask(b) {
+			t.Errorf("%s: code moved beyond the marker gen", f)
+		}
+	}
+	growCheck(t, cfg)
+	// The next run is quiet.
 	out, err = Run(context.Background(), cfg, acc)
 	if err != nil || len(m.prompts) != 0 {
 		t.Fatalf("second run: %v, %d calls", err, len(m.prompts))
@@ -470,6 +538,27 @@ func TestRenderUpgradeFromPreM11aTreeCostsNoModelCalls(t *testing.T) {
 		}
 	}
 	growCheck(t, cfg)
+}
+
+// A fresh render: every sedum marker's gen is exactly graft's gen_hash for the
+// record, shape included (sedum >= 0.14 reads the shape).
+func TestRenderSedumMarkerGenEqualsGraftGenHash(t *testing.T) {
+	cfg, _, spec := renderSetup(t, "skeleton.json", "spec/freeq-lite.md")
+	acc := accept(t, cfg, spec)
+	if _, err := Run(context.Background(), cfg, acc); err != nil {
+		t.Fatal(err)
+	}
+	store, _ := records.OpenDir(cfg.Repo)
+	gens := sedumMarkerGens(t, cfg.Root)
+	for _, a := range acc {
+		p, _ := store.Current(a.ID)
+		if len(p.Shape) == 0 {
+			t.Fatalf("%s has no shape; the test needs shape-bearing records", a.ID)
+		}
+		if g := gens[a.ID]; len(g) != 1 || !g[p.GenHash] {
+			t.Errorf("%s: sedum markers carry %v, graft's gen_hash is %s", a.ID, g, p.GenHash)
+		}
+	}
 }
 
 // M1: a body that passes every gate but lacks required non-executable
@@ -496,39 +585,11 @@ func TestRenderMissingSignoffMakesNoModelCall(t *testing.T) {
 }
 
 // On the first run after an upgrade, an edit to a record's own shape made at
-// the same time is regenerated, not just re-verified: the old recording in the
-// tree holds the stub docs the body was written against.
+// the same time regenerates that region (its gen_hash moved); every other
+// region is only re-verified, with no model call.
 func TestRenderUpgradeWithAShapeEditRegeneratesThatRegion(t *testing.T) {
 	cfg, m, spec := renderSetup(t, "skeleton.json", "spec/freeq-lite.md")
-	// The fixture's Go files are stored as *.go.fixture so gofmt and go vet leave
-	// the bytes (which the region markers hash) alone.
-	for d, dst := range map[string]string{"repo": cfg.Repo, "app": cfg.Root} {
-		os.RemoveAll(dst)
-		src := filepath.Join("testdata", "premain", d)
-		err := filepath.WalkDir(src, func(p string, e os.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			rel, _ := filepath.Rel(src, p)
-			to := filepath.Join(dst, strings.TrimSuffix(rel, ".fixture"))
-			if e.IsDir() {
-				return os.MkdirAll(to, 0o755)
-			}
-			b, err := os.ReadFile(p)
-			if err != nil {
-				return err
-			}
-			return os.WriteFile(to, b, 0o644)
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-	log, err := evidence.Open(filepath.Join(cfg.Repo, ".graft", "evidence.jsonl"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg.Log = log
+	installV010(t, &cfg)
 	editSkeleton(t, &cfg, func(sk *recording.Skeleton) {
 		f := fileOfSkeleton(t, sk, "keepalive.go")
 		f.Stubs[0].Doc += " Also answer PONG with nothing."
@@ -545,7 +606,7 @@ func TestRenderUpgradeWithAShapeEditRegeneratesThatRegion(t *testing.T) {
 		switch {
 		case f == "keepalive_synth.go" && o.Reason != "gen_hash":
 			t.Errorf("keepalive: %+v", o)
-		case strings.HasSuffix(f, "_synth.go") && f != "keepalive_synth.go" && (o.Reason != "skeleton_hash" || o.Calls != 0):
+		case strings.HasSuffix(f, "_synth.go") && f != "keepalive_synth.go" && (o.Regenerated || o.Calls != 0):
 			t.Errorf("%s: %+v", f, o)
 		}
 	}

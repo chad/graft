@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -312,10 +313,82 @@ type Sedum interface {
 	GrowCheck(ctx context.Context, dir string) error // non-nil = drift/refusal
 }
 
+// MinSedum is the oldest sedum graft drives. sedum 0.14.0 is the first whose
+// marker gen is the record's full gen_hash, shape included; an older sedum
+// writes the shape-less hash, so its markers could never match graft's.
+const MinSedum = "0.14.0"
+
+// ErrSedumTooOld is returned for a sedum older than MinSedum, or one whose
+// version cannot be read.
+var ErrSedumTooOld = errors.New("render: unsupported sedum version")
+
+// CheckVersion refuses a sedum version older than MinSedum. v is what
+// `sedum --version` prints: a bare semver such as "0.14.0" (a leading "v" is
+// tolerated).
+func CheckVersion(v string) error {
+	got, ok := parseSemver(strings.TrimPrefix(strings.TrimSpace(v), "v"))
+	want, _ := parseSemver(MinSedum)
+	if !ok {
+		return fmt.Errorf("%w: cannot read a version from %q; graft needs sedum >= %s", ErrSedumTooOld, v, MinSedum)
+	}
+	if got[0] != want[0] {
+		if got[0] > want[0] {
+			return nil
+		}
+	} else if got[1] != want[1] {
+		if got[1] > want[1] {
+			return nil
+		}
+	} else if got[2] >= want[2] {
+		return nil
+	}
+	return fmt.Errorf("%w: graft needs sedum >= %s, found %s (sedum before %s hashes a record without its shape, so its markers never match graft's gen_hash); upgrade sedum", ErrSedumTooOld, MinSedum, strings.TrimSpace(v), MinSedum)
+}
+
+func parseSemver(v string) ([3]int, bool) {
+	var out [3]int
+	core := v
+	if i := strings.IndexAny(core, "-+"); i >= 0 {
+		core = core[:i]
+	}
+	parts := strings.Split(core, ".")
+	if len(parts) != 3 {
+		return out, false
+	}
+	for i, p := range parts {
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 0 {
+			return out, false
+		}
+		out[i] = n
+	}
+	return out, true
+}
+
+// Require reads s's version and refuses one older than MinSedum.
+func Require(ctx context.Context, s Sedum) error {
+	v, err := s.Version(ctx)
+	if err != nil {
+		return fmt.Errorf("render: sedum --version: %w", err)
+	}
+	return CheckVersion(v)
+}
+
 type execSedum struct{ bin string }
 
-// Exec returns a Sedum backed by the binary at bin (no shell).
+// Exec returns a Sedum backed by the binary at bin (no shell). It does not
+// check the version; commands use Open.
 func Exec(bin string) Sedum { return execSedum{bin: bin} }
+
+// Open is Exec for a sedum graft is about to drive: it refuses a binary older
+// than MinSedum before anything runs.
+func Open(ctx context.Context, bin string) (Sedum, error) {
+	s := Exec(bin)
+	if err := Require(ctx, s); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
 
 // Bin is the path of the sedum binary, so the convergence contract can be run
 // with the same one.

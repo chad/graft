@@ -1,0 +1,25 @@
+id: prov-2026-0daa1887
+title: freeq-lite › Everything else
+type: imprint
+status: open
+version: 2
+reason: import skeleton
+created_at: "2026-11-21"
+author: test
+intent: |-
+  freeq-lite › Everything else
+  - [REQUIREMENT] After registration, an unknown command is answered with `:freeq-lite 421 <nick> <command> :Unknown command`, with the command as the client sent it
+constraints: []
+affected_scope:
+  - everything_else.go
+forbidden_scope: []
+shape:
+  - path: everything_else.go
+    stubs:
+      - name: init
+related: []
+sealed_at_sha: ""
+associated_specs: []
+associated_traces: []
+monitors: []
+tags: []

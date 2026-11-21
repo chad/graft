@@ -145,7 +145,10 @@ func runCmd(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stderr, "graft: --render needs sedum on PATH")
 			return 2
 		}
-		sedum = render.Exec(bin)
+		if sedum, err = render.Open(context.Background(), bin); err != nil {
+			fmt.Fprintf(stderr, "graft: %v\n", err)
+			return 2
+		}
 		gens = os.Getenv("SEDUM_GENERATORS")
 		if gens == "" {
 			home, _ := os.UserHomeDir()

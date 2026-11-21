@@ -1,0 +1,97 @@
+{
+  "records": {
+    "prov-2026-0daa1887": {
+      "section": "freeq-lite › Everything else",
+      "file": "everything_else.go",
+      "derived_from": [
+        "6611a8be5ffb35ff42f79155bc8b67cd7b33888148ffc194279f646be0a9d517"
+      ],
+      "anchor": "8929d5090ca81e1809f9cf624a71a49315c6d3e287fc0441d892c9b1fb4a86c3",
+      "order": 6
+    },
+    "prov-2026-125fbdc2": {
+      "section": "freeq-lite › Running",
+      "file": "running.go",
+      "derived_from": [
+        "1142923505e6c2c5a3979ee6731585ff4c94dd0a86205b0adda92caef016719c",
+        "2e96279801d4d799e8e4e7c7d95471cac4b20c6dec33b2a456b04ec67130f746",
+        "53521874e5e475cf32c2931ff4c9c1832d9f89f4a8d665691f0291a966c6c9ff",
+        "65ebc32ab9c02561907077e9798caf63ab71856db65cc9da6808f2c40b109e63",
+        "f8568ce16af0587bafdb9559def6ff4bd7e1b57e0f7dc89db02d3d7aa98fdbb4"
+      ],
+      "anchor": "bbc83a09ff5212daee08b2bf3c7f22ba56893378fe460bd280c7952a3dff49c3",
+      "order": 0
+    },
+    "prov-2026-132b11fc": {
+      "section": "freeq-lite › Leaving",
+      "file": "leaving.go",
+      "derived_from": [
+        "35527252eb87f8dd163ca4df9f5b65957735d0e7d72b39a558997a81124dc143",
+        "650f63768af4df075352194a5ac5e9e9c901ca749d42f5d0fb2e67dec1a9e8ea",
+        "677d4b2f49dc320eaca32ce51c69894da22a192ffc832d86fbddecb571c7b804",
+        "6b7317c5b1dd33aa1254a453cb7c35daea01aa4203cbd8da7ade8f709f34f9a3"
+      ],
+      "anchor": "c6fe3e141f7d7168136e4840f9507fca10c84afb5e9fb17c28d9987f7ae2b51f",
+      "order": 5
+    },
+    "prov-2026-180b0b3b": {
+      "section": "freeq-lite › Registration",
+      "file": "registration.go",
+      "derived_from": [
+        "32c63dad5d1e3fee75e13248b0293e0d727c5c3ce1c18909c6dcdb5240f4bb4f",
+        "417da6383107eeb73bdcfcee8968d0d1e6a139b5571f10905d5af1898caa27ec",
+        "655e060ae7579d3231dce4b0a9fce65f39c4c9016d6838faa8ca87e04a9417ed",
+        "7011d4114840065c942f8cd7e384e2b6cb65d9e390cf7a6b09effe4aba38e912",
+        "797f9767d7d1659a0766469dd673e7d49b95bdc3ebc417efcddea1066099ede5",
+        "9ca343db5f52b03310299503edf54be43f22f00e8baa319addcbccded155d58b",
+        "ecf4f946b0065472c7b0210c8f3e4d3e0a1765689faa7dc4e83b4ba3a56ad1ea",
+        "ef9d6389427fac3f891f67905e3f3730ddb335b092be0c386f6040223ab4f21d"
+      ],
+      "anchor": "aad80b8f0ce717cec553fa5c29671a9f4319818c2cd145c7486e0b483da8700a",
+      "order": 1
+    },
+    "prov-2026-5bff2795": {
+      "section": "freeq-lite › Keepalive",
+      "file": "keepalive.go",
+      "derived_from": [
+        "21f053381f5443fb4c0225cf4ff9a3d9c332422194a14933bd18b32e5d1f7141"
+      ],
+      "anchor": "2a64d818ae89f1841178448807328c0a3913ef3aed2fa8277f65036a843e77ea",
+      "order": 2
+    },
+    "prov-2026-71839407": {
+      "section": "freeq-lite › Channels",
+      "file": "channels.go",
+      "derived_from": [
+        "09f91a375fa56bda995562112df309a992df54ea9c34e20a41035aab8aebe9b6",
+        "3ce4484773d9f2e77e23ed972cb0203183348d0542ef66eb6a1609e47eaa7631",
+        "4310bb9ffe3fe1d8d1f6556e8245e3aa1da9ad0a65361adc4a70e54def9b2583",
+        "4de024f0a9991d37b70996097f96fb120f7151d6b2e38b217828b61f3cf9a432",
+        "89ca2fa3d411e84915d0d11347b00e6e1fd2f485724601f49725e61f584c349c",
+        "8f29ae2427e178278edb68062f4aa3de18f6fa168e036401b842bdb75311f67f",
+        "8f307051aac011f93512f1c2ac35995ae691f91b92a466b631c7e4ae08846a35",
+        "9855c03f9a38cd54527388b091ccfd0c855c801077339e15ddd6fef67b578acd",
+        "ac51a398ec6d6a6d359c40fb454f4fb585312286440a03d72b518880f3bdae7c",
+        "c277a95975a4bfde9716f980bf9b82114507ca38fd2b2a6c8acab4babce0fa19",
+        "c595eb08618c7a9f972f995a75153719c9781e3ea515ae196bb30378a97c534e",
+        "d96d8c8966e66859f463930bf821bf02ab2348f7adbba9a9073d08393bc57774"
+      ],
+      "anchor": "4221a6a51cb519052bd8ed05642d5c395e88837e6c63a726313103c29a7f816f",
+      "order": 3
+    },
+    "prov-2026-e3b0bdac": {
+      "section": "freeq-lite › Messages",
+      "file": "messages.go",
+      "derived_from": [
+        "06084d62adea944c304fd5cc70efde0562aae2b362464219fdb8ccccecdd3e61",
+        "990d6c3d321c407e8d0243afe998e0f1128b82aec332d77118777e7d45bf3b34",
+        "9fbe33ea00dac00438c8ad985eafb8e5c3b71c4b09764ce2f01f0ae151d507d9",
+        "b775fdddbf1b47b232af27ac0d54bde5d66df11b89d6c59e57527880cd3fbbf9",
+        "e36dab441ddb52b6cac6bd2545b18fdf558419ff9e051287a5e7fe4c1a848fa2",
+        "f798e9ca2c23e900fff3e89b6eb89cc0c7c530bd1cf366e0172af318dd33f9e5"
+      ],
+      "anchor": "ecc00353c71db74889a47a51d116f2e5ecc21bae47550bbcb9416080aa22554b",
+      "order": 4
+    }
+  }
+}

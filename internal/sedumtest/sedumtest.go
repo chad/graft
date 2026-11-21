@@ -13,7 +13,9 @@ import (
 // Version pins the sedum the tests run against: the release that added
 // `sedum convergence`. Tests build exactly this tag, never a sedum already on
 // PATH.
-const Version = "v0.13.0"
+// TODO(M13): pin v0.14.0 once released; until then the sedum PR branch head
+// (livecodelife/sedum#69). The graft PR stays a draft until this is v0.14.0.
+const Version = "319cd64ebd829fa702f97fb26ee7794c1099fd03"
 
 // ProvisionInCI installs the pinned sedum and its generators when CI is set
 // (see provisionSedum); locally it does nothing and tests that need sedum skip.

@@ -53,8 +53,7 @@ type Config struct {
 	Contract contract.Contract
 	Samples  int // model answers drawn per attempt; 0 or 1 means one (today's behaviour)
 
-	shapeMoved map[string]bool // render mode: records whose own shape differs from the last render's recording
-	skelHash   string          // render mode: the skeleton hash pinned into every evidence entry
+	skelHash string // render mode: the skeleton hash pinned into every evidence entry
 }
 
 // Outcome is what happened to one record.
@@ -105,7 +104,7 @@ func Run(ctx context.Context, cfg Config, acc []Accepted) ([]Outcome, error) {
 	var byRec map[string]recording.Region
 	var pending map[string]bool // regions still holding their seeded placeholder
 	if cfg.Skeleton != nil {
-		if byRec, pending, cfg.skelHash, cfg.shapeMoved, err = cfg.renderTree(ctx, store, acc); err != nil {
+		if byRec, pending, cfg.skelHash, err = cfg.renderTree(ctx, store, acc); err != nil {
 			return nil, err
 		}
 	}
@@ -137,7 +136,7 @@ func Run(ctx context.Context, cfg Config, acc []Accepted) ([]Outcome, error) {
 				return out, fmt.Errorf("%s: %w: %s was edited by hand; keep the edit by revising the record, or restore the region", a.Entry.Section, converge.ErrHandEdited, r.Path)
 			}
 		}
-		body, ok, why := current(store, regions, a, file, cfg.Root, cfg.shapeMoved)
+		body, ok, why := current(store, regions, a, file, cfg.Root)
 		switch {
 		case pending[a.ID] || (!ok && why == ""):
 			why = "new"
@@ -286,9 +285,7 @@ func failing(d converge.Decision) string {
 //
 // When it does not, why names the first thing that moved: "gen_hash" when the
 // region was written for another gen_hash, "version" for another version.
-// A region written before M11a (its marker has the shape-less gen, and the
-// record has since gained a shape) is returned with ok and why "skeleton_hash".
-func current(store records.Store, regions []converge.Region, a Accepted, file, root string, shapeMoved map[string]bool) (string, bool, string) {
+func current(store records.Store, regions []converge.Region, a Accepted, file, root string) (string, bool, string) {
 	p, err := store.Current(a.ID)
 	if err != nil {
 		return "", false, ""
@@ -296,20 +293,6 @@ func current(store records.Store, regions []converge.Region, a Accepted, file, r
 	for _, r := range regions {
 		if r.Path == file && r.Owner.Record == a.ID {
 			switch {
-			case r.Owner.Gen == p.SedumGen && p.SedumGen != p.GenHash:
-				// Written before shapes were record content: the marker has the
-				// shape-less gen. Only the shape import moved gen_hash, so the
-				// body is re-verified (skeleton_hash), not regenerated.
-				if r.Edited() {
-					return "", false, ""
-				}
-				if shapeMoved[a.ID] {
-					// The record's own shape changed too (not only the import):
-					// its body was written against other stubs and docs.
-					return "", false, "gen_hash"
-				}
-				body, err := converge.RegionBody(root, r)
-				return body, err == nil, "skeleton_hash"
 			case r.Owner.Gen != p.GenHash:
 				return "", false, "gen_hash"
 			case r.Owner.Version != p.Version:
