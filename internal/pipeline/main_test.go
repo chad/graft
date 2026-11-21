@@ -15,7 +15,7 @@ import (
 // (livecodelife/sedum#68). Tests build exactly this tag, never a sedum already
 // on PATH.
 // TODO(M13): pin v0.14.0 once released (see internal/sedumtest).
-const sedumVersion = "319cd64ebd829fa702f97fb26ee7794c1099fd03"
+const sedumVersion = "eb55ea4e6ca271e4b901d536e7e61db0568bd8d5"
 
 // TestMain provisions sedum in CI without a workflow change: when CI is set
 // and sedum is not on PATH, it installs the pinned release with `go install`
