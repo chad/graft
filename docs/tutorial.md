@@ -335,7 +335,7 @@ graft exits non-zero (3) and **does not overwrite your edit**. You decide which 
 
 - **Best-of-N:** `--samples 3` draws three candidates per section and keeps one that passes every gate.
 - **Other languages:** add a `"language"` profile to `graft.json`. `examples/freeq-lite-py` generates the same IRC server in Python and scores 47/47 on the hidden suite (one run).
-- **Deterministic skeletons:** `--render` has sedum generate the boilerplate deterministically, and the model writes only the function bodies. It works in any language that has a sedum generator (sedum 0.13.0 ships Go and TypeScript).
+- **Deterministic skeletons:** `--render` has sedum generate the boilerplate deterministically, and the model writes only the function bodies. It works in any language that has a sedum generator (sedum 0.14.0 ships Go and TypeScript).
 - **The bigger example:** `examples/freeq-lite` has a spec, visible smoke tests, a hidden oracle, a bench comparing graft to one-shot generation, and honest numbers.
 - **SPEC.md** in the repo is the design, including what's still open.
 

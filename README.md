@@ -24,7 +24,7 @@ generator package declares a `convergence:` block (`go` and `typescript` do):
 graft knows no language there, it reads stubs, helper signatures, seeds, synth
 file names and extensions from `sedum convergence render`. A skeleton may name
 its generator package (`"generator": "typescript"`); it defaults to the
-profile's name. This needs sedum >= 0.14.0 (graft refuses an older one): it has `sedum convergence` and reads a record's shape, so its markers carry graft's gen_hash.
+profile's name. This needs sedum >= 0.14.0 (graft refuses an older one): it has `sedum convergence` and reads a record's shape, so its markers carry graft's gen_hash. Render trees made by graft 0.1.0 re-render once on upgrade, with no model calls (sedum's files get the new marker gen; every synth body stays byte-identical).
 Under `--render` the skeleton is record content: `skeleton.json` is imported
 into each imprint's shape (a new record version, only when it differs) and the
 tree is planned from the records. `skeleton.json` is still the source of truth,

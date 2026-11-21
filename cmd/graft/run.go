@@ -116,14 +116,8 @@ func runCmd(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "graft: nothing written; review the drafts above and re-run with --accept")
 		return 2
 	}
-	if !*renderOn {
-		opts.Root = *root // plain mode: a new section never takes over an existing file
-	}
-	acc, err := pipeline.AcceptWith(*repo, drafts, "graft run", time.Now(), opts)
-	if err != nil {
-		fmt.Fprintf(stderr, "graft: %v\n", err)
-		return 2
-	}
+	// Everything that can refuse a --render run (the skeleton, the sedum version,
+	// the generators) is checked before AcceptWith writes any record.
 	var skel *recording.Skeleton
 	var sedum render.Sedum
 	var gens string
@@ -158,6 +152,14 @@ func runCmd(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "graft: sedum generators: %v (set SEDUM_GENERATORS)\n", err)
 			return 2
 		}
+	}
+	if !*renderOn {
+		opts.Root = *root // plain mode: a new section never takes over an existing file
+	}
+	acc, err := pipeline.AcceptWith(*repo, drafts, "graft run", time.Now(), opts)
+	if err != nil {
+		fmt.Fprintf(stderr, "graft: %v\n", err)
+		return 2
 	}
 	lp := evidenceLogPath(*repo, *logPath)
 	if err := os.MkdirAll(filepath.Dir(lp), 0o755); err != nil {
