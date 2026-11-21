@@ -14,7 +14,7 @@ import (
 // This is the sedum release that added `sedum convergence`
 // (livecodelife/sedum#68). Tests build exactly this tag, never a sedum already
 // on PATH.
-const sedumVersion = "v0.13.0"
+const sedumVersion = "v0.14.0"
 
 // TestMain provisions sedum in CI without a workflow change: when CI is set
 // and sedum is not on PATH, it installs the pinned release with `go install`

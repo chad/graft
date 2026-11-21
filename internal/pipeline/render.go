@@ -3,7 +3,6 @@ package pipeline
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -30,12 +29,17 @@ import (
 // entry is written into the shape of the imprint that owns it (a new record
 // version, only when it differs), and the tree is planned from the records.
 // The returned string is the skeleton hash every region's evidence pins.
-func (cfg Config) renderTree(ctx context.Context, store records.Store, acc []Accepted) (map[string]recording.Region, map[string]bool, string, map[string]bool, error) {
-	nilRet := func(err error) (map[string]recording.Region, map[string]bool, string, map[string]bool, error) {
-		return nil, nil, "", nil, err
+func (cfg Config) renderTree(ctx context.Context, store records.Store, acc []Accepted) (map[string]recording.Region, map[string]bool, string, error) {
+	nilRet := func(err error) (map[string]recording.Region, map[string]bool, string, error) {
+		return nil, nil, "", err
 	}
 	if cfg.Sedum == nil || cfg.Generators == "" {
 		return nilRet(errors.New("pipeline: --render needs sedum and its generators"))
+	}
+	// graft 0.2 needs a sedum whose markers carry the full gen_hash: refuse an
+	// older one before any record is touched.
+	if err := render.Require(ctx, cfg.Sedum); err != nil {
+		return nilRet(err)
 	}
 	if v, err := cfg.Sedum.Version(ctx); err == nil {
 		cfg.say("sedum %s\n", v)
@@ -111,7 +115,6 @@ func (cfg Config) renderTree(ctx context.Context, store records.Store, acc []Acc
 		return nilRet(err)
 	}
 	defer cleanup()
-	moved := cfg.movedSinceRecording(planned.Recording)
 	const imported = " (the records already carry the imported shapes; running again after the fix is safe)"
 	if err := render.Render(ctx, cfg.Sedum, cfg.Root, recPath); err != nil {
 		if errors.Is(err, render.ErrHandEdited) {
@@ -160,7 +163,7 @@ func (cfg Config) renderTree(ctx context.Context, store records.Store, acc []Acc
 			}
 		}
 	}
-	return by, pending, skelHash, moved, nil
+	return by, pending, skelHash, nil
 }
 
 // hasPlaceholder reports whether a body still holds a seeded stub.
@@ -353,37 +356,4 @@ func (cfg Config) importSkeleton(store records.Store, acc []Accepted) error {
 		}
 	}
 	return nil
-}
-
-// movedSinceRecording finds the records whose planned invocations differ from
-// the recording sedum kept in the tree from the last render (.sedum/recordings).
-// It is how a first --render run after upgrading from before M11a (markers
-// without a shape) tells "only the skeleton was imported" from "this record's
-// own shape was edited as well": the old recording holds the stub docs,
-// signatures and declarations the body was written against. A record with no
-// readable old recording is not listed (nothing to compare; it re-verifies and
-// regenerates only if its body fails).
-func (cfg Config) movedSinceRecording(planned recording.Recording) map[string]bool {
-	moved := map[string]bool{}
-	for _, r := range planned.Records {
-		b, err := os.ReadFile(filepath.Join(cfg.Root, ".sedum", "recordings", r.RecordID+".json"))
-		if err != nil {
-			continue
-		}
-		var old recording.Recording
-		if json.Unmarshal(b, &old) != nil {
-			continue
-		}
-		for _, o := range old.Records {
-			if o.RecordID != r.RecordID {
-				continue
-			}
-			a, _ := json.Marshal(o.Phases)
-			n, _ := json.Marshal(r.Phases)
-			if !bytes.Equal(a, n) {
-				moved[r.RecordID] = true
-			}
-		}
-	}
-	return moved
 }

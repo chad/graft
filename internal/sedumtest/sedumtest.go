@@ -13,7 +13,7 @@ import (
 // Version pins the sedum the tests run against: the release that added
 // `sedum convergence`. Tests build exactly this tag, never a sedum already on
 // PATH.
-const Version = "v0.13.0"
+const Version = "v0.14.0"
 
 // ProvisionInCI installs the pinned sedum and its generators when CI is set
 // (see provisionSedum); locally it does nothing and tests that need sedum skip.

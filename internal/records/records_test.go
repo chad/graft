@@ -339,7 +339,7 @@ func shapeEntry(path, doc string) any {
 	return map[string]any{"path": path, "stubs": []any{map[string]any{"name": "F", "doc": doc}}}
 }
 
-func TestSetShapeIsARevisionAndMovesGenHashNotSedumGen(t *testing.T) {
+func TestSetShapeIsARevisionAndMovesGenHash(t *testing.T) {
 	dir := copyFixture(t, "base")
 	s, err := OpenDir(dir)
 	if err != nil {
@@ -347,7 +347,7 @@ func TestSetShapeIsARevisionAndMovesGenHashNotSedumGen(t *testing.T) {
 	}
 	ws := s.(ShapeStore)
 	before, _ := s.Current(fixtureID)
-	if before.GenHash != before.SedumGen || len(before.Shape) != 0 {
+	if len(before.Shape) != 0 {
 		t.Fatalf("a record without shape: %+v", before)
 	}
 	changed, err := ws.SetShape(fixtureID, []any{shapeEntry("a.go", "A.")}, "import skeleton", "graft")
@@ -355,7 +355,7 @@ func TestSetShapeIsARevisionAndMovesGenHashNotSedumGen(t *testing.T) {
 		t.Fatalf("SetShape: %v %v", changed, err)
 	}
 	after, _ := s.Current(fixtureID)
-	if after.Version != before.Version+1 || after.GenHash == before.GenHash || after.SedumGen != before.GenHash {
+	if after.Version != before.Version+1 || after.GenHash == before.GenHash {
 		t.Errorf("before %+v after %+v", before, after)
 	}
 	if stale, _ := Stale(s, before); !stale {

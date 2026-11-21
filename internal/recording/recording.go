@@ -36,7 +36,7 @@ import (
 )
 
 // SedumVersion is written into every recording.
-const SedumVersion = "0.13.0"
+const SedumVersion = "0.14.0"
 
 // Decl is one fixed top-level declaration (type, var, const, or a function
 // whose whole text is part of the skeleton). Code is in the generator's
@@ -269,13 +269,9 @@ func Plan(in Input) (Planned, error) {
 		if strings.Join(paths, "\x00") != strings.Join(scope, "\x00") {
 			return Planned{}, fmt.Errorf("recording: %s affected_scope %v must equal its planned files %v, or grow --check checks nothing", id, scope, paths)
 		}
-		// sedum's markers carry the gen_hash its own provenance computes. Until
-		// sedum reads shape that is the hash without it (Pin.SedumGen).
-		sedumGen := pins[id].SedumGen
-		if sedumGen == "" {
-			sedumGen = pins[id].GenHash
-		}
-		rec := Record{RecordID: id, Gen: sedumGen, Files: []RFile{}}
+		// sedum (>= 0.14.0) reads the shape, so its markers carry the same
+		// gen_hash graft computes: one definition.
+		rec := Record{RecordID: id, Gen: pins[id].GenHash, Files: []RFile{}}
 		var invs []Invocation
 		for _, f := range files {
 			rf, err := fileEntry(f.Path, gen, info)

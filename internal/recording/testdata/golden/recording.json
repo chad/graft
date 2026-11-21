@@ -1,5 +1,5 @@
 {
-  "sedum_version": "0.13.0",
+  "sedum_version": "0.14.0",
   "packages": {
     "go": {
       "extensions": [

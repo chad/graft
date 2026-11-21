@@ -1,0 +1,19 @@
+id: prov-2026-0daa1887
+version: 1
+content_hash: sha256:0303e2382c24c739b327f4d2b434943e348c65a6a4e0a25ba510bc59d678327f
+parent_hash: ""
+reason: ""
+author: test
+created_at: "2026-11-21T05:11:40Z"
+spec_hashes: []
+content:
+  id: prov-2026-0daa1887
+  title: freeq-lite › Everything else
+  type: imprint
+  created_at: "2026-11-21"
+  author: test
+  intent: |-
+    freeq-lite › Everything else
+    - [REQUIREMENT] After registration, an unknown command is answered with `:freeq-lite 421 <nick> <command> :Unknown command`, with the command as the client sent it
+  affected_scope:
+    - everything_else.go

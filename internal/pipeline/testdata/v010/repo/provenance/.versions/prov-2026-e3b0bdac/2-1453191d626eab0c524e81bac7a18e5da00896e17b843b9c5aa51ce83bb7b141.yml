@@ -1,0 +1,31 @@
+id: prov-2026-e3b0bdac
+version: 2
+content_hash: sha256:1453191d626eab0c524e81bac7a18e5da00896e17b843b9c5aa51ce83bb7b141
+parent_hash: sha256:1453191d626eab0c524e81bac7a18e5da00896e17b843b9c5aa51ce83bb7b141
+reason: import skeleton
+author: graft
+created_at: "2026-11-21T05:11:40Z"
+spec_hashes: []
+content:
+  id: prov-2026-e3b0bdac
+  title: freeq-lite › Messages
+  type: imprint
+  created_at: "2026-11-21"
+  author: test
+  intent: |-
+    freeq-lite › Messages
+    - [REQUIREMENT] `PRIVMSG <channel> :<text>` sends `:<prefix> PRIVMSG <channel> :<text>` to every member of the channel except the sender
+    - [CONSTRAINT] Only members may send to a channel; anyone else is answered with `:freeq-lite 404 <nick> <channel> :Cannot send to channel`
+    - [REQUIREMENT] `PRIVMSG <nick> :<text>` sends `:<prefix> PRIVMSG <nick> :<text>` to that user, where `<nick>` in the delivered line is the recipient's nick as they registered it; nick matching ignores case
+    - [INVARIANT] The sender of a `PRIVMSG` never receives their own message back; a `PRIVMSG` to one's own nick is accepted and delivered to no one
+    - [REQUIREMENT] A message to a nick or channel that does not exist is answered with `:freeq-lite 401 <nick> <target> :No such nick/channel`
+    - [REQUIREMENT] A `PRIVMSG` with no text is answered with `:freeq-lite 412 <nick> :No text to send`
+  constraints:
+    - Only members may send to a channel; anyone else is answered with `:freeq-lite 404 <nick> <channel> :Cannot send to channel`
+    - The sender of a `PRIVMSG` never receives their own message back; a `PRIVMSG` to one's own nick is accepted and delivered to no one
+  affected_scope:
+    - messages.go
+  shape:
+    - path: messages.go
+      stubs:
+        - name: init

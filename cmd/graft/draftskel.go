@@ -153,6 +153,11 @@ func draftSkeletonCmd(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "graft: graft draft --skeleton needs sedum on PATH")
 		return 2
 	}
+	sedum, err := render.Open(context.Background(), bin)
+	if err != nil {
+		fmt.Fprintf(stderr, "graft: %v\n", err)
+		return 2
+	}
 	gens := os.Getenv("SEDUM_GENERATORS")
 	if gens == "" {
 		home, _ := os.UserHomeDir()
@@ -164,7 +169,7 @@ func draftSkeletonCmd(args []string, stdout, stderr io.Writer) int {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	pcfg := pipeline.Config{Module: cfg.Module, Lang: profile, Tier: cfg.Tier, Sedum: render.Exec(bin), Generators: gens}
+	pcfg := pipeline.Config{Module: cfg.Module, Lang: profile, Tier: cfg.Tier, Sedum: sedum, Generators: gens}
 	fmt.Fprintf(stdout, "model: %s\n", strings.Join(argv, " "))
 	res, err := skeldraft.Draft(ctx, skeldraft.Config{
 		Model:   model.Command{Argv: argv, Timeout: timeout},

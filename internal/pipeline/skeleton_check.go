@@ -48,7 +48,7 @@ func RenderScratch(ctx context.Context, cfg Config, drafts []drafter.Draft, file
 	if err != nil {
 		return fail(err)
 	}
-	if _, _, _, _, err := cfg.renderTree(ctx, store, acc); err != nil {
+	if _, _, _, err := cfg.renderTree(ctx, store, acc); err != nil {
 		return fail(err)
 	}
 	return cfg.Root, cleanup, nil

@@ -44,11 +44,6 @@ type Pin struct {
 	Type          string
 	Status        string
 	AffectedScope []string
-	// SedumGen is the gen_hash without the shape: what a sedum built on a
-	// provenance that predates shape computes from the same record file, and
-	// so what sedum markers and `grow --check` compare. It equals GenHash when
-	// the record has no shape. Plan writes it into the recording's gen.
-	SedumGen string
 	// Shape is the skeleton the record owns: one entry per file, each a tree
 	// of strings, lists and maps (provenance record.Record.Shape). It drives
 	// generation, so it is part of GenHash; planning renders from it.
@@ -118,9 +113,7 @@ func (d *dirStore) currentGen(id string) (Pin, *record.Record, error) {
 	if v == 0 {
 		v = 1 // a v1 record reads as version 1
 	}
-	noShape := r.GenInput()
-	noShape.Shape = nil
-	return Pin{RecordID: r.ID, Version: v, GenHash: r.GenHash(), SedumGen: record.GenHash(noShape), Type: string(r.Type),
+	return Pin{RecordID: r.ID, Version: v, GenHash: r.GenHash(), Type: string(r.Type),
 		Status: string(r.Status), AffectedScope: append([]string(nil), r.AffectedScope...), Shape: r.Shape}, r, nil
 }
 

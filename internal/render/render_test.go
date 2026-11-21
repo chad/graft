@@ -12,7 +12,7 @@ import (
 
 type fakeSedum struct{ executed int }
 
-func (f *fakeSedum) Version(context.Context) (string, error) { return "fake", nil }
+func (f *fakeSedum) Version(context.Context) (string, error) { return MinSedum, nil }
 func (f *fakeSedum) GrowExecute(context.Context, string, string) error {
 	f.executed++
 	return nil
