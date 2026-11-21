@@ -23,18 +23,24 @@ export function main(argv: string[]): void {
 
 func gate(t *testing.T, script string, files map[string]string) (string, bool) {
 	t.Helper()
+	// In CI (which installs Node 24) a missing prerequisite is a failure, so
+	// these tests can never pass by skipping.
+	skip, skipf := t.Skip, t.Skipf
+	if os.Getenv("CI") != "" {
+		skip, skipf = t.Fatal, t.Fatalf
+	}
 	node, err := exec.LookPath("node")
 	if err != nil {
-		t.Skip("needs node")
+		skip("needs node")
 	}
 	if _, err := os.Stat("node_modules/typescript"); err != nil {
 		// Install the gates' one dependency once, the way a user would.
 		if out, err := exec.Command("npm", "ci", "--silent", "--no-audit", "--no-fund").CombinedOutput(); err != nil {
-			t.Skipf("run `npm ci` in examples/freeq-lite-ts/gates (%v: %s)", err, out)
+			skipf("run `npm ci` in examples/freeq-lite-ts/gates (%v: %s)", err, out)
 		}
 	}
 	if err := exec.Command(node, "--experimental-strip-types", "--no-warnings", "-e", "0").Run(); err != nil {
-		t.Skip("needs a Node with --experimental-strip-types (22.6 or newer)")
+		skip("needs a Node with --experimental-strip-types (22.6 or newer)")
 	}
 	dir := t.TempDir()
 	for n, src := range files {
@@ -113,15 +119,34 @@ export function init(): void { aUsed(); }
 		t.Fatalf("good tree rejected: %s", out)
 	}
 	for name, src := range map[string]string{
-		"dead":      `export function aDead(): void {}`,
-		"recursion": `export function aRec(n: number): number { return n ? aRec(n - 1) : 0; }`,
-		"string":    `export function aStr(): void {}` + "\nexport const s = \"aStr\";",
-		"sink":      `export function aSink(): void {}` + "\nlet _: unknown;\n_ = aSink;",
-		"void":      `export function aVoid(): void {}` + "\nvoid aVoid;",
-		"nested":    `export function aOuter(): void { function inner(): void {} }` + "\nexport function init(): void { aOuter(); }",
+		"dead":              `export function aDead(): void {}`,
+		"recursion":         `export function aRec(n: number): number { return n ? aRec(n - 1) : 0; }`,
+		"string":            `export function aStr(): void {}` + "\nexport const s = \"aStr\";",
+		"sink":              `export function aSink(): void {}` + "\nlet _: unknown;\n_ = aSink;",
+		"void":              `export function aVoid(): void {}` + "\nvoid aVoid;",
+		"nested":            `export function aOuter(): void { function inner(): void {} }` + "\nexport function init(): void { aOuter(); }",
+		"object key":        `export function aKey(): void {}` + "\nexport const o = { aKey: 1 };",
+		"class key":         `export function aField(): void {}` + "\nexport class C { aField = 1; }",
+		"dead method":       `export class C { aMethod(): void {} }` + "\nexport function init(): void { new C(); }",
+		"dead field fn":     `export class C { aArrow = (): void => {}; }` + "\nexport function init(): void { new C(); }",
+		"destructuring key": `export function aFn(): void {}` + "\nconst src = { aFn: 1 };\nexport const { aFn: x } = src;",
+		"dead object arrow": `export const o = { aArrow: (): void => {} };` + "\nexport function init(): void { void o; }",
+		"top-level then":    `export function then(): void {}`,
 	} {
 		if out, pass := gate(t, "unused.mjs", map[string]string{"running.ts": running, "a.ts": src}); pass {
 			t.Errorf("%s accepted: %s", name, out)
+		}
+	}
+	// Uses that do count: a method called on an instance, a shorthand property,
+	// a class field function called, and runtime protocol methods.
+	for name, src := range map[string]string{
+		"method call": `export class C { aMethod(): void {} }` + "\nexport function init(): void { new C().aMethod(); }",
+		"shorthand":   `function aFn(): void {}` + "\nexport const o = { aFn };\nexport function init(): void { o.aFn(); }",
+		"field call":  `export class C { aArrow = (): void => {}; }` + "\nexport function init(): void { new C().aArrow(); }",
+		"protocol":    `export class C { toString(): string { return ""; } constructor() {} }` + "\nexport function init(): void { String(new C()); }",
+	} {
+		if out, pass := gate(t, "unused.mjs", map[string]string{"running.ts": running, "a.ts": src}); !pass {
+			t.Errorf("%s rejected: %s", name, out)
 		}
 	}
 	// running.ts's exported functions are the core's API and are not dead; its private ones are.

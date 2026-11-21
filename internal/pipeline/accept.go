@@ -102,7 +102,8 @@ type AcceptOptions struct {
 	// whose packages live in directories. A key is a section's full title,
 	// including the top heading ("wtf › API › Dial stats"), or, when
 	// unambiguous, its last part only ("Dial stats"); a middle form
-	// ("API › Dial stats") or a key naming no section is an error. Sections not named get fileFor's name in the root.
+	// ("API › Dial stats") or a key naming no section is an error. Sections
+	// not named get fileFor's name in the root.
 	// A record keeps its file once accepted: naming a different file for it
 	// later is an error, not a silent no-op.
 	Files map[string]string

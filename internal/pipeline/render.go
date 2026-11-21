@@ -274,12 +274,22 @@ func (cfg Config) importSkeleton(store records.Store, acc []Accepted) error {
 	if err != nil {
 		return err
 	}
+	// Every record must be readable before any is revised, so the common
+	// failures (a missing or unreadable record) write nothing. A failure
+	// part-way through the writes themselves leaves some records revised:
+	// nothing is planned or rendered from that state (the error stops the
+	// run), and because the import is idempotent the next run completes it.
+	if _, err := cfg.currentPins(store, acc); err != nil {
+		return fmt.Errorf("pipeline: --render: before importing the skeleton: %w", err)
+	}
+	done := 0
 	for _, a := range acc {
 		changed, err := ws.SetShape(a.ID, shapes[a.ID], "import skeleton", "graft")
 		if err != nil {
-			return fmt.Errorf("pipeline: --render: %w", err)
+			return fmt.Errorf("pipeline: --render: skeleton import stopped after revising %d record(s) (nothing was rendered; re-run to complete it): %w", done, err)
 		}
 		if changed {
+			done++
 			cfg.say("%s: shape imported (%s now at a new version)\n", a.Entry.Section, a.ID)
 		}
 	}

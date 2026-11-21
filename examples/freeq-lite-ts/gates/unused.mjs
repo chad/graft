@@ -7,6 +7,12 @@
 // - a reference from inside the function itself (recursion);
 // - a string literal;
 // - `_ = f` or `void f`, which only silence a checker.
+// A name used only as an object or class key ({ fname: 1 }, a property
+// declaration's name, an interface member) is not a use either: it names a
+// property, not the function. Class methods and function-valued class fields
+// are functions like any other; constructors, accessors and the well-known
+// protocol methods the runtime calls (toString, toJSON, valueOf, …) count as
+// used.
 // `main` and `init` count as used: main.ts calls them. So do the functions
 // running.ts exports: they are the core's API for the other modules, which may
 // not be written yet when running.ts is checked (and under --render the
@@ -14,6 +20,10 @@
 import { modules, line, finish, ts } from "./lib.mjs";
 
 const ALWAYS = new Set(["main", "init"]);
+// Protocol methods the runtime calls by name: exempt only as methods (class
+// or object-literal members), never as top-level functions.
+const PROTOCOL = new Set(["toString", "toJSON", "valueOf", "toLocaleString", "then", "catch", "finally", "next", "return", "throw"]);
+const isMember = (fn) => ts.isMethodDeclaration(fn.node) || ts.isPropertyDeclaration(fn.node) || ts.isPropertyAssignment(fn.node);
 const mods = modules();
 
 // Every function-like declaration: [name, node, file, sf].
@@ -22,7 +32,7 @@ for (const m of mods) {
   const visit = (node) => {
     if ((ts.isFunctionDeclaration(node) || ts.isMethodDeclaration(node)) && node.name && ts.isIdentifier(node.name)) {
       fns.push({ name: node.name.text, node, m });
-    } else if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer &&
+    } else if ((ts.isVariableDeclaration(node) || ts.isPropertyDeclaration(node) || ts.isPropertyAssignment(node)) && ts.isIdentifier(node.name) && node.initializer &&
                (ts.isArrowFunction(node.initializer) || ts.isFunctionExpression(node.initializer))) {
       fns.push({ name: node.name.text, node, m });
     }
@@ -56,12 +66,16 @@ const used = (fn) => {
   }
   return false;
 };
-// A declaration's own name is not a use of it.
+// A declaration's own name, or a key, is not a use of the function.
 const isDeclName = (id) => {
   const p = id.parent;
   return (
-    (ts.isFunctionDeclaration(p) || ts.isMethodDeclaration(p) || ts.isVariableDeclaration(p) || ts.isParameter(p) || ts.isPropertyDeclaration(p)) &&
-    p.name === id
+    (ts.isFunctionDeclaration(p) || ts.isMethodDeclaration(p) || ts.isVariableDeclaration(p) || ts.isParameter(p) ||
+     ts.isPropertyDeclaration(p) || ts.isPropertyAssignment(p) || ts.isPropertySignature(p) || ts.isMethodSignature(p) ||
+     ts.isGetAccessorDeclaration(p) || ts.isSetAccessorDeclaration(p) || ts.isEnumMember(p) || ts.isLabeledStatement(p)) &&
+    p.name === id ||
+    // A destructuring key ({ aFn: x } = src) names a property, not the function.
+    (ts.isBindingElement(p) && p.propertyName === id)
   );
 };
 
@@ -73,7 +87,7 @@ const exportedCore = (fn) =>
 
 const problems = [];
 for (const fn of fns) {
-  if (ALWAYS.has(fn.name) || exportedCore(fn)) continue;
+  if (ALWAYS.has(fn.name) || exportedCore(fn) || (PROTOCOL.has(fn.name) && isMember(fn))) continue;
   if (!used(fn)) problems.push(`${fn.m.file}:${line(fn.m.sf, fn.node)}: ${fn.name} is never used; remove it (or use it)`);
 }
 finish(problems, "no dead functions");

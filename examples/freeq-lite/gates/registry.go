@@ -28,6 +28,7 @@ func main() {
 	var problems []string
 	parsed := map[string]*ast.File{}
 	declarer := ""
+	lenShadowed := false
 	for _, f := range files {
 		af, err := parser.ParseFile(fset, f, nil, 0)
 		if err != nil {
@@ -36,6 +37,26 @@ func main() {
 		}
 		parsed[f] = af
 		for _, d := range af.Decls {
+			// A package-level len in any file shadows the builtin everywhere.
+			if fd, ok := d.(*ast.FuncDecl); ok && fd.Recv == nil && fd.Name.Name == "len" {
+				lenShadowed = true
+			}
+			if g, ok := d.(*ast.GenDecl); ok {
+				for _, sp := range g.Specs {
+					switch s := sp.(type) {
+					case *ast.ValueSpec:
+						for _, n := range s.Names {
+							if n.Name == "len" {
+								lenShadowed = true
+							}
+						}
+					case *ast.TypeSpec:
+						if s.Name.Name == "len" {
+							lenShadowed = true
+						}
+					}
+				}
+			}
 			if g, ok := d.(*ast.GenDecl); ok && g.Tok == token.VAR {
 				for _, sp := range g.Specs {
 					for _, n := range sp.(*ast.ValueSpec).Names {
@@ -57,7 +78,7 @@ func main() {
 		// Aliases, parenthesised forms, passing the map anywhere (reflect,
 		// helpers) and reassigning the whole map are all refused.
 		// The declarer's own _synth.go (model-written in render mode) gets read
-		// access only: handlers[k] reads and `range handlers`. No aliasing, no
+		// access only: handlers[k] reads, `range handlers` and len(handlers). No aliasing, no
 		// writes, no clear, no passing the map anywhere.
 		if f == strings.TrimSuffix(declarer, ".go")+"_synth.go" && f != declarer {
 			writes := map[ast.Expr]bool{}
@@ -104,12 +125,19 @@ func main() {
 					if id, ok := x.X.(*ast.Ident); ok && id.Name == "handlers" {
 						allowed[id] = true
 					}
+				case *ast.CallExpr:
+					// len(handlers) reads the registry and cannot alias it.
+					if fn, ok := x.Fun.(*ast.Ident); ok && fn.Name == "len" && fn.Obj == nil && !lenShadowed && len(x.Args) == 1 {
+						if id, ok := x.Args[0].(*ast.Ident); ok && id.Name == "handlers" {
+							allowed[id] = true
+						}
+					}
 				}
 				return true
 			})
 			ast.Inspect(af, func(n ast.Node) bool {
 				if id, ok := n.(*ast.Ident); ok && id.Name == "handlers" && !allowed[id] && id.Obj == nil {
-					problems = append(problems, fmt.Sprintf("%s:%d: %s may only read handlers (index or range); it must not alias, write, clear or pass it", f, fset.Position(id.Pos()).Line, f))
+					problems = append(problems, fmt.Sprintf("%s:%d: %s may only read handlers (index, range or len); it must not alias, write, clear or pass it", f, fset.Position(id.Pos()).Line, f))
 				}
 				return true
 			})
