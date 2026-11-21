@@ -1,0 +1,28 @@
+// graft:synth:begin {"record":"prov-2026-f52ad927","version":1,"gen":"sha256:d85a57328c34216d037ca58c1f786294f81d9bb7c715099ae9f4ae095d0ce976","tier":"low","body":"156c10e4c0d9c3c9b45721523ed1e4e34a501cb2f6b23c19a887348f4dbdb8a1"}
+package main
+
+import "net"
+
+func (s *Server) runningServeBody(conn net.Conn) {
+	panic("echo body")
+}
+
+func (c *Client) runningSendBody(line string) {
+	panic("echo body")
+}
+
+func (s *Server) runningReplyBody(c *Client, code string, text string) {
+	panic("echo body")
+}
+
+func (c *Client) runningPrefixBody() string {
+	panic("echo body")
+}
+
+func (s *Server) runningDisconnectBody(c *Client, reason string) {
+	panic("echo body")
+}
+
+
+// converged
+// graft:synth:end {"record":"prov-2026-f52ad927"}

@@ -1,0 +1,61 @@
+{
+  "sedum_version": "0.13.0",
+  "packages": {
+    "go": {
+      "extensions": [
+        ".go"
+      ]
+    }
+  },
+  "records": [
+    {
+      "record_id": "prov-2026-da50ee5e",
+      "gen": "sha256:b2368b5416d2782a47f90a2d6860c45f16eaf4c6cf03a5692642c2d3947c4a80",
+      "files": [
+        {
+          "path": "channels.go",
+          "package": "go",
+          "template": "{name}.go",
+          "captures": {
+            "name": "channels"
+          }
+        }
+      ],
+      "phases": [
+        {
+          "name": "default",
+          "invocations": [
+            {
+              "action": "setFunction",
+              "kwargs": {
+                "code": "// init is rendered by graft; its body is a convergence region (channelsInitBody).\nfunc init() {\n\tchannelsInitBody()\n}",
+                "file": "channels.go",
+                "name": "init"
+              }
+            }
+          ]
+        }
+      ],
+      "regions": [
+        {
+          "path": "channels.go",
+          "action": "setFunction",
+          "variant": "",
+          "tier": "owned",
+          "pkg": "sha256:6589611adfb6618a7920e43f951a79901428192ea95c1084fde9f222aecd9537",
+          "id": {
+            "file": "channels.go",
+            "name": "init"
+          },
+          "kwargs": {
+            "code": "// init is rendered by graft; its body is a convergence region (channelsInitBody).\nfunc init() {\n\tchannelsInitBody()\n}",
+            "file": "channels.go",
+            "name": "init"
+          },
+          "kwargs_hash": "sha256:5b5aa659f05e8681621c8c78e432b9916b8b8c488e86ef6e9bbac18c1e11765c",
+          "body": "sha256:5ee623ec47886c2828693efbe3bd9d240cab83e51f946c1e1c7704b2dbe3eb97"
+        }
+      ]
+    }
+  ]
+}

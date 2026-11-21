@@ -1,0 +1,25 @@
+id: prov-2026-f52ad927
+title: freeq-lite › Running
+type: imprint
+status: open
+version: 1
+reason: ""
+created_at: "2026-11-19"
+author: test
+intent: |-
+  freeq-lite › Running
+  - [DEFINITION] The server is a single Go program that listens for TCP connections on the address given by its `-addr` flag, which defaults to `:6667`
+  - [REQUIREMENT] Every message is one line ending in CRLF; a line ending in a bare LF is also accepted
+  - [REQUIREMENT] A line longer than 512 bytes is ignored
+  - [DEFINITION] Commands are case-insensitive; `nick`, `NICK` and `Nick` are the same command
+  - [REQUIREMENT] The server's name is `freeq-lite`, and every reply the server itself sends starts with `:freeq-lite`, except the `ERROR` line it sends when closing a connection
+constraints: []
+affected_scope:
+  - running.go
+forbidden_scope: []
+related: []
+sealed_at_sha: ""
+associated_specs: []
+associated_traces: []
+monitors: []
+tags: []

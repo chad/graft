@@ -41,7 +41,15 @@ from the current version.
   `{version, content, reason, author, created_at, parent_hash}`.
 - **`gen_hash` covers only the fields that drive generation.** A status flip
   is not a content change. Specs are excluded: they verify output, they do not
-  drive it.
+  drive it. **In render mode the skeleton is record content (M11a):** each
+  skeleton file entry (path, imports, decls, stubs with their doc contracts) is
+  the `shape` of the imprint that owns the file, and provenance's `gen_hash`
+  covers it when present. A record without a shape hashes exactly as before.
+  `--skeleton file.json` is an import: graft writes each entry into its
+  imprint's shape as a new record version (only when it differs) and plans from
+  the records. **`skeleton.json` stays the source of truth for now:** a shape
+  revised in the records alone is overwritten by the next `--render` run that
+  passes a skeleton. Planning from the records alone is a follow-up (M11b).
 - Tiers: brief → blueprint → imprint. **Only imprints own code regions.**
 
 ## 4. Rendering and regions
@@ -53,6 +61,11 @@ from the current version.
   overwrite-then-report is rejected.)
 - `seeded` regions are stubs a human finishes; **graft never rewrites them.**
 - Regions a record no longer selects are pruned.
+- **A region depends on the whole skeleton**, not just its owner's shape: the
+  shared types it uses (`Client` in `running.go`) live in another record's
+  file. So in render mode every region's evidence also pins a **skeleton hash**
+  (§7). sedum's own markers keep carrying the `gen_hash` without the shape until
+  sedum's provenance reads it (`records.Pin.SedumGen`).
 
 ## 5. Escalation ladder (when no catalog action fits)
 
@@ -67,6 +80,11 @@ happens only in a convergence-layer region, owned and marked like any other.**
 - **A synthesis region is accepted only when its execution gate passes:**
   evals derived from the owning record, run against the built artifact.
 - Evals carry a risk tier; the required evidence per tier is policy.
+- **A moved skeleton hash re-verifies, it does not regenerate.** When only the
+  skeleton hash moved, the existing body is run through the current gates with
+  no model call and fresh evidence pins the new skeleton hash; only a body that
+  fails is regenerated. A region whose own `gen_hash` moved (its owner's shape
+  or intent changed) is regenerated as before.
 
 ### `graft converge` exit codes
 
@@ -85,6 +103,13 @@ happens only in a convergence-layer region, owned and marked like any other.**
   The record version is recorded but not compared: a version bump that changes
   none of them (a status flip, a reworded reason) is no reason to re-verify.
   This matches §3, where `records.Stale` compares `gen_hash` only.
+- **In render mode evidence also pins `skeleton_hash`** (M11a): the hash of the
+  generator name and every file entry of every planned imprint's shape, sorted
+  by path (`records.SkeletonHash`; content only, never record ids or versions).
+  Evidence is stale on a moved `skeleton_hash` when the current pin has one, so
+  evidence from before M11a (no skeleton hash) is stale in render mode and is
+  re-verified (§6), never trusted. Plain runs have none and are unaffected; the
+  field is `omitempty`, so their evidence ids do not change.
 - `spec_hash` is computed by the records layer (`records.Pin.SpecHash`) from
   provenance's per-spec hashes for the record's associated specs; evidence
   treats it as opaque. A record with no specs has an empty spec hash; a spec
@@ -144,6 +169,7 @@ Two directions, one rule:
 | M4 | Prose drafter: canonicalizer port → draft records with receipts; identity mapping | chad-bot-phoenix |
 | M5 | Convergence: synthesis regions + execution gate + risk-tiered evals | chad-bot-phoenix |
 | M6 | Bench: three arms, Wilson intervals, per-layer attribution | both |
+| M11a | The skeleton as record content: shape in the owning imprint (provenance `gen_hash`), skeleton hash in evidence, re-verify on `skeleton_hash` | livecodelife's agent |
 
 ## 12. Open questions
 

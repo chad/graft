@@ -22,6 +22,13 @@ graft knows no language there, it reads stubs, helper signatures, seeds, synth
 file names and extensions from `sedum convergence render`. A skeleton may name
 its generator package (`"generator": "typescript"`); it defaults to the
 profile's name. This needs a sedum that has `sedum convergence`.
+Under `--render` the skeleton is record content: `skeleton.json` is imported
+into each imprint's shape (a new record version, only when it differs) and the
+tree is planned from the records. `skeleton.json` is still the source of truth,
+so a shape edited in the records alone is overwritten by the next run that
+passes it. A shape (skeleton) edit re-verifies every region with no model call,
+and only the regions that fail (a region whose own shape moved, or whose body no
+longer passes the gates) regenerate.
 
 **Existing repos.** In a repo whose packages live in directories, place a section's region with `"files": {"<section>": "pkg/file.go"}` in `graft.json`. A key is the section's full title, including the top heading, or its last part alone when that is unambiguous. A new section never takes over an existing file, and once accepted its file is fixed. See [docs/real-repo-trial.md](docs/real-repo-trial.md) for a trial in a real Go service, and for what a user still has to supply: placement, a wiring hook and an acceptance test.
 

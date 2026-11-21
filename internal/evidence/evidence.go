@@ -51,6 +51,10 @@ type Pin struct {
 	GenHash    string `json:"gen_hash"`            // what drives generation
 	RegionHash string `json:"region_hash"`         // the bytes the evidence speaks for
 	SpecHash   string `json:"spec_hash,omitempty"` // the specs it ran; "" if none
+	// SkeletonHash pins the whole skeleton the region was built against, in
+	// render mode (SPEC §7); "" outside it. It is the last field and omitempty,
+	// so the ID of evidence from a plain run is unchanged.
+	SkeletonHash string `json:"skeleton_hash,omitempty"`
 }
 
 // Evidence is one entry in the log.
@@ -68,7 +72,7 @@ type Evidence struct {
 }
 
 // Moved names which compared parts of the pin differ from cur: any of
-// "gen_hash", "region_hash", "spec_hash". Empty means fresh. A different
+// "gen_hash", "region_hash", "spec_hash", "skeleton_hash". Empty means fresh. A different
 // RecordID is reported as "record_id": the evidence is not about cur at all.
 func (e Evidence) Moved(cur Pin) []string {
 	if e.Pin.RecordID != cur.RecordID {
@@ -83,6 +87,12 @@ func (e Evidence) Moved(cur Pin) []string {
 	}
 	if e.Pin.SpecHash != cur.SpecHash {
 		m = append(m, "spec_hash")
+	}
+	// Compared only when cur has one (render mode). Evidence from before the
+	// skeleton was pinned has none, so in render mode it is skeleton_hash-stale
+	// and is re-verified, never trusted.
+	if cur.SkeletonHash != "" && e.Pin.SkeletonHash != cur.SkeletonHash {
+		m = append(m, "skeleton_hash")
 	}
 	return m
 }

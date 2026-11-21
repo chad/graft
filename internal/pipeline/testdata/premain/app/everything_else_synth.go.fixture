@@ -1,0 +1,10 @@
+// graft:synth:begin {"record":"prov-2026-4ff4e426","version":1,"gen":"sha256:a0388c39ff76e9dc17795c952a87c95b92d2f74cb3ba343bfb259dd9118dc7d1","tier":"low","body":"9bd2d6d68667c07ae45bfc8715e5fa0b3c1a7a4006a0e3610f10b394f7a02602"}
+package main
+
+func everything_elseInitBody() {
+	panic("echo body")
+}
+
+
+// converged
+// graft:synth:end {"record":"prov-2026-4ff4e426"}

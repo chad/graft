@@ -67,6 +67,9 @@ type Candidate struct {
 	SpecHash string // the record's spec hash (records.Pin.SpecHash); must match the store
 	Tier     string // risk tier of the owning record
 	Body     string
+	// SkeletonHash is the skeleton hash the region is built against (render
+	// mode; "" otherwise). It is pinned into every evidence entry.
+	SkeletonHash string
 }
 
 // Decision is the outcome of Converge.
@@ -176,7 +179,7 @@ func (c Converger) Check(ctx context.Context, cand Candidate) (Trial, error) {
 		return t, err
 	}
 	pin := evidence.Pin{RecordID: cand.RecordID, Version: cand.Version, GenHash: cand.GenHash,
-		RegionHash: HashBody(normalizeBody(cand.Body)), SpecHash: cand.SpecHash}
+		RegionHash: HashBody(normalizeBody(cand.Body)), SpecHash: cand.SpecHash, SkeletonHash: cand.SkeletonHash}
 	if err := checkRendered(cand, next, pin.RegionHash); err != nil {
 		return t, err
 	}

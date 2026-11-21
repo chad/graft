@@ -56,6 +56,11 @@ func (m *echoModel) Complete(_ context.Context, prompt string) (string, error) {
 
 func renderSetup(t *testing.T, skeleton, specFile string) (Config, *echoModel, string) {
 	t.Helper()
+	return renderSetupIn(t, flDir, "freeqlite", skeleton, specFile)
+}
+
+func renderSetupIn(t *testing.T, dir, module, skeleton, specFile string) (Config, *echoModel, string) {
+	t.Helper()
 	if _, err := exec.LookPath("go"); err != nil {
 		t.Skip("needs go")
 	}
@@ -64,7 +69,7 @@ func renderSetup(t *testing.T, skeleton, specFile string) (Config, *echoModel, s
 	if err != nil || gens == "" {
 		t.Skip("needs sedum on PATH and SEDUM_GENERATORS")
 	}
-	sk, err := os.ReadFile(flDir + skeleton)
+	sk, err := os.ReadFile(dir + skeleton)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,8 +77,8 @@ func renderSetup(t *testing.T, skeleton, specFile string) (Config, *echoModel, s
 	if err != nil {
 		t.Fatal(err)
 	}
-	sp, _ := os.ReadFile(flDir + specFile)
-	conv, _ := os.ReadFile(flDir + "conventions.md")
+	sp, _ := os.ReadFile(dir + specFile)
+	conv, _ := os.ReadFile(dir + "conventions.md")
 	repo, root := t.TempDir(), filepath.Join(t.TempDir(), "app")
 	os.MkdirAll(filepath.Join(repo, ".graft"), 0o755)
 	log, err := evidence.Open(filepath.Join(repo, ".graft", "evidence.jsonl"))
@@ -82,7 +87,7 @@ func renderSetup(t *testing.T, skeleton, specFile string) (Config, *echoModel, s
 	}
 	m := &echoModel{root: root}
 	return Config{
-		Repo: repo, Root: root, Module: "freeqlite", Spec: string(sp), Conventions: string(conv), Tier: "low",
+		Repo: repo, Root: root, Module: module, Spec: string(sp), Conventions: string(conv), Tier: "low",
 		Model: m, Log: log, Policy: evidence.Policy{"low": {evidence.StaticAnalysis}},
 		Gates: []converge.Gate{
 			converge.CommandGate{Label: "go build", Argv: []string{"go", "build", "./..."}, As: evidence.StaticAnalysis, Timeout: 2 * time.Minute},

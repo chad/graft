@@ -334,3 +334,96 @@ func TestSpecHashOrderAndGolden(t *testing.T) {
 		t.Fatalf("SpecHash = %s; if the encoding change is intended, update the golden value", p1.SpecHash)
 	}
 }
+
+func shapeEntry(path, doc string) any {
+	return map[string]any{"path": path, "stubs": []any{map[string]any{"name": "F", "doc": doc}}}
+}
+
+func TestSetShapeIsARevisionAndMovesGenHashNotSedumGen(t *testing.T) {
+	dir := copyFixture(t, "base")
+	s, err := OpenDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ws := s.(ShapeStore)
+	before, _ := s.Current(fixtureID)
+	if before.GenHash != before.SedumGen || len(before.Shape) != 0 {
+		t.Fatalf("a record without shape: %+v", before)
+	}
+	changed, err := ws.SetShape(fixtureID, []any{shapeEntry("a.go", "A.")}, "import skeleton", "graft")
+	if err != nil || !changed {
+		t.Fatalf("SetShape: %v %v", changed, err)
+	}
+	after, _ := s.Current(fixtureID)
+	if after.Version != before.Version+1 || after.GenHash == before.GenHash || after.SedumGen != before.GenHash {
+		t.Errorf("before %+v after %+v", before, after)
+	}
+	if stale, _ := Stale(s, before); !stale {
+		t.Error("a shape change is not generation-stale")
+	}
+	if _, err := s.Snapshot(fixtureID, after.Version); err != nil {
+		t.Errorf("the new version has no verified snapshot: %v", err)
+	}
+	// The same shape again: nothing is written.
+	changed, err = ws.SetShape(fixtureID, []any{shapeEntry("a.go", "A.")}, "import skeleton", "graft")
+	if err != nil || changed {
+		t.Fatalf("same shape: %v %v", changed, err)
+	}
+	if again, _ := s.Current(fixtureID); again.Version != after.Version {
+		t.Error("an identical shape bumped the version")
+	}
+	// Clearing it returns gen_hash to what it was.
+	if _, err := ws.SetShape(fixtureID, nil, "import skeleton", "graft"); err != nil {
+		t.Fatal(err)
+	}
+	if cleared, _ := s.Current(fixtureID); cleared.GenHash != before.GenHash {
+		t.Error("clearing the shape did not restore gen_hash")
+	}
+	if _, err := ws.SetShape(fixtureID, []any{shapeEntry("b.go", "B.")}, "", "graft"); err == nil {
+		t.Error("a shape change without a reason was accepted")
+	}
+}
+
+func TestSkeletonHashCoversContentOnly(t *testing.T) {
+	a := Pin{RecordID: "prov-2026-0000000a", Version: 1, Shape: []any{shapeEntry("a.go", "A.")}}
+	b := Pin{RecordID: "prov-2026-0000000b", Version: 4, Shape: []any{shapeEntry("b.go", "B.")}}
+	h1, err := SkeletonHash("go", []Pin{a, b})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Order of records, versions and ids do not matter; content does.
+	a2, b2 := a, b
+	a2.RecordID, a2.Version, b2.Version = "prov-2026-0000000c", 9, 2
+	if h2, _ := SkeletonHash("go", []Pin{b2, a2}); h2 != h1 {
+		t.Error("record ids, versions or order moved the skeleton hash")
+	}
+	if h, _ := SkeletonHash("go", []Pin{a, {Shape: []any{shapeEntry("b.go", "B changed.")}}}); h == h1 {
+		t.Error("a doc edit did not move the skeleton hash")
+	}
+	if h, _ := SkeletonHash("typescript", []Pin{a, b}); h == h1 {
+		t.Error("the generator name is not covered")
+	}
+	if h, _ := SkeletonHash("go", []Pin{a, b, {RecordID: "prov-2026-0000000d"}}); h != h1 {
+		t.Error("a record without a shape moved the skeleton hash")
+	}
+}
+
+func TestSetShapeIgnoresFormOnlyChanges(t *testing.T) {
+	s, err := OpenDir(copyFixture(t, "base"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ws := s.(ShapeStore)
+	if _, err := ws.SetShape(fixtureID, []any{shapeEntry("a.go", "line1\nline2")}, "import skeleton", "graft"); err != nil {
+		t.Fatal(err)
+	}
+	v, _ := s.Current(fixtureID)
+	// CRLF, a decomposed e and a different entry order are the same shape.
+	changed, err := ws.SetShape(fixtureID, []any{shapeEntry("a.go", "line1\r\nline2")}, "import skeleton", "graft")
+	if err != nil || changed {
+		t.Fatalf("CRLF-only change: %v %v", changed, err)
+	}
+	if again, _ := s.Current(fixtureID); again.Version != v.Version {
+		t.Error("a form-only change bumped the version")
+	}
+}

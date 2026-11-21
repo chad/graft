@@ -1,5 +1,5 @@
-github.com/livecodelife/provenance v0.0.0-20261117223207-c6c11e2d305e h1:8kbarx8XPKKJS3rtm0YNPqxcNw0XLKrUzWCD7h9WxyI=
-github.com/livecodelife/provenance v0.0.0-20261117223207-c6c11e2d305e/go.mod h1:JlhBsUu0Sv1BX7cEaOX24y0AyIpdm6MrSe7HTbeXmIo=
+github.com/livecodelife/provenance v0.0.0-20261120224936-dbb6d0d9f329 h1:nMOAxO2xEkf8Lhg6Au0/F26qYjBIj76HwcWwsjBma8g=
+github.com/livecodelife/provenance v0.0.0-20261120224936-dbb6d0d9f329/go.mod h1:JlhBsUu0Sv1BX7cEaOX24y0AyIpdm6MrSe7HTbeXmIo=
 golang.org/x/text v0.34.0 h1:oL/Qq0Kdaqxa1KbNeMKwQq0reLCCaFtqu2eNuSeNHbk=
 golang.org/x/text v0.34.0/go.mod h1:homfLqTYRFyVYemLBFl5GgL/DWEiH5wcsQ5gSh1yziA=
 gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405 h1:yhCVgyC4o1eVCa2tZl7eS0r+SDo693bJlVdllGtEeKM=
