@@ -14,6 +14,7 @@ import (
 	"github.com/chad/graft/internal/drafter"
 	"github.com/chad/graft/internal/evidence"
 	"github.com/chad/graft/internal/lang"
+	"github.com/chad/graft/internal/records"
 )
 
 const spec = `# Tiny
@@ -368,5 +369,29 @@ func TestSectionFilesNitRefusals(t *testing.T) {
 	}
 	if err := (AcceptOptions{Files: map[string]string{"Nope": "n.go"}}).CheckConfigured(drafter.Drafts(spec)); !errors.Is(err, ErrBadFile) {
 		t.Errorf("dry-run check: %v", err)
+	}
+}
+
+// The record's affected_scope is where an accepted section lives; an index
+// that disagrees with it is refused rather than trusted.
+func TestPlacementIsTheRecords(t *testing.T) {
+	cfg, _ := setup(t)
+	acc, err := AcceptWith(cfg.Repo, drafter.Drafts(spec), "test", time.Now(), AcceptOptions{Files: map[string]string{"Extra": "extra/twice.go"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, _ := records.OpenDir(cfg.Repo)
+	if p, _ := s.Current(acc[1].ID); len(p.AffectedScope) != 1 || p.AffectedScope[0] != "extra/twice.go" {
+		t.Fatalf("the placement must be in the record: %+v", p.AffectedScope)
+	}
+	idx, _ := LoadIndex(cfg.Repo)
+	e := idx.Records[acc[1].ID]
+	e.File = "tampered.go"
+	idx.Records[acc[1].ID] = e
+	if err := idx.save(cfg.Repo); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AcceptWith(cfg.Repo, drafter.Drafts(spec), "test", time.Now(), AcceptOptions{}); !errors.Is(err, ErrBadFile) || !strings.Contains(err.Error(), "source of truth") {
+		t.Fatalf("an index disagreeing with the record must be refused: %v", err)
 	}
 }
