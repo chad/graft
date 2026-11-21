@@ -386,6 +386,12 @@ func newID(now time.Time) string {
 	return fmt.Sprintf("prov-%d-%s", now.UTC().Year(), hex.EncodeToString(b[:]))
 }
 
+// SectionFile is the file a section's record owns under --render, where no
+// "files" config places it: the skeleton must name exactly this path for the
+// section (a record's affected_scope is that one file). `graft draft
+// --skeleton` tells the model so.
+func SectionFile(section, ext string) string { return fileFor(section, ext) }
+
 // fileFor names the source file (with extension ext) a section's region lives in.
 func fileFor(section, ext string) string {
 	parts := strings.Split(section, " › ")

@@ -62,6 +62,9 @@ type Config struct {
 	Retries     int  // 0 means DefaultRetries
 	Strict      bool // an unowned statement counts as invalid and is retried
 
+	// FileFor is the one file a section owns (a record's affected_scope is
+	// exactly one file under --render). Required.
+	FileFor func(section string) string
 	// Check runs the profile's decl_check. It returns the checker's complaints
 	// (empty: accepted). Required.
 	Check func(ctx context.Context, decls []DeclIn) (string, error)
@@ -126,8 +129,8 @@ func Statements(drafts []drafter.Draft) []Statement {
 // (a failed run returns it in the Result too).
 func Draft(ctx context.Context, cfg Config) (Result, error) {
 	var res Result
-	if cfg.Model == nil || cfg.Check == nil || cfg.Scratch == nil || cfg.Build == nil {
-		return res, errors.New("skeldraft: Model, Check, Scratch and Build are required")
+	if cfg.Model == nil || cfg.FileFor == nil || cfg.Check == nil || cfg.Scratch == nil || cfg.Build == nil {
+		return res, errors.New("skeldraft: Model, FileFor, Check, Scratch and Build are required")
 	}
 	if len(cfg.Profile.DeclCheck) == 0 {
 		return res, fmt.Errorf("skeldraft: the %s language profile has no decl_check, so it cannot draft a skeleton (a drafted decl must be proven free of logic)", cfg.Profile.Name)
@@ -191,7 +194,7 @@ func validate(ctx context.Context, cfg Config, drafts []drafter.Draft, stmts []S
 	if err != nil {
 		return zero, nil, err
 	}
-	if err := structure(a, drafts, stmts); err != nil {
+	if err := structure(a, drafts, stmts, cfg.FileFor); err != nil {
 		return zero, nil, err
 	}
 	var decls []DeclIn
@@ -240,7 +243,7 @@ func parse(resp string) (answer, error) {
 }
 
 // structure is the cheap, no-build, no-subprocess part of validation.
-func structure(a answer, drafts []drafter.Draft, stmts []Statement) error {
+func structure(a answer, drafts []drafter.Draft, stmts []Statement, fileFor func(string) string) error {
 	sections := map[string]bool{}
 	for _, d := range drafts {
 		sections[d.Section] = true
@@ -265,6 +268,14 @@ func structure(a answer, drafts []drafter.Draft, stmts []Statement) error {
 		if !sections[f.Section] {
 			bad = append(bad, fmt.Sprintf("%s: section %q is not a section of the spec", f.Path, f.Section))
 		}
+		if sections[f.Section] {
+			if want := fileFor(f.Section); f.Path != want {
+				bad = append(bad, fmt.Sprintf("%s: section %q must own exactly the file %q (one file per section, at that path)", f.Path, f.Section, want))
+			}
+			if owned[f.Section] {
+				bad = append(bad, fmt.Sprintf("section %q has more than one file; a section owns exactly one", f.Section))
+			}
+		}
 		owned[f.Section] = true
 		for _, d := range f.Decls {
 			switch d.Kind {
@@ -281,7 +292,7 @@ func structure(a answer, drafts []drafter.Draft, stmts []Statement) error {
 	}
 	for _, d := range drafts {
 		if !owned[d.Section] {
-			bad = append(bad, fmt.Sprintf("section %q owns no file", d.Section))
+			bad = append(bad, fmt.Sprintf("section %q owns no file (it must own %q)", d.Section, fileFor(d.Section)))
 		}
 	}
 	known := map[string]bool{}

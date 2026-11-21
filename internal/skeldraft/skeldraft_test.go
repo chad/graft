@@ -58,7 +58,8 @@ type fakes struct {
 func (f *fakes) cfg(m *scripted) Config {
 	return Config{
 		Model: m, Profile: lang.Go, Spec: spec, Conventions: "conv",
-		Check: func(context.Context, []DeclIn) (string, error) { f.check++; return f.checkOut, nil },
+		FileFor: func(s string) string { return strings.ToLower(s[strings.LastIndex(s, " ")+1:]) + ".go" },
+		Check:   func(context.Context, []DeclIn) (string, error) { f.check++; return f.checkOut, nil },
 		Scratch: func(context.Context, []drafter.Draft, recording.Skeleton) (string, func(), error) {
 			f.scratch++
 			return "root", func() {}, nil
@@ -156,6 +157,8 @@ func TestStructuralRejections(t *testing.T) {
 		"section no file": fileOne,
 		"stub no doc":     strings.Replace(fileTwo, `"doc":"answers PING"`, `"doc":""`, 1) + "," + fileOne,
 		"duplicate path":  fileOne + "," + fileOne + "," + fileTwo,
+		"wrong path":      strings.Replace(fileOne, "one.go", "unknown.go", 1) + "," + fileTwo,
+		"two files":       fileOne + "," + strings.Replace(fileOne, "one.go", "extra.go", 1) + "," + fileTwo,
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := &fakes{}

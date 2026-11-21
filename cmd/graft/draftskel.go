@@ -159,7 +159,8 @@ func draftSkeletonCmd(args []string, stdout, stderr io.Writer) int {
 		Model:   model.Command{Argv: argv, Timeout: timeout},
 		Profile: profile, Spec: string(spec), Conventions: string(conv),
 		Retries: *retries, Strict: *strict,
-		Check: skeldraft.ExecCheck(profile),
+		FileFor: func(s string) string { return pipeline.SectionFile(s, profile.Ext) },
+		Check:   skeldraft.ExecCheck(profile),
 		Scratch: func(ctx context.Context, drafts []drafter.Draft, sk recording.Skeleton) (string, func(), error) {
 			return pipeline.RenderScratch(ctx, pcfg, drafts, sk)
 		},
