@@ -6,6 +6,7 @@
 package lang
 
 import (
+	_ "embed"
 	"errors"
 	"fmt"
 	"path"
@@ -25,7 +26,22 @@ type Profile struct {
 	Bootstrap map[string]string `json:"bootstrap"` // files written once into a fresh tree
 	Build     []string          `json:"build"`     // empty: nothing to build
 	Run       []string          `json:"run"`       // start the program; "-addr {addr}" appended unless {addr} appears
+	// DeclCheck is the command `graft draft --skeleton` runs on the decls it
+	// drafted (JSON on stdin, "file: name: reason" lines on stderr, non-zero
+	// exit to reject). It is how graft refuses logic in a drafted decl without
+	// parsing target code. Empty: the profile cannot draft a skeleton.
+	// A first argument of "{declcheck_go}" is graft's own embedded Go checker,
+	// which graft builds (go build, network off) and runs itself.
+	DeclCheck []string `json:"decl_check"`
 }
+
+// GoDeclCheckSource is the Go profile's decl checker (standard library only).
+//
+//go:embed declcheck/main.go
+var GoDeclCheckSource string
+
+// GoDeclCheckVar, as the first element of a profile's decl_check, names GoDeclCheckSource.
+const GoDeclCheckVar = "{declcheck_go}"
 
 // Go is the default profile: what graft did before profiles existed.
 var Go = Profile{
@@ -37,6 +53,7 @@ var Go = Profile{
 	Bootstrap: map[string]string{"go.mod": "module {module}\n\ngo 1.22\n"},
 	Build:     []string{"go", "build", "-o", "{out}", "."},
 	Run:       []string{"{out}"},
+	DeclCheck: []string{GoDeclCheckVar},
 }
 
 // ErrProfile: a profile that cannot be used.

@@ -1,0 +1,387 @@
+{
+  "note": "claimed_owners are the drafting model's claim, not evidence; unowned is the hard signal",
+  "statements": [
+    {
+      "id": "S1",
+      "section": "freeq-lite › Running",
+      "type": "DEFINITION",
+      "text": "The server is a single Go program that listens for TCP connections on the address given by its `-addr` flag, which defaults to `:6667`",
+      "claimed_owners": [
+        "running.go#main"
+      ],
+      "unowned": false
+    },
+    {
+      "id": "S2",
+      "section": "freeq-lite › Running",
+      "type": "REQUIREMENT",
+      "text": "Every message is one line ending in CRLF; a line ending in a bare LF is also accepted",
+      "claimed_owners": [
+        "running.go#main",
+        "running.go#Send"
+      ],
+      "unowned": false
+    },
+    {
+      "id": "S3",
+      "section": "freeq-lite › Running",
+      "type": "REQUIREMENT",
+      "text": "A line longer than 512 bytes is ignored",
+      "claimed_owners": [
+        "running.go#main",
+        "running.go#MaxLineBytes"
+      ],
+      "unowned": false
+    },
+    {
+      "id": "S4",
+      "section": "freeq-lite › Running",
+      "type": "DEFINITION",
+      "text": "Commands are case-insensitive; `nick`, `NICK` and `Nick` are the same command",
+      "claimed_owners": [
+        "running.go#main",
+        "running.go#handlers"
+      ],
+      "unowned": false
+    },
+    {
+      "id": "S5",
+      "section": "freeq-lite › Running",
+      "type": "REQUIREMENT",
+      "text": "The server's name is `freeq-lite`, and every reply the server itself sends starts with `:freeq-lite`, except the `ERROR` line it sends when closing a connection",
+      "claimed_owners": [
+        "running.go#ServerName",
+        "running.go#Reply"
+      ],
+      "unowned": false
+    },
+    {
+      "id": "S6",
+      "section": "freeq-lite › Registration",
+      "type": "CONSTRAINT",
+      "text": "A connection registers by sending `NICK \u003cnick\u003e` and `USER \u003cuser\u003e 0 * :\u003creal name\u003e`, in either order",
+      "claimed_owners": [
+        "registration.go#init"
+      ],
+      "unowned": false
+    },
+    {
+      "id": "S7",
+      "section": "freeq-lite › Registration",
+      "type": "REQUIREMENT",
+      "text": "Once both have been received, the server sends `:freeq-lite 001 \u003cnick\u003e :Welcome to freeq-lite \u003cnick\u003e`",
+      "claimed_owners": [
+        "registration.go#init"
+      ],
+      "unowned": false
+    },
+    {
+      "id": "S8",
+      "section": "freeq-lite › Registration",
+      "type": "REQUIREMENT",
+      "text": "A nick must be 1 to 16 characters, start with a letter, and contain only letters, digits, `_` and `-`",
+      "claimed_owners": [
+        "registration.go#init"
+      ],
+      "unowned": false
+    },
+    {
+      "id": "S9",
+      "section": "freeq-lite › Registration",
+      "type": "REQUIREMENT",
+      "text": "An invalid nick is answered with `:freeq-lite 432 * \u003cnick\u003e :Erroneous nickname`",
+      "claimed_owners": [
+        "registration.go#init"
+      ],
+      "unowned": false
+    },
+    {
+      "id": "S10",
+      "section": "freeq-lite › Registration",
+      "type": "DEFINITION",
+      "text": "Nicks are unique ignoring case; a nick already in use is answered with `:freeq-lite 433 * \u003cnick\u003e :Nickname is already in use`",
+      "claimed_owners": [
+        "registration.go#init",
+        "running.go#Server"
+      ],
+      "unowned": false
+    },
+    {
+      "id": "S11",
+      "section": "freeq-lite › Registration",
+      "type": "REQUIREMENT",
+      "text": "Before registration, any command other than `NICK`, `USER`, `PING` and `QUIT` is answered with `:freeq-lite 451 * :You have not registered`",
+      "claimed_owners": [
+        "running.go#main"
+      ],
+      "unowned": false
+    },
+    {
+      "id": "S12",
+      "section": "freeq-lite › Registration",
+      "type": "REQUIREMENT",
+      "text": "After registration, `NICK \u003cnew\u003e` changes the nick: the server sends `:\u003cold prefix\u003e NICK \u003cnew\u003e` to the user and to everyone who shares a channel with them, each person once",
+      "claimed_owners": [
+        "registration.go#init",
+        "running.go#Peers"
+      ],
+      "unowned": false
+    },
+    {
+      "id": "S13",
+      "section": "freeq-lite › Registration",
+      "type": "DEFINITION",
+      "text": "A user's prefix is defined as `\u003cnick\u003e!\u003cuser\u003e@freeq-lite`",
+      "claimed_owners": [
+        "running.go#Prefix"
+      ],
+      "unowned": false
+    },
+    {
+      "id": "S14",
+      "section": "freeq-lite › Keepalive",
+      "type": "REQUIREMENT",
+      "text": "`PING \u003ctoken\u003e` is answered with `:freeq-lite PONG freeq-lite :\u003ctoken\u003e`, before or after registration",
+      "claimed_owners": [
+        "keepalive.go#init"
+      ],
+      "unowned": false
+    },
+    {
+      "id": "S15",
+      "section": "freeq-lite › Channels",
+      "type": "REQUIREMENT",
+      "text": "A channel name must start with `#`, be 2 to 32 characters long, and contain no spaces, commas or control characters",
+      "claimed_owners": [
+        "channels.go#init"
+      ],
+      "unowned": false
+    },
+    {
+      "id": "S16",
+      "section": "freeq-lite › Channels",
+      "type": "REQUIREMENT",
+      "text": "Channel names are matched ignoring case: `#Room` and `#room` are the same channel, which keeps the name it was created with",
+      "claimed_owners": [
+        "channels.go#init",
+        "running.go#Channel"
+      ],
+      "unowned": false
+    },
+    {
+      "id": "S17",
+      "section": "freeq-lite › Channels",
+      "type": "REQUIREMENT",
+      "text": "`JOIN \u003cchannel\u003e` adds the user to the channel, creating it if it does not exist",
+      "claimed_owners": [
+        "channels.go#init"
+      ],
+      "unowned": false
+    },
+    {
+      "id": "S18",
+      "section": "freeq-lite › Channels",
+      "type": "REQUIREMENT",
+      "text": "When a user joins, `:\u003cprefix\u003e JOIN \u003cchannel\u003e` is sent to every member of the channel, including the user who joined",
+      "claimed_owners": [
+        "channels.go#init"
+      ],
+      "unowned": false
+    },
+    {
+      "id": "S19",
+      "section": "freeq-lite › Channels",
+      "type": "REQUIREMENT",
+      "text": "After joining, the joiner receives `:freeq-lite 353 \u003cnick\u003e = \u003cchannel\u003e :\u003cnames\u003e` followed by `:freeq-lite 366 \u003cnick\u003e \u003cchannel\u003e :End of /NAMES list`, where names are the members' nicks sorted alphabetically and separated by single spaces",
+      "claimed_owners": [
+        "channels.go#init"
+      ],
+      "unowned": false
+    },
+    {
+      "id": "S20",
+      "section": "freeq-lite › Channels",
+      "type": "REQUIREMENT",
+      "text": "Joining a channel the user is already in must send nothing and change nothing",
+      "claimed_owners": [
+        "channels.go#init"
+      ],
+      "unowned": false
+    },
+    {
+      "id": "S21",
+      "section": "freeq-lite › Channels",
+      "type": "REQUIREMENT",
+      "text": "An invalid channel name is answered with `:freeq-lite 403 \u003cnick\u003e \u003cchannel\u003e :No such channel`",
+      "claimed_owners": [
+        "channels.go#init"
+      ],
+      "unowned": false
+    },
+    {
+      "id": "S22",
+      "section": "freeq-lite › Channels",
+      "type": "REQUIREMENT",
+      "text": "`PART \u003cchannel\u003e` removes the user; `:\u003cprefix\u003e PART \u003cchannel\u003e` is sent to every member including the user who left",
+      "claimed_owners": [
+        "channels.go#init"
+      ],
+      "unowned": false
+    },
+    {
+      "id": "S23",
+      "section": "freeq-lite › Channels",
+      "type": "REQUIREMENT",
+      "text": "`PART \u003cchannel\u003e :\u003creason\u003e` sends `:\u003cprefix\u003e PART \u003cchannel\u003e :\u003creason\u003e` instead",
+      "claimed_owners": [
+        "channels.go#init"
+      ],
+      "unowned": false
+    },
+    {
+      "id": "S24",
+      "section": "freeq-lite › Channels",
+      "type": "REQUIREMENT",
+      "text": "Parting a channel the user is not in is answered with `:freeq-lite 442 \u003cnick\u003e \u003cchannel\u003e :You're not on that channel`",
+      "claimed_owners": [
+        "channels.go#init"
+      ],
+      "unowned": false
+    },
+    {
+      "id": "S25",
+      "section": "freeq-lite › Channels",
+      "type": "REQUIREMENT",
+      "text": "The server must forget a channel as soon as it has no members",
+      "claimed_owners": [
+        "running.go#RemoveMember"
+      ],
+      "unowned": false
+    },
+    {
+      "id": "S26",
+      "section": "freeq-lite › Channels",
+      "type": "REQUIREMENT",
+      "text": "`NAMES \u003cchannel\u003e` is answered with the same 353 and 366 lines a joiner receives; for a channel that does not exist, only the 366 line is sent",
+      "claimed_owners": [
+        "channels.go#init"
+      ],
+      "unowned": false
+    },
+    {
+      "id": "S27",
+      "section": "freeq-lite › Messages",
+      "type": "REQUIREMENT",
+      "text": "`PRIVMSG \u003cchannel\u003e :\u003ctext\u003e` sends `:\u003cprefix\u003e PRIVMSG \u003cchannel\u003e :\u003ctext\u003e` to every member of the channel except the sender",
+      "claimed_owners": [
+        "messages.go#init"
+      ],
+      "unowned": false
+    },
+    {
+      "id": "S28",
+      "section": "freeq-lite › Messages",
+      "type": "CONSTRAINT",
+      "text": "Only members may send to a channel; anyone else is answered with `:freeq-lite 404 \u003cnick\u003e \u003cchannel\u003e :Cannot send to channel`",
+      "claimed_owners": [
+        "messages.go#init"
+      ],
+      "unowned": false
+    },
+    {
+      "id": "S29",
+      "section": "freeq-lite › Messages",
+      "type": "REQUIREMENT",
+      "text": "`PRIVMSG \u003cnick\u003e :\u003ctext\u003e` sends `:\u003cprefix\u003e PRIVMSG \u003cnick\u003e :\u003ctext\u003e` to that user, where `\u003cnick\u003e` in the delivered line is the recipient's nick as they registered it; nick matching ignores case",
+      "claimed_owners": [
+        "messages.go#init"
+      ],
+      "unowned": false
+    },
+    {
+      "id": "S30",
+      "section": "freeq-lite › Messages",
+      "type": "INVARIANT",
+      "text": "The sender of a `PRIVMSG` never receives their own message back; a `PRIVMSG` to one's own nick is accepted and delivered to no one",
+      "claimed_owners": [
+        "messages.go#init"
+      ],
+      "unowned": false
+    },
+    {
+      "id": "S31",
+      "section": "freeq-lite › Messages",
+      "type": "REQUIREMENT",
+      "text": "A message to a nick or channel that does not exist is answered with `:freeq-lite 401 \u003cnick\u003e \u003ctarget\u003e :No such nick/channel`",
+      "claimed_owners": [
+        "messages.go#init"
+      ],
+      "unowned": false
+    },
+    {
+      "id": "S32",
+      "section": "freeq-lite › Messages",
+      "type": "REQUIREMENT",
+      "text": "A `PRIVMSG` with no text is answered with `:freeq-lite 412 \u003cnick\u003e :No text to send`",
+      "claimed_owners": [
+        "messages.go#init"
+      ],
+      "unowned": false
+    },
+    {
+      "id": "S33",
+      "section": "freeq-lite › Leaving",
+      "type": "REQUIREMENT",
+      "text": "`QUIT` or `QUIT :\u003creason\u003e` closes the connection: the server sends `ERROR :Closing link` and then closes it",
+      "claimed_owners": [
+        "leaving.go#init",
+        "running.go#Disconnect"
+      ],
+      "unowned": false
+    },
+    {
+      "id": "S34",
+      "section": "freeq-lite › Leaving",
+      "type": "REQUIREMENT",
+      "text": "Everyone who shared a channel with the user receives `:\u003cprefix\u003e QUIT :\u003creason\u003e` once, with `Client quit` as the reason when none was given",
+      "claimed_owners": [
+        "running.go#Disconnect",
+        "leaving.go#init"
+      ],
+      "unowned": false
+    },
+    {
+      "id": "S35",
+      "section": "freeq-lite › Leaving",
+      "type": "REQUIREMENT",
+      "text": "A connection that drops without `QUIT` is treated the same way, with `Connection closed` as the reason",
+      "claimed_owners": [
+        "running.go#main",
+        "running.go#Disconnect"
+      ],
+      "unowned": false
+    },
+    {
+      "id": "S36",
+      "section": "freeq-lite › Leaving",
+      "type": "REQUIREMENT",
+      "text": "After a user leaves, their nick is free again and they are no longer a member of any channel",
+      "claimed_owners": [
+        "running.go#Disconnect"
+      ],
+      "unowned": false
+    },
+    {
+      "id": "S37",
+      "section": "freeq-lite › Everything else",
+      "type": "REQUIREMENT",
+      "text": "After registration, an unknown command is answered with `:freeq-lite 421 \u003cnick\u003e \u003ccommand\u003e :Unknown command`, with the command as the client sent it",
+      "claimed_owners": [
+        "running.go#main",
+        "everything_else.go#init"
+      ],
+      "unowned": false
+    }
+  ],
+  "unowned": 0
+}

@@ -1,0 +1,202 @@
+{
+  "files": [
+    {
+      "path": "running.go",
+      "section": "freeq-lite › Running",
+      "imports": [
+        "net",
+        "sync"
+      ],
+      "decls": [
+        {
+          "kind": "const",
+          "name": "ServerName",
+          "code": "// ServerName is the server's own name. Every reply the server itself sends starts with \":\" + ServerName,\n// except the \"ERROR :Closing link\" line sent when closing a connection.\nconst ServerName = \"freeq-lite\""
+        },
+        {
+          "kind": "const",
+          "name": "MaxLineBytes",
+          "code": "// MaxLineBytes is the longest accepted line, counting the line's content without its CR/LF terminator.\n// A longer line is read to its end and discarded whole: it is never dispatched and never answered.\nconst MaxLineBytes = 512"
+        },
+        {
+          "kind": "const",
+          "name": "ClientQueueSize",
+          "code": "// ClientQueueSize is the capacity of each client's outgoing line queue.\nconst ClientQueueSize = 256"
+        },
+        {
+          "kind": "type",
+          "name": "Channel",
+          "code": "// Channel is one live channel. It exists in Server.Channels only while it has at least one member.\ntype Channel struct {\n\t// Name is the display name, exactly as given by the JOIN that created the channel.\n\tName string\n\t// Members is the set of clients in the channel.\n\tMembers map[*Client]bool\n}"
+        },
+        {
+          "kind": "type",
+          "name": "Client",
+          "code": "// Client is one TCP connection. Every field is read and written only with Server.mu held,\n// except conn and queue, which only the connection's own reader and writer goroutines touch.\ntype Client struct {\n\t// Nick is the nick as the user typed it, or \"\" if no valid NICK has been accepted yet.\n\tNick string\n\t// User is the \u003cuser\u003e parameter of USER, or \"\" if USER has not been accepted yet.\n\tUser string\n\t// Registered becomes true once both NICK and USER have been accepted. It never goes back to false.\n\tRegistered bool\n\t// Channels holds the channels this client is in, keyed by strings.ToLower of the channel name.\n\tChannels map[string]*Channel\n\t// Closed is set by Server.Disconnect. Once set, Send drops lines and the read loop stops.\n\tClosed bool\n\tconn   net.Conn\n\tqueue  chan string\n}"
+        },
+        {
+          "kind": "type",
+          "name": "Server",
+          "code": "// Server holds all shared state. Every field is guarded by mu.\n// Keys are always strings.ToLower of the nick or channel name.\ntype Server struct {\n\tmu sync.Mutex\n\t// Clients maps strings.ToLower(nick) to the client holding that nick. It holds every connection\n\t// that has an accepted nick, registered or not, so nick uniqueness covers both.\n\t// Handlers that look up a user to talk to must also check Registered.\n\tClients map[string]*Client\n\t// Channels maps strings.ToLower(name) to the live channel.\n\tChannels map[string]*Channel\n}"
+        },
+        {
+          "kind": "type",
+          "name": "Message",
+          "code": "// Message is one parsed line. Handlers receive Command upper-cased; Params never include the prefix.\ntype Message struct {\n\tCommand string\n\tParams  []string\n}"
+        },
+        {
+          "kind": "var",
+          "name": "handlers",
+          "code": "// handlers is the command registry, keyed by upper-cased command. Files other than running.go only\n// assign into it from init(); only running.go reads it. A handler is always called with s.mu held\n// and must never block.\nvar handlers = map[string]func(s *Server, c *Client, m Message){}"
+        }
+      ],
+      "stubs": [
+        {
+          "name": "main",
+          "doc": "Parses the -addr flag (default \":6667\"), builds a Server with empty Clients and Channels maps, listens on TCP at that address (log.Fatal on failure) and serves each accepted connection in its own goroutine. Per connection: create a Client with Channels = empty map and queue = make(chan string, ClientQueueSize); start one writer goroutine that writes each queued line to conn and, when the queue is closed, closes conn (on a write error it closes conn and keeps draining the queue so senders never block). The read loop (private helpers named running*) reads lines with a bufio.Reader, ending at LF with an optional preceding CR stripped (CRLF and bare LF both accepted, S2). A line whose content is longer than MaxLineBytes is consumed to its end and ignored (S3). Empty or all-space lines are ignored. Parsing: an optional leading \":prefix\" word is dropped; the next word is the command; remaining words are params split on runs of spaces; a word starting with ':' starts the trailing param, which is the rest of the line with that ':' removed (may be empty or contain spaces). Dispatch, with s.mu held for the whole step: upper-case the command (S4); if !c.Registered and the command is not NICK, USER, PING or QUIT, reply s.Reply(c, \"451\", \":You have not registered\") (S11); else if handlers has no entry, reply s.Reply(c, \"421\", \u003ccommand exactly as the client sent it\u003e+\" :Unknown command\") (S37); else call the handler with m.Command upper-cased. After each dispatch, if c.Closed the loop stops. When reading fails (EOF, reset) and c is not Closed, lock s.mu and call s.Disconnect(c, \"Connection closed\") (S35)."
+        },
+        {
+          "name": "Send",
+          "receiver_name": "c",
+          "receiver_type": "*Client",
+          "params": [
+            {
+              "name": "line",
+              "type": "string"
+            }
+          ],
+          "doc": "Queues line (given without its terminator) to be written followed by \"\\r\\n\". Called with s.mu held and must never block: if c.Closed the line is dropped; otherwise it is put on c.queue with a non-blocking send, and if the queue is full the line is dropped and c.conn is closed so the read loop ends and the client is disconnected with \"Connection closed\". Lines are written in the order they were sent."
+        },
+        {
+          "name": "Reply",
+          "receiver_name": "s",
+          "receiver_type": "*Server",
+          "params": [
+            {
+              "name": "c",
+              "type": "*Client"
+            },
+            {
+              "name": "code",
+              "type": "string"
+            },
+            {
+              "name": "text",
+              "type": "string"
+            }
+          ],
+          "doc": "Sends c the line \":freeq-lite \u003ccode\u003e \u003ctarget\u003e \u003ctext\u003e\" where \u003ctarget\u003e is c.Nick if c.Registered, else \"*\". text is appended verbatim after one space, so callers include any ':' themselves, e.g. s.Reply(c, \"403\", name+\" :No such channel\"). Replies the spec writes with a literal \"*\" even for a registered user (432, 433) are built with c.Send by their handler instead."
+        },
+        {
+          "name": "Prefix",
+          "receiver_name": "c",
+          "receiver_type": "*Client",
+          "results": [
+            "string"
+          ],
+          "doc": "Returns the user's prefix \"\u003cnick\u003e!\u003cuser\u003e@freeq-lite\" built from the current c.Nick and c.User, without a leading ':' (S13)."
+        },
+        {
+          "name": "Peers",
+          "receiver_name": "c",
+          "receiver_type": "*Client",
+          "results": [
+            "[]*Client"
+          ],
+          "doc": "Returns every client other than c that shares at least one channel with c, each exactly once, in no particular order. Called with s.mu held. Used for NICK-change broadcasts (registration.go) and QUIT broadcasts (Disconnect)."
+        },
+        {
+          "name": "RemoveMember",
+          "receiver_name": "s",
+          "receiver_type": "*Server",
+          "params": [
+            {
+              "name": "ch",
+              "type": "*Channel"
+            },
+            {
+              "name": "c",
+              "type": "*Client"
+            }
+          ],
+          "doc": "Removes c from ch.Members and removes ch from c.Channels (key strings.ToLower(ch.Name)); if ch then has no members, deletes it from s.Channels so the server forgets it at once (S25). Sends nothing; callers announce first. Called with s.mu held; used by PART (channels.go) and Disconnect."
+        },
+        {
+          "name": "Disconnect",
+          "receiver_name": "s",
+          "receiver_type": "*Server",
+          "params": [
+            {
+              "name": "c",
+              "type": "*Client"
+            },
+            {
+              "name": "reason",
+              "type": "string"
+            }
+          ],
+          "doc": "Performs the leaving rules, with s.mu held. If c.Closed already, does nothing (idempotent). Otherwise: sends \":\u003cc.Prefix()\u003e QUIT :\u003creason\u003e\" once to each client in c.Peers() (S34); calls s.RemoveMember for every channel in c.Channels so c is in no channel and empty channels are forgotten (S36); deletes s.Clients[strings.ToLower(c.Nick)] if it maps to c so the nick is free again (S36); sets c.Closed and closes c.queue, so the writer flushes any queued lines (such as an ERROR line queued just before) and then closes the connection. It does not send ERROR itself: the QUIT handler does that before calling Disconnect."
+        }
+      ]
+    },
+    {
+      "path": "registration.go",
+      "section": "freeq-lite › Registration",
+      "stubs": [
+        {
+          "name": "init",
+          "doc": "Registers handlers[\"NICK\"] and handlers[\"USER\"]; private helpers are named registration* (e.g. registrationValidNick). NICK \u003cnick\u003e: no param -\u003e s.Reply(c, \"431\", \":No nickname given\"). A nick is valid if 1-16 chars, first an ASCII letter, rest ASCII letters, digits, '_' or '-' (S8); invalid -\u003e c.Send(\":freeq-lite 432 * \u003cnick\u003e :Erroneous nickname\") (S9). If s.Clients[strings.ToLower(nick)] exists and is not c -\u003e c.Send(\":freeq-lite 433 * \u003cnick\u003e :Nickname is already in use\") (S10). Otherwise accept: delete the old key from s.Clients (if c held one), store c under the new lower-cased key, set c.Nick. If c was already Registered and the nick text changed, first build old := c.Prefix(), then after updating send \":\u003cold\u003e NICK \u003cnew\u003e\" to c and to each client in c.Peers(), each once (S12); a registered NICK to the identical nick sends nothing. If c was not registered and now has both Nick and User, complete registration. USER \u003cuser\u003e \u003cmode\u003e \u003cunused\u003e :\u003creal name\u003e: fewer than 4 params -\u003e s.Reply(c, \"461\", \"USER :Not enough parameters\"); already Registered -\u003e s.Reply(c, \"462\", \":You may not reregister\"); else set c.User and, if c.Nick is set, complete registration. Completing registration (either order, S6): set c.Registered = true and send \":freeq-lite 001 \u003cnick\u003e :Welcome to freeq-lite \u003cnick\u003e\" (S7). Prefix format is Client.Prefix in running.go (S13)."
+        }
+      ]
+    },
+    {
+      "path": "keepalive.go",
+      "section": "freeq-lite › Keepalive",
+      "stubs": [
+        {
+          "name": "init",
+          "doc": "Registers handlers[\"PING\"]: with a token (the first param) sends c.Send(\":freeq-lite PONG freeq-lite :\u003ctoken\u003e\"); with no params replies s.Reply(c, \"409\", \":No origin specified\"). Works before and after registration because running.go's read loop exempts PING from the not-registered rule (S14)."
+        }
+      ]
+    },
+    {
+      "path": "channels.go",
+      "section": "freeq-lite › Channels",
+      "stubs": [
+        {
+          "name": "init",
+          "doc": "Registers handlers[\"JOIN\"], handlers[\"PART\"] and handlers[\"NAMES\"]; private helpers are named channels* (e.g. channelsValidName, channelsSendNames). Only the first param is used as the channel name (no comma lists). A missing name -\u003e s.Reply(c, \"461\", \"\u003cCMD\u003e :Not enough parameters\"). Valid name (S15): starts with '#', 2-32 bytes, no space, comma or control character (\u003c 0x20 or 0x7f). Lookup is s.Channels[strings.ToLower(name)] (S16). JOIN: invalid -\u003e s.Reply(c, \"403\", name+\" :No such channel\") (S21); already a member -\u003e send nothing, change nothing (S20); missing -\u003e create \u0026Channel{Name: name as given, Members: {}} and store it (S17, the display name never changes later); add c to ch.Members and c.Channels; send \":\u003cprefix\u003e JOIN \u003cch.Name\u003e\" to every member including c (S18); then send c the names lines. Names lines (shared by JOIN and NAMES, S19/S26): \":freeq-lite 353 \u003cnick\u003e = \u003cch.Name\u003e :\u003cnicks\u003e\" with members' current nicks sorted (sort.Strings) and joined by single spaces, then \":freeq-lite 366 \u003cnick\u003e \u003cch.Name\u003e :End of /NAMES list\". NAMES \u003cname\u003e: existing channel -\u003e both lines; otherwise only \":freeq-lite 366 \u003cnick\u003e \u003cname as given\u003e :End of /NAMES list\". PART \u003cname\u003e [reason]: invalid -\u003e 403; channel missing or c not a member -\u003e s.Reply(c, \"442\", name+\" :You're not on that channel\") (S24); otherwise send \":\u003cprefix\u003e PART \u003cch.Name\u003e\" (or with \" :\u003creason\u003e\" appended when a second param is given, S23) to every member including c (S22), then s.RemoveMember(ch, c), which forgets an empty channel (S25)."
+        }
+      ]
+    },
+    {
+      "path": "messages.go",
+      "section": "freeq-lite › Messages",
+      "stubs": [
+        {
+          "name": "init",
+          "doc": "Registers handlers[\"PRIVMSG\"]; private helpers are named messages*. No params -\u003e s.Reply(c, \"411\", \":No recipient given (PRIVMSG)\"). No second param or an empty one -\u003e s.Reply(c, \"412\", \":No text to send\") (S32). Target starting with '#': look up s.Channels[strings.ToLower(target)]; missing -\u003e s.Reply(c, \"401\", target+\" :No such nick/channel\") (S31); c not a member -\u003e s.Reply(c, \"404\", target+\" :Cannot send to channel\") (S28); else send \":\u003cprefix\u003e PRIVMSG \u003cch.Name\u003e :\u003ctext\u003e\" to every member except c (S27, S30). Otherwise target is a nick: look up s.Clients[strings.ToLower(target)]; missing or not Registered -\u003e 401 (S31); the recipient is c -\u003e accepted, delivered to no one (S30); else send the recipient \":\u003cprefix\u003e PRIVMSG \u003crecipient.Nick\u003e :\u003ctext\u003e\" using the recipient's registered nick (S29)."
+        }
+      ]
+    },
+    {
+      "path": "leaving.go",
+      "section": "freeq-lite › Leaving",
+      "stubs": [
+        {
+          "name": "init",
+          "doc": "Registers handlers[\"QUIT\"]: reason is the first param if present and non-empty, else \"Client quit\"; sends c.Send(\"ERROR :Closing link\") and then calls s.Disconnect(c, reason), which broadcasts QUIT to peers once, empties the client's channels, frees the nick, and closes the connection after the ERROR line is flushed (S33, S34, S36). QUIT is allowed before registration via running.go's exemption. A dropped connection is handled by running.go's read loop calling Disconnect with \"Connection closed\" (S35)."
+        }
+      ]
+    },
+    {
+      "path": "everything_else.go",
+      "section": "freeq-lite › Everything else",
+      "stubs": [
+        {
+          "name": "init",
+          "doc": "Registers nothing and declares no helpers: its body is empty. S37 (unknown command after registration answered with \":freeq-lite 421 \u003cnick\u003e \u003ccommand\u003e :Unknown command\", command as sent) is carried out by running.go's read loop in main when handlers has no entry for the upper-cased command."
+        }
+      ]
+    }
+  ]
+}

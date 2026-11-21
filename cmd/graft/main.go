@@ -60,6 +60,7 @@ func usage(w io.Writer) {
 
 commands:
   draft F     propose draft records from a markdown spec (never applies them)
+  draft --skeleton   propose a skeleton (file shapes) with a model; validated, never applied
   bench       run the bench arms against a case, or report recorded results
   run         spec → accepted records → one generated, gated region per record
   converge    check a synthesized body through gates and tier policy; apply only if satisfied
@@ -74,6 +75,9 @@ drafter (M4), convergence (M5), bench (M6). See SPEC.md.
 
 // draft prints the drafter's proposals for a spec. It writes nothing.
 func draft(args []string, stdout, stderr io.Writer) int {
+	if wantsSkeleton(args) {
+		return draftSkeletonCmd(args, stdout, stderr)
+	}
 	if len(args) != 1 {
 		fmt.Fprintln(stderr, "usage: graft draft <spec.md>")
 		return 2
