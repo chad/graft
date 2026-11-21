@@ -284,6 +284,9 @@ func structure(a answer, drafts []drafter.Draft, stmts []Statement, fileFor func
 				bad = append(bad, fmt.Sprintf("%s: decl %q has kind %q; drafted decls are type, const or var only, and a function or method is a stub (bodies are never drafted)", f.Path, d.Name, d.Kind))
 			}
 		}
+		if len(f.Stubs) == 0 {
+			bad = append(bad, fmt.Sprintf("%s: a file needs at least one stub: the stub is the section's own generated, gated region (a file of decls only has none)", f.Path))
+		}
 		for _, s := range f.Stubs {
 			if strings.TrimSpace(s.Doc) == "" {
 				bad = append(bad, fmt.Sprintf("%s: stub %s has no doc contract", f.Path, s.Name))

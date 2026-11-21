@@ -157,6 +157,7 @@ func TestStructuralRejections(t *testing.T) {
 		"section no file": fileOne,
 		"stub no doc":     strings.Replace(fileTwo, `"doc":"answers PING"`, `"doc":""`, 1) + "," + fileOne,
 		"duplicate path":  fileOne + "," + fileOne + "," + fileTwo,
+		"no stub":         `{"path":"one.go","section":"app › One","decls":[{"kind":"type","name":"S","code":"type S struct{}"}]},` + fileTwo,
 		"wrong path":      strings.Replace(fileOne, "one.go", "unknown.go", 1) + "," + fileTwo,
 		"two files":       fileOne + "," + strings.Replace(fileOne, "one.go", "extra.go", 1) + "," + fileTwo,
 	} {
