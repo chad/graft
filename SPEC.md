@@ -95,6 +95,15 @@ happens only in a convergence-layer region, owned and marked like any other.**
 | 2 | refused before checking began (usage, config, record, tier, pin, path, hand edit, sedum overlap, marker in body) |
 | 3 | failed after checking began (a gate could not start, cancelled, tree or record changed); evidence so far is kept |
 
+### `graft signoff` exit codes
+
+| code | meaning |
+|---|---|
+| 0 | sign-off recorded |
+| 1 | declined at the prompt; nothing written |
+| 2 | refused before writing (usage, config, record, path, no region, hand edit, region behind the record, no confirmation) |
+| 3 | failed after the prompt: the record, skeleton or region changed, or the log could not be written |
+
 ## 7. Evidence
 
 - One evidence format for all layers.
@@ -127,6 +136,18 @@ happens only in a convergence-layer region, owned and marked like any other.**
   unkeyed). Tamper-evidence requires anchoring the head outside the log
   (a signed head, or the head committed to the record store); that is an open
   question (§12), and graft MUST NOT describe the log as tamper-proof until then.
+- **Human sign-off** (`graft signoff`, M12) records `human_signoff` evidence
+  through the same append-only log. It shows the human the region body and what
+  it pins, then pins the record's `gen_hash` and version, the region's body hash
+  (the bytes on disk, never a caller-supplied value), the spec hash and, with
+  `--render`, the skeleton hash (`pipeline.SkeletonHashOf`, the function
+  `graft run --render` pins with), so it goes stale on the same moves as any
+  evidence. It refuses a missing or hand-edited region, a region written for a
+  `gen_hash` other than the record's current one, and a record, skeleton or
+  region that changed while the human was being asked. It does not stand in for
+  the gates: a tier still needs its executable kinds from a run. **`--by` is
+  caller-supplied and NOT authenticated**; the entry says who typed a name, not
+  who they are (a signature over the entry is open, §12).
 - The evidence log requires a unix platform (flock).
 - An unknown risk tier is an error, never "requires nothing".
 
@@ -170,6 +191,7 @@ Two directions, one rule:
 | M5 | Convergence: synthesis regions + execution gate + risk-tiered evals | chad-bot-phoenix |
 | M6 | Bench: three arms, Wilson intervals, per-layer attribution | both |
 | M11a | The skeleton as record content: shape in the owning imprint (provenance `gen_hash`), skeleton hash in evidence, re-verify on `skeleton_hash` | livecodelife's agent |
+| M12 | `graft signoff`: a human sign-off as evidence, pinned to gen_hash, body, spec and skeleton hash | livecodelife's agent |
 
 ## 12. Open questions
 
@@ -195,5 +217,7 @@ Two directions, one rule:
   freeq-lite's dead-function gate catches the form seen in the probe (a helper
   written for another file to call, never called), but a rule dropped with no
   code at all still passes every gate.
+- Authenticating `graft signoff --by` (a signature over the entry, for example
+  by a freeq DID key, as an optional field that leaves the pin unchanged).
 - Anchoring the evidence head outside the log (signed by the owner's DID, or
   committed alongside the records) to make deliberate rollback detectable.

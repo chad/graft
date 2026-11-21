@@ -15,6 +15,7 @@ import (
 	"github.com/chad/graft/internal/drafter"
 	"github.com/chad/graft/internal/evidence"
 	"github.com/chad/graft/internal/recording"
+	"github.com/chad/graft/internal/records"
 	"github.com/chad/graft/internal/render"
 )
 
@@ -391,4 +392,40 @@ func TestSedumEnvFailedCopyLeavesNoPartial(t *testing.T) {
 		t.Fatal(err)
 	}
 	cleanup()
+}
+
+// graft signoff pins the skeleton with SkeletonHashOf. It must be the hash
+// Run pinned into its own evidence, or a sign-off would never be fresh next to it.
+func TestSkeletonHashOfMatchesWhatRunPins(t *testing.T) {
+	cfg, _, spec := renderSetup(t, "skeleton.json", "spec/freeq-lite.md")
+	acc := accept(t, cfg, spec)
+	if _, err := Run(context.Background(), cfg, acc); err != nil {
+		t.Fatal(err)
+	}
+	store, err := records.OpenDir(cfg.Repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx, err := LoadIndex(cfg.Repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for id := range idx.Records {
+		ids = append(ids, id)
+	}
+	want, err := SkeletonHashOf(store, SkeletonGenerator(cfg.Skeleton, cfg.lang()), ids)
+	if err != nil || want == "" {
+		t.Fatalf("%q %v", want, err)
+	}
+	n := 0
+	for _, e := range cfg.Log.All() {
+		n++
+		if e.Pin.SkeletonHash != want {
+			t.Fatalf("run pinned %q, SkeletonHashOf says %q", e.Pin.SkeletonHash, want)
+		}
+	}
+	if n == 0 {
+		t.Fatal("run wrote no evidence")
+	}
 }

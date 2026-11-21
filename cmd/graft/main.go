@@ -43,6 +43,8 @@ func run2(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return benchCmd(args[1:], stdout, stderr)
 	case "converge":
 		return convergeCmd(args[1:], stdin, stdout, stderr)
+	case "signoff":
+		return signoffCmd(args[1:], stdin, stdout, stderr)
 	case "help", "-h", "--help":
 		usage(stdout)
 		return 0
@@ -61,6 +63,7 @@ commands:
   bench       run the bench arms against a case, or report recorded results
   run         spec → accepted records → one generated, gated region per record
   converge    check a synthesized body through gates and tier policy; apply only if satisfied
+  signoff     record a human sign-off (evidence) pinned to a region; --by is not authenticated
   version   print graft's version
   help      show this help
 

@@ -128,14 +128,7 @@ func runCmd(args []string, stdout, stderr io.Writer) int {
 	var sedum render.Sedum
 	var gens string
 	if *renderOn {
-		sp := *skelPath
-		if sp == "" {
-			sp = cfg.Skeleton
-			if sp == "" {
-				sp = "skeleton.json"
-			}
-			sp = filepath.Join(filepath.Dir(*cfgPath), sp)
-		}
+		sp := skeletonFile(cfg.Skeleton, *cfgPath, *skelPath)
 		sb, err := os.ReadFile(sp)
 		if err != nil {
 			fmt.Fprintf(stderr, "graft: skeleton: %v\n", err)
@@ -204,4 +197,17 @@ func runCmd(args []string, stdout, stderr io.Writer) int {
 		return 3
 	}
 	return 0
+}
+
+// skeletonFile resolves the skeleton JSON for --render: the flag, else the
+// config's "skeleton", else skeleton.json, the last two relative to the config.
+// graft run and graft signoff share it.
+func skeletonFile(cfgSkeleton, cfgPath, flagValue string) string {
+	if flagValue != "" {
+		return flagValue
+	}
+	if cfgSkeleton == "" {
+		cfgSkeleton = "skeleton.json"
+	}
+	return filepath.Join(filepath.Dir(cfgPath), cfgSkeleton)
 }

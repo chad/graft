@@ -13,6 +13,7 @@ import (
 
 	"github.com/chad/graft/internal/contract"
 	"github.com/chad/graft/internal/converge"
+	"github.com/chad/graft/internal/lang"
 	"github.com/chad/graft/internal/recording"
 	"github.com/chad/graft/internal/records"
 	"github.com/chad/graft/internal/render"
@@ -78,11 +79,7 @@ func (cfg Config) renderTree(ctx context.Context, store records.Store, acc []Acc
 		return nilRet(err)
 	}
 	setRecs()
-	gen := cfg.Skeleton.Generator
-	if gen == "" {
-		gen = cfg.lang().Name
-	}
-	skelHash, err := records.SkeletonHash(gen, pins)
+	skelHash, err := records.SkeletonHash(SkeletonGenerator(cfg.Skeleton, cfg.lang()), pins)
 	if err != nil {
 		return nilRet(err)
 	}
@@ -222,6 +219,32 @@ func (cfg Config) renderPrompt(a Accepted, r recording.Region, feedback string) 
 	stem := strings.TrimSuffix(filepath.Base(r.Path), filepath.Ext(r.Path))
 	fmt.Fprintf(&b, "\nAnswer with the complete contents of `%s` in a single ```%s block, %s, then the imports you need, the helpers above with their bodies, and any private helpers (named with the prefix `%s`). Do not write the skeleton's types or stubs, and do not include any line containing \"graft:synth\" or \"sedum:\".\n", r.Path, cfg.lang().Fence, cfg.lang().Preamble, strings.TrimSuffix(stem, r.SynthSuffix))
 	return b.String(), nil
+}
+
+// SkeletonGenerator is the generator name the skeleton hash covers: the
+// skeleton's own, else the language profile's name. `graft run --render` and
+// `graft signoff --render` both take it from here.
+func SkeletonGenerator(sk *recording.Skeleton, profile lang.Profile) string {
+	if sk != nil && sk.Generator != "" {
+		return sk.Generator
+	}
+	return profile.Name
+}
+
+// SkeletonHashOf is the skeleton hash `graft run --render` pins into every
+// evidence entry, computed from the current pins of the given records (their
+// shapes), exactly as renderTree does. `graft signoff` calls it so a sign-off
+// is pinned by the same code as every other evidence.
+func SkeletonHashOf(store records.Store, generator string, ids []string) (string, error) {
+	pins := make([]records.Pin, len(ids))
+	for i, id := range ids {
+		p, err := store.Current(id)
+		if err != nil {
+			return "", err
+		}
+		pins[i] = p
+	}
+	return records.SkeletonHash(generator, pins)
 }
 
 // currentPins reads the current pin of every accepted record, in order.

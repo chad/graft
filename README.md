@@ -32,6 +32,25 @@ longer passes the gates) regenerate.
 
 **Existing repos.** In a repo whose packages live in directories, place a section's region with `"files": {"<section>": "pkg/file.go"}` in `graft.json`. A key is the section's full title, including the top heading, or its last part alone when that is unambiguous. A new section never takes over an existing file, and once accepted its file is fixed. See [docs/real-repo-trial.md](docs/real-repo-trial.md) for a trial in a real Go service, and for what a user still has to supply: placement, a wiring hook and an acceptance test.
 
+**Signing off.** A tier that requires `human_signoff` is satisfied only by
+evidence a person records, with `graft signoff`:
+
+```sh
+graft signoff --config graft.json --records DIR --log FILE \
+  --record ID --path FILE --by "your name" [--note TEXT] [--render]
+```
+
+It shows the region's body and everything it will pin, then asks (a prompt on
+a terminal; `--yes` without one). The sign-off pins the record's `gen_hash`
+and version, the region's body hash, the spec hash and, with `--render`, the
+skeleton hash, and is appended to the same hash-chained evidence log as every
+other evidence, so it goes stale the moment any of those moves: edit the
+record, the spec, the body or the skeleton and the tier is unsatisfied again
+until you sign off again. It refuses a hand-edited or missing region and a
+region written for an older `gen_hash`. It does not run or skip the gates: the
+tier still needs its executable evidence. **`--by` is whatever you type; graft
+does not authenticate it**, and the log is not tamper-proof (SPEC §7).
+
 Examples: [`examples/freeq-lite`](examples/freeq-lite) (Go: spec, smoke suite,
 held-out oracle, bench), [`examples/freeq-lite-py`](examples/freeq-lite-py)
 (Python), [`examples/freeq-lite-ts`](examples/freeq-lite-ts) (TypeScript,
