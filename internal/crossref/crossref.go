@@ -64,6 +64,9 @@ type Rec struct {
 	// for the record.
 	Render  bool
 	Symbols []string
+	// Idents, outside render mode, are the top-level identifiers found in the
+	// record's file under --root (see Idents). A hint only; it is not checked.
+	Idents []string
 }
 
 // Target is one record a statement constrains, with the receipt for the claim.
@@ -302,18 +305,21 @@ type Input struct {
 	Code        map[string]string // optional: file -> current source (--with-code)
 	Root        string            // optional: the code tree, for location checks
 	Retries     int               // times an unparseable answer goes back to the model
-	Strict      bool              // an invalid answer is a retry too, not only an unparseable one
+	Strict      bool              // after the retries, an invalid proposal is an error (nothing written), not exit 4
 }
 
-// ErrNoProposal: no parseable answer within the retries.
+// ErrNoProposal: no valid proposal within the retries.
 var ErrNoProposal = errors.New("crossref: no valid proposal")
 
-// Propose asks the model once per attempt and returns the validated proposal and
-// the number of model calls made. Only an unparseable answer (or, with Strict,
-// an invalid one) is retried; a proposal with UNANSWERED or DANGLING entries is
-// returned as it is so a human sees exactly what was wrong.
+// Propose asks the model and returns the validated proposal and the number of
+// model calls made. An unparseable answer, and an answer with UNANSWERED or
+// DANGLING entries (form errors a model can fix), go back to the model with the
+// exact messages ("Feedback on your previous attempt"), within in.Retries. When
+// the retries are spent, the last proposal is returned as it is so a human sees
+// exactly what was wrong (exit 4); with Strict it is an error instead.
 func Propose(ctx context.Context, m model.Model, in Input) (Proposal, int, error) {
-	prompt := Prompt(in)
+	base := Prompt(in)
+	prompt := base
 	calls := 0
 	var last Proposal
 	for attempt := 0; attempt <= in.Retries; attempt++ {
@@ -324,12 +330,12 @@ func Propose(ctx context.Context, m model.Model, in Input) (Proposal, int, error
 		}
 		answers, perr := Parse(resp, in.Stmts)
 		if perr != nil {
-			prompt = Prompt(in) + "\n## Your previous answer was refused\n\n" + perr.Error() + "\n\nAnswer again with one JSON object in a single ```json block.\n"
+			prompt = base + "\n## Feedback on your previous attempt\n\nYour answer was refused: " + perr.Error() + "\n\nAnswer again with one JSON object in a single ```json block.\n"
 			continue
 		}
 		checked, ok := Validate(in.Stmts, in.Recs, answers, in.Root)
 		last = Proposal{Schema: SchemaVersion, Answers: checked}
-		if ok || !in.Strict {
+		if ok {
 			return last, calls, nil
 		}
 		var bad []string
@@ -338,9 +344,9 @@ func Propose(ctx context.Context, m model.Model, in Input) (Proposal, int, error
 				bad = append(bad, fmt.Sprintf("- %q: %s: %s", a.Text, a.Status, a.Detail))
 			}
 		}
-		prompt = Prompt(in) + "\n## Your previous answer was refused\n\n" + strings.Join(bad, "\n") + "\n\nAnswer again with one JSON object in a single ```json block.\n"
+		prompt = base + "\n## Feedback on your previous attempt\n\nThese entries were refused; fix exactly these and answer for every statement again:\n\n" + strings.Join(bad, "\n") + "\n\nAnswer again with one JSON object in a single ```json block.\n"
 	}
-	if len(last.Answers) > 0 {
+	if len(last.Answers) > 0 && !in.Strict {
 		return last, calls, nil
 	}
 	return Proposal{}, calls, fmt.Errorf("%w within %d attempts", ErrNoProposal, in.Retries+1)
@@ -446,13 +452,17 @@ func Prompt(in Input) string {
 		if r.Render {
 			fmt.Fprintf(&b, "stubs and decls of its skeleton file (a location must name one of these): %s\n", strings.Join(r.Symbols, ", "))
 		}
+		if !r.Render && len(r.Idents) > 0 {
+			fmt.Fprintf(&b, "top-level identifiers in its file (a location names one of these): %s\n", strings.Join(r.Idents, ", "))
+		}
 		if src, ok := in.Code[r.File]; ok && r.File != "" {
 			fmt.Fprintf(&b, "current code of %s:\n```\n%s\n```\n", r.File, strings.TrimRight(src, "\n"))
 		}
 		b.WriteString("\n")
 	}
 	b.WriteString("## Answer\n\nAnswer with ONE JSON object in a single ```json block, exactly this shape, one entry per statement id:\n\n")
-	b.WriteString("```json\n{\"statements\": [\n  {\"id\": \"s1\", \"verdict\": \"local\"},\n  {\"id\": \"s2\", \"verdict\": \"constrains\", \"targets\": [\n    {\"record\": \"<record id, or the section heading for a new section>\",\n     \"reason\": \"why this statement binds that record's behaviour\",\n     \"location\": \"<that record's file>: <function or stub that must change>\",\n     \"quote\": \"<a phrase copied verbatim from that record's intent or constraints>\"}]}\n]}\n```\n")
+	b.WriteString("```json\n{\"statements\": [\n  {\"id\": \"s1\", \"verdict\": \"local\"},\n  {\"id\": \"s2\", \"verdict\": \"constrains\", \"targets\": [\n    {\"record\": \"<record id, or the section heading for a new section>\",\n     \"reason\": \"why this statement binds that record's behaviour\",\n     \"location\": \"<that record's file>: <one identifier>\",\n     \"quote\": \"<a phrase copied verbatim from that record's intent or constraints>\"}]}\n]}\n```\n\n")
+	b.WriteString("The location is EXACTLY `<file>: <Identifier>`: the record's file, a colon, then ONE bare identifier (for example `running.go: Post`). Never a sentence, never several names, never backticks or a signature; put the explanation in \"reason\". It is checked mechanically and an entry that does not match is refused. A statement may name several targets: give one entry in \"targets\" per record, each with its own file and identifier (for example one for Deposits and one for Transfers).\n")
 	return b.String()
 }
 
@@ -519,6 +529,24 @@ func Warn(stmts []Stmt, answers []Answer, recs []Rec) []string {
 			if len(where) > 0 {
 				out = append(out, fmt.Sprintf("advisory: %q (%s) was judged local but names %s, which %s also mentions", st.Text, st.Section, t, strings.Join(where, ", ")))
 			}
+		}
+	}
+	return out
+}
+
+var reTop = regexp.MustCompile(`(?m)^(?:func\s+(?:\([^)]*\)\s*)?|type\s+|var\s+|const\s+)([A-Za-z_][A-Za-z0-9_]*)`)
+
+// Idents lists the top-level function, method, type, var and const names of a
+// Go source text, by line pattern (graft does not parse target code here), in
+// order and without duplicates. It is a hint for the prompt; Validate never
+// relies on it.
+func Idents(src string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, m := range reTop.FindAllStringSubmatch(src, -1) {
+		if !seen[m[1]] {
+			seen[m[1]] = true
+			out = append(out, m[1])
 		}
 	}
 	return out

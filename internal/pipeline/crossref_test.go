@@ -576,3 +576,64 @@ func TestCrossrefQuoteMustBeTheTargetsOwnText(t *testing.T) {
 		t.Fatalf("%v", err)
 	}
 }
+
+// proseFirst answers with prose location identifiers for its first `bad` calls
+// (what a real model did in the pilot), then delegates to a correct fake.
+type proseFirst struct {
+	inner      *fakeXref
+	bad, calls int
+	prompts    []string
+}
+
+func (p *proseFirst) Complete(ctx context.Context, prompt string) (string, error) {
+	p.calls++
+	p.prompts = append(p.prompts, prompt)
+	r, err := p.inner.Complete(ctx, prompt)
+	if p.calls <= p.bad {
+		r = regexp.MustCompile(`"location":"[^"]*"`).ReplaceAllString(r, `"location":"the Count function and the Beta type"`)
+	}
+	return r, err
+}
+
+func TestCrossrefProseLocationIsRetriedThenAcceptSucceeds(t *testing.T) {
+	repo := t.TempDir()
+	xAccept(t, repo, xSpec1, nil)
+	m := &proseFirst{inner: &fakeXref{rule: xRule, target: "Beta", byID: true}, bad: 1}
+	prop, _, _, calls, err := Crossref(context.Background(), CrossrefInput{Repo: repo, Drafts: drafter.Drafts(xSpec2), Model: m, Retries: 2})
+	if err != nil || calls != 2 || m.calls != 2 {
+		t.Fatalf("calls=%d/%d err=%v", calls, m.calls, err)
+	}
+	if !strings.Contains(m.prompts[1], "Feedback on your previous attempt") || !strings.Contains(m.prompts[1], "not of the form") {
+		t.Fatal("the second prompt does not carry the validation message")
+	}
+	for _, a := range prop.Answers {
+		if a.Status != crossref.OK {
+			t.Fatalf("%+v", a)
+		}
+	}
+	if _, err := xAccept(t, repo, xSpec2, &CrossrefOptions{Proposal: &prop, Report: &CrossrefReport{}}); err != nil {
+		t.Fatalf("accept refused a retried proposal: %v", err)
+	}
+}
+
+func TestCrossrefNeverFixedWritesDanglingAndAcceptRefuses(t *testing.T) {
+	repo := t.TempDir()
+	xAccept(t, repo, xSpec1, nil)
+	m := &proseFirst{inner: &fakeXref{rule: xRule, target: "Beta", byID: true}, bad: 99}
+	prop, _, _, calls, err := Crossref(context.Background(), CrossrefInput{Repo: repo, Drafts: drafter.Drafts(xSpec2), Model: m, Retries: 2})
+	if err != nil || calls != 3 {
+		t.Fatalf("calls=%d err=%v", calls, err)
+	}
+	dangling := 0
+	for _, a := range prop.Answers {
+		if a.Status == crossref.Dangling {
+			dangling++
+		}
+	}
+	if dangling != 1 {
+		t.Fatalf("want one DANGLING entry: %+v", prop.Answers)
+	}
+	if _, err := xAccept(t, repo, xSpec2, &CrossrefOptions{Proposal: &prop, Report: &CrossrefReport{}}); err == nil {
+		t.Fatal("accept took a proposal with a DANGLING entry")
+	}
+}

@@ -2,6 +2,7 @@ package crossref
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -127,30 +128,84 @@ func (s *script) Complete(_ context.Context, p string) (string, error) {
 	return a, nil
 }
 
-func TestProposeRetriesOnlyUnparseable(t *testing.T) {
+const (
+	proseAnswer = "{\"statements\":[{\"id\":\"s1\",\"verdict\":\"constrains\",\"targets\":[{\"record\":\"rec-dep\",\"reason\":\"r\",\"location\":\"the deposit handler for POST\",\"quote\":\"A deposit adds to the balance\"}]}]}"
+	goodAnswer  = "{\"statements\":[{\"id\":\"s1\",\"verdict\":\"constrains\",\"targets\":[{\"record\":\"rec-dep\",\"reason\":\"r\",\"location\":\"deposits.go: Deposit\",\"quote\":\"A deposit adds to the balance\"}]}]}"
+)
+
+func TestProposeRetriesUnparseable(t *testing.T) {
 	m := &script{answers: []string{"nonsense", "{\"statements\":[{\"id\":\"s1\",\"verdict\":\"local\"}]}"}}
 	p, calls, err := Propose(context.Background(), m, Input{Stmts: stmts, Recs: recs, Retries: 2})
 	if err != nil || calls != 2 || p.Answers[0].Status != OK {
 		t.Fatalf("%v calls=%d err=%v", p, calls, err)
 	}
-	if !strings.Contains(m.prompts[1], "refused") {
+	if !strings.Contains(m.prompts[1], "Feedback on your previous attempt") {
 		t.Fatal("the retry prompt does not say why")
-	}
-	// an invalid but parseable answer is returned for a human, not retried
-	m = &script{answers: []string{"{\"statements\":[]}"}}
-	p, calls, err = Propose(context.Background(), m, Input{Stmts: stmts, Recs: recs, Retries: 2})
-	if err != nil || calls != 1 || p.Answers[0].Status != Unanswered {
-		t.Fatalf("%v calls=%d err=%v", p, calls, err)
-	}
-	// ... unless strict
-	m = &script{answers: []string{"{\"statements\":[]}"}}
-	_, calls, err = Propose(context.Background(), m, Input{Stmts: stmts, Recs: recs, Retries: 1, Strict: true})
-	if calls != 2 || err != nil {
-		t.Fatalf("strict calls=%d err=%v", calls, err)
 	}
 	m = &script{answers: []string{"nonsense"}}
 	if _, _, err := Propose(context.Background(), m, Input{Stmts: stmts, Recs: recs, Retries: 1}); err == nil {
 		t.Fatal("no parseable answer must be an error")
+	}
+}
+
+// Prose location first, a bare identifier second: two calls, the second prompt
+// carries the exact validation message, the proposal is valid.
+func TestProposeRetriesFormErrors(t *testing.T) {
+	m := &script{answers: []string{proseAnswer, goodAnswer}}
+	p, calls, err := Propose(context.Background(), m, Input{Stmts: stmts, Recs: recs, Retries: 2})
+	if err != nil || calls != 2 || p.Answers[0].Status != OK {
+		t.Fatalf("%v calls=%d err=%v", p, calls, err)
+	}
+	if !strings.Contains(m.prompts[1], "Feedback on your previous attempt") || !strings.Contains(m.prompts[1], `is not of the form "file: Identifier"`) {
+		t.Fatalf("feedback missing the validation message:\n%s", m.prompts[1])
+	}
+	// UNANSWERED is fed back too
+	m = &script{answers: []string{"{\"statements\":[]}", "{\"statements\":[{\"id\":\"s1\",\"verdict\":\"local\"}]}"}}
+	p, calls, err = Propose(context.Background(), m, Input{Stmts: stmts, Recs: recs, Retries: 2})
+	if err != nil || calls != 2 || p.Answers[0].Status != OK || !strings.Contains(m.prompts[1], Unanswered) {
+		t.Fatalf("%v calls=%d err=%v", p, calls, err)
+	}
+}
+
+// A model that never fixes it: retries+1 calls, then the invalid proposal as
+// before (a human sees it); with Strict, an error and nothing written.
+func TestProposeNeverFixed(t *testing.T) {
+	m := &script{answers: []string{proseAnswer}}
+	p, calls, err := Propose(context.Background(), m, Input{Stmts: stmts, Recs: recs, Retries: 2})
+	if err != nil || calls != 3 || p.Answers[0].Status != Dangling {
+		t.Fatalf("%v calls=%d err=%v", p, calls, err)
+	}
+	m = &script{answers: []string{proseAnswer}}
+	_, calls, err = Propose(context.Background(), m, Input{Stmts: stmts, Recs: recs, Retries: 1, Strict: true})
+	if calls != 2 || !errors.Is(err, ErrNoProposal) {
+		t.Fatalf("strict calls=%d err=%v", calls, err)
+	}
+	m = &script{answers: []string{proseAnswer}}
+	_, calls, _ = Propose(context.Background(), m, Input{Stmts: stmts, Recs: recs, Retries: 0})
+	if calls != 1 {
+		t.Fatalf("retries 0: calls=%d", calls)
+	}
+}
+
+func TestPromptStatesLocationForm(t *testing.T) {
+	rs := []Rec{recs[0], recs[1]}
+	rs[1].Idents = []string{"Deposit", "Ledger"}
+	p := Prompt(Input{Stmts: stmts, Recs: rs})
+	for _, w := range []string{"EXACTLY `<file>: <Identifier>`", "running.go: Post", "Deposits and one for Transfers", "top-level identifiers in its file (a location names one of these): Deposit, Ledger"} {
+		if !strings.Contains(p, w) {
+			t.Errorf("prompt lacks %q", w)
+		}
+	}
+	rs[1].Render, rs[1].Symbols = true, []string{"Deposit"}
+	if p := Prompt(Input{Stmts: stmts, Recs: rs}); strings.Contains(p, "top-level identifiers") || !strings.Contains(p, "skeleton file (a location must name one of these): Deposit") {
+		t.Error("render mode lists the skeleton's symbols, not scanned identifiers")
+	}
+}
+
+func TestIdents(t *testing.T) {
+	got := strings.Join(Idents("package x\n\nfunc Post() {}\nfunc (l *Ledger) Run() {}\ntype Entry struct{}\nvar x = 1\n  func nested() {}\nfunc Post() {}\n"), ",")
+	if got != "Post,Run,Entry,x" {
+		t.Fatal(got)
 	}
 }
 

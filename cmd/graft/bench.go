@@ -42,7 +42,7 @@ type caseFile struct {
 }
 
 const benchUsage = `usage:
-  graft bench run    --case CASE.json --arms graft,baseline,intent --resolution smoke|coarse|fine [--evolve] [--results DIR]
+  graft bench run    --case CASE.json --arms graft,baseline,intent --resolution smoke|coarse|fine [--evolve] [--model "ARGV"] [--results DIR]
   graft bench report --case NAME [--results DIR]
 
 run draws the resolution's sample count for each arm (smoke 2, coarse 5,
@@ -51,6 +51,11 @@ per arm. With --evolve, each sample builds the spec, changes it to the case's
 evolve spec in the same tree, and is scored by the evolved oracle; results go
 to <case>-evolve and record the model calls the change cost. report prints
 intervals and the only permitted comparisons.
+
+--model "ARGV" runs the samples with that model command (split on spaces, e.g.
+--model "claude -p --model haiku") instead of the config's, so a run can use
+another model without editing files. It is recorded in each record's model
+field, so it is a different model cell in the report.
 `
 
 func benchCmd(args []string, stdout, stderr io.Writer) int {
@@ -104,6 +109,7 @@ func benchRun(args []string, stdout, stderr io.Writer) int {
 	dir := fs.String("results", "bench/results", "results directory")
 	transcripts := fs.String("transcripts", "", "keep every prompt and answer under this directory")
 	evolve := fs.Bool("evolve", false, "run the case's change-then-regenerate variant")
+	modelFlag := fs.String("model", "", "model command (argv split on spaces) instead of the config's; recorded as the model")
 	if err := fs.Parse(args); err != nil || *casePath == "" {
 		fmt.Fprint(stderr, benchUsage)
 		return 2
@@ -146,6 +152,9 @@ func benchRun(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	cfg, gates, err := loadConvergeConfig(filepath.Join(base, cf.Config))
+	if err == nil && strings.TrimSpace(*modelFlag) != "" {
+		cfg.Model = overrideModel(cfg.Model, *modelFlag)
+	}
 	if err != nil || cfg.Model == nil {
 		fmt.Fprintf(stderr, "graft: config: %v (needs model)\n", err)
 		return 2
@@ -279,11 +288,7 @@ func benchRun(args []string, stdout, stderr io.Writer) int {
 		fixtureParts = append(fixtureParts, langSrc)
 	}
 	commit, dirty := gitState()
-	modelName := strings.Join(cfg.Model.Argv, " ")
-	// An alias like "sonnet" is not a model; record the CLI's version with it.
-	if v, err := exec.Command(cfg.Model.Argv[0], "--version").Output(); err == nil {
-		modelName += " [" + strings.TrimSpace(strings.SplitN(string(v), "\n", 2)[0]) + "]"
-	}
+	modelName := benchModelName(cfg.Model.Argv)
 
 	hc := harness.Config{
 		Case: harness.Case{Name: name, Spec: spec, Intent: cf.Intent, Contract: cf.Contract, Conventions: conv,
@@ -373,4 +378,29 @@ func gitState() (commit string, dirty bool) {
 	}
 	st, err := exec.Command("git", "status", "--porcelain").Output()
 	return strings.TrimSpace(string(out)), err != nil || len(strings.TrimSpace(string(st))) > 0
+}
+
+type modelCfg = struct {
+	Argv       []string `json:"argv"`
+	TimeoutSec int      `json:"timeout_sec"`
+}
+
+// overrideModel is the config's model with its argv replaced by the --model
+// flag (split on spaces); the config's timeout is kept.
+func overrideModel(cur *modelCfg, flagVal string) *modelCfg {
+	out := &modelCfg{Argv: strings.Fields(flagVal)}
+	if cur != nil {
+		out.TimeoutSec = cur.TimeoutSec
+	}
+	return out
+}
+
+// benchModelName is what a bench record's model field says: the argv, with the
+// CLI's version (an alias like "sonnet" is not a model).
+func benchModelName(argv []string) string {
+	name := strings.Join(argv, " ")
+	if v, err := exec.Command(argv[0], "--version").Output(); err == nil {
+		name += " [" + strings.TrimSpace(strings.SplitN(string(v), "\n", 2)[0]) + "]"
+	}
+	return name
 }

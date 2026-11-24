@@ -56,7 +56,8 @@ exit codes:
   2  usage or config error, drafts needing a human decision, or --out exists (use --force)
   3  the model command or I/O failed
   4  proposal written, but some statements are UNANSWERED or carry a DANGLING claim
-     (--strict makes that a retry instead)
+     (only after the retries: an invalid answer is fed back to the model first;
+     --strict makes that exit 1, nothing written)
 Advisory warnings (a "local" statement that names something another record uses)
 are printed but never change the exit code.
 `
@@ -74,7 +75,7 @@ func crossrefCmd(args []string, stdout, stderr io.Writer) int {
 	skelPath := fs.String("skeleton", "", "render mode: the skeleton JSON (as for graft run --render); a location must name a stub or decl of the target's file in it")
 	withCode := fs.Bool("with-code", false, "show each record's current file to the model (needs --root)")
 	retries := fs.Int("retries", 2, "times an unparseable answer goes back to the model (max 5)")
-	strict := fs.Bool("strict", false, "an invalid answer is a retry, not just flagged")
+	strict := fs.Bool("strict", false, "after the retries, an invalid proposal is exit 1 (nothing written), not exit 4")
 	force := fs.Bool("force", false, "overwrite --out")
 	if err := fs.Parse(args); err != nil {
 		return 2
