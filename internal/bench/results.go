@@ -110,7 +110,10 @@ type Sample struct {
 	// arm how many pre-change files were left byte-identical. Recorded and
 	// shown; never aggregated into a rate.
 	ChangeCalls *int `json:"change_calls,omitempty"`
-	Preserved   *int `json:"preserved,omitempty"`
+	// CrossrefCalls is the part of ChangeCalls the cross-reference step took
+	// (graft and graft-render evolve arms; SPEC §12).
+	CrossrefCalls *int `json:"crossref_calls,omitempty"`
+	Preserved     *int `json:"preserved,omitempty"`
 	// DiffLines is the size of the change, measured identically for every
 	// arm: lines added plus removed across the tree's .go files.
 	DiffLines *int `json:"diff_lines,omitempty"`
