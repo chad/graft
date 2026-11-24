@@ -451,3 +451,20 @@ func TestToolsAreNamedInTheReport(t *testing.T) {
 		t.Fatalf("tools must not split the comparison cell:\n%s", b.String())
 	}
 }
+
+func TestReportShowsStepOneScore(t *testing.T) {
+	r := rec(ArmGraftRender, "c1", Coarse, five(Works)...)
+	one, k, n := 1, 38, 38
+	r.Samples[0].ChangeCalls = &one
+	r.Samples[0].PreChecks, r.Samples[0].PrePassed = &n, &k
+	r.Samples[1].ChangeCalls = &one
+	f := 36
+	r.Samples[1].PreChecks, r.Samples[1].PrePassed, r.Samples[1].PreReason = &n, &f, "failed: quit_sends_error_and_closes"
+	var b bytes.Buffer
+	if err := Report(&b, "todo", []Record{r}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(b.String(), "step-1 tree scored by the unevolved oracle, before the change [38/38 36/38 (failed: quit_sends_error_and_closes)]") {
+		t.Fatal(b.String())
+	}
+}

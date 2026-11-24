@@ -113,8 +113,15 @@ func changeCosts(recs []Record, excluded map[int]string) []string {
 		if _, ex := excluded[i]; ex {
 			continue
 		}
-		var calls, kept, bytes, synth []string
+		var calls, kept, bytes, synth, pre []string
 		for _, s := range r.Samples {
+			if s.PreChecks != nil && s.PrePassed != nil {
+				p := fmt.Sprintf("%d/%d", *s.PrePassed, *s.PreChecks)
+				if *s.PrePassed < *s.PreChecks && s.PreReason != "" {
+					p += " (" + s.PreReason + ")"
+				}
+				pre = append(pre, p)
+			}
 			if s.SynthDiffLines != nil {
 				synth = append(synth, fmt.Sprint(*s.SynthDiffLines))
 			}
@@ -143,6 +150,9 @@ func changeCosts(recs []Record, excluded map[int]string) []string {
 		}
 		if len(kept) > 0 {
 			line += fmt.Sprintf("; pre-change files left byte-identical [%s]", strings.Join(kept, " "))
+		}
+		if len(pre) > 0 {
+			line += fmt.Sprintf("; step-1 tree scored by the unevolved oracle, before the change [%s]", strings.Join(pre, " "))
 		}
 		out = append(out, line)
 	}

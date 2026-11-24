@@ -337,3 +337,22 @@ func TestGraftArmUsesFiles(t *testing.T) {
 		t.Fatalf("without files Core is core.go, which the model is not answered for: %+v", s)
 	}
 }
+
+// versionedOracle reports 2 passing checks, and with -v2 a third that fails:
+// the shape of an evolve oracle whose new check the change did not satisfy.
+const versionedOracle = `v2=0; for a in "$@"; do [ "$a" = -v2 ] && v2=1; bin="$a"; done; "$bin" >/dev/null; if [ $v2 = 1 ]; then echo '{"checks":3,"passed":2,"failed":["extra"]}'; exit 1; fi; echo '{"checks":2,"passed":2,"failed":[]}'`
+
+func TestEvolveSampleRecordsStepOneScore(t *testing.T) {
+	for _, arm := range []bench.Arm{bench.ArmGraft, bench.ArmBaseline} {
+		c := cfg(t, answer{map[string]string{"main.go": good, "core.go": good, "extra.go": "package main\n\nfunc Twice(x int) int { return 2 * x }\n"}}, versionedOracle)
+		c.Case.SpecV2 = c.Case.Spec + "\n## Extra\n\n- The program must define a function Twice that returns twice its argument\n"
+		c.Case.OracleArgs = []string{"-v2"}
+		s := EvolveSample(context.Background(), c, arm)
+		if s.Outcome != bench.Disagreed || s.Checks != 3 || s.Passed != 2 {
+			t.Fatalf("%s: final score %+v", arm, s)
+		}
+		if s.PreChecks == nil || *s.PreChecks != 2 || s.PrePassed == nil || *s.PrePassed != 2 || s.PreReason != "" {
+			t.Fatalf("%s: step-1 score not recorded: %+v", arm, s)
+		}
+	}
+}
