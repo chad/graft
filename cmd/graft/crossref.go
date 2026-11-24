@@ -52,7 +52,8 @@ changed statement it makes no call and writes an empty proposal.
 
 exit codes:
   0  proposal written, every changed statement answered and valid
-  1  no parseable proposal within the retries (nothing written)
+  1  no parseable proposal within the retries (nothing written); also, with --strict,
+     a proposal still invalid after them
   2  usage or config error, drafts needing a human decision, or --out exists (use --force)
   3  the model command or I/O failed
   4  proposal written, but some statements are UNANSWERED or carry a DANGLING claim
@@ -70,11 +71,11 @@ func crossrefCmd(args []string, stdout, stderr io.Writer) int {
 	specPath := fs.String("spec", "", "markdown spec (the changed one)")
 	repo := fs.String("repo", "", "provenance repo holding the accepted records")
 	out := fs.String("out", "", "where to write the proposal (crossref.json)")
-	modelArg := fs.String("model", "", "model command, split on spaces (default: config skeleton_model, else opus)")
+	modelArg := fs.String("model", "", "model command: split on spaces, or a JSON array to pass an empty argument (default: config skeleton_model, else opus)")
 	root := fs.String("root", "", "code tree: a location's identifier must occur in the target's file")
 	skelPath := fs.String("skeleton", "", "render mode: the skeleton JSON (as for graft run --render); a location must name a stub or decl of the target's file in it")
 	withCode := fs.Bool("with-code", false, "show each record's current file to the model (needs --root)")
-	retries := fs.Int("retries", 2, "times an unparseable answer goes back to the model (max 5)")
+	retries := fs.Int("retries", 2, "times an unparseable answer, or one with UNANSWERED/DANGLING entries, goes back to the model (max 5)")
 	strict := fs.Bool("strict", false, "after the retries, an invalid proposal is exit 1 (nothing written), not exit 4")
 	force := fs.Bool("force", false, "overwrite --out")
 	if err := fs.Parse(args); err != nil {
@@ -118,7 +119,11 @@ func crossrefCmd(args []string, stdout, stderr io.Writer) int {
 	argv, timeout := defaultSkeletonModel, 10*time.Minute
 	switch {
 	case *modelArg != "":
-		argv = strings.Fields(*modelArg)
+		argv, err = parseArgv(*modelArg)
+		if err != nil {
+			fmt.Fprintf(stderr, "graft: --model: %v\n", err)
+			return 2
+		}
 	case cfg.SkeletonModel != nil && len(cfg.SkeletonModel.Argv) > 0:
 		argv = cfg.SkeletonModel.Argv
 		if cfg.SkeletonModel.TimeoutSec > 0 {

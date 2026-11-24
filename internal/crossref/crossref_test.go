@@ -340,3 +340,56 @@ func TestAnswersAreKeyedBySectionAndHash(t *testing.T) {
 		t.Fatalf("%+v", got)
 	}
 }
+
+// A later, worse attempt must not replace a better one.
+func TestProposeKeepsTheBestAttempt(t *testing.T) {
+	two := []Stmt{stmts[0], {Section: "Freezing", Hash: "h2", Type: "constraint", Text: "Second.", Own: "rec-freeze"}}
+	oneBad := "{\"statements\":[{\"id\":\"s1\",\"verdict\":\"local\"},{\"id\":\"s2\",\"verdict\":\"constrains\"}]}"
+	m := &script{answers: []string{oneBad, "{\"statements\":[]}"}}
+	p, calls, err := Propose(context.Background(), m, Input{Stmts: two, Recs: recs, Retries: 1})
+	if err != nil || calls != 2 {
+		t.Fatalf("calls=%d err=%v", calls, err)
+	}
+	if p.Answers[0].Status != OK || p.Answers[1].Status != Dangling {
+		t.Fatalf("the worse second attempt won: %+v", p.Answers)
+	}
+}
+
+func TestRenderLocationSkipsTheFileCheckAndSkeletonGapsAreNotRetried(t *testing.T) {
+	root := t.TempDir()
+	os.WriteFile(filepath.Join(root, "deposits.go"), []byte("package x\nfunc Deposit() {}\n"), 0o644)
+	rs := []Rec{recs[0], recs[1]}
+	rs[1].Render, rs[1].Symbols = true, []string{"Deposit", "Creditable"} // Creditable: new in skeleton-v2
+	newStub := strings.Replace(goodAnswer, "deposits.go: Deposit", "deposits.go: Creditable", 1)
+	m := &script{answers: []string{newStub}}
+	p, calls, err := Propose(context.Background(), m, Input{Stmts: stmts, Recs: rs, Root: root, Retries: 2})
+	if err != nil || calls != 1 || p.Answers[0].Status != OK {
+		t.Fatalf("a skeleton stub absent from the tree was refused: %+v calls=%d err=%v", p, calls, err)
+	}
+	// an identifier the skeleton lacks needs a skeleton change: reported, not re-asked
+	noStub := strings.Replace(goodAnswer, "deposits.go: Deposit", "deposits.go: Nope", 1)
+	m = &script{answers: []string{noStub}}
+	p, calls, err = Propose(context.Background(), m, Input{Stmts: stmts, Recs: rs, Root: root, Retries: 2})
+	if err != nil || calls != 1 || p.Answers[0].Status != Dangling || !strings.Contains(p.Answers[0].Detail, NeedsSkeleton) {
+		t.Fatalf("%+v calls=%d err=%v", p, calls, err)
+	}
+}
+
+func TestLocationIdentifierIsAWholeToken(t *testing.T) {
+	root := t.TempDir()
+	os.WriteFile(filepath.Join(root, "deposits.go"), []byte("package x\nfunc Deposit() {}\n"), 0o644)
+	for ident, want := range map[string]bool{"Deposit": true, "Dep": false, "posit": false, "Deposit2": false} {
+		d := checkLocation(&recs[1], "deposits.go: "+ident, root)
+		if (d == "") != want {
+			t.Errorf("%s: %q", ident, d)
+		}
+	}
+}
+
+func TestIdentsGroupsCommentsStrings(t *testing.T) {
+	src := "package x\n\n// func Commented() {}\n/* type Block struct{} */\nvar s = `\nfunc InRaw() {}\n`\nvar (\n\tA, B = 1, 2\n\tC    = struct {\n\t\tField int\n\t}{}\n)\nconst (\n\tK1 = iota\n\tK2\n)\ntype (\n\tT1 struct{}\n\tT2 int\n)\nfunc (l *L) M() {}\nvar x = \"func InStr() {}\"\n"
+	got := strings.Join(Idents(src), ",")
+	if got != "s,A,B,C,K1,K2,T1,T2,M,x" {
+		t.Fatal(got)
+	}
+}

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -52,9 +53,10 @@ evolve spec in the same tree, and is scored by the evolved oracle; results go
 to <case>-evolve and record the model calls the change cost. report prints
 intervals and the only permitted comparisons.
 
---model "ARGV" runs the samples with that model command (split on spaces, e.g.
---model "claude -p --model haiku") instead of the config's, so a run can use
-another model without editing files. It is recorded in each record's model
+--model "ARGV" runs the samples with that model command instead of the config's,
+so a run can use another model without editing files. ARGV is split on spaces,
+or is a JSON array when an argument is empty or has a space, e.g.
+--model '["claude","-p","--tools","","--model","haiku"]'. It is recorded in each record's model
 field, so it is a different model cell in the report.
 `
 
@@ -153,7 +155,11 @@ func benchRun(args []string, stdout, stderr io.Writer) int {
 	}
 	cfg, gates, err := loadConvergeConfig(filepath.Join(base, cf.Config))
 	if err == nil && strings.TrimSpace(*modelFlag) != "" {
-		cfg.Model = overrideModel(cfg.Model, *modelFlag)
+		var perr error
+		if cfg.Model, perr = overrideModel(cfg.Model, *modelFlag); perr != nil {
+			fmt.Fprintf(stderr, "graft: --model: %v\n", perr)
+			return 2
+		}
 	}
 	if err != nil || cfg.Model == nil {
 		fmt.Fprintf(stderr, "graft: config: %v (needs model)\n", err)
@@ -387,12 +393,36 @@ type modelCfg = struct {
 
 // overrideModel is the config's model with its argv replaced by the --model
 // flag (split on spaces); the config's timeout is kept.
-func overrideModel(cur *modelCfg, flagVal string) *modelCfg {
-	out := &modelCfg{Argv: strings.Fields(flagVal)}
+func overrideModel(cur *modelCfg, flagVal string) (*modelCfg, error) {
+	argv, err := parseArgv(flagVal)
+	if err != nil {
+		return nil, err
+	}
+	out := &modelCfg{Argv: argv}
 	if cur != nil {
 		out.TimeoutSec = cur.TimeoutSec
 	}
-	return out
+	return out, nil
+}
+
+// parseArgv reads a --model value: a JSON array of strings (which can carry an
+// empty argument such as --tools ""), else words split on spaces.
+func parseArgv(s string) ([]string, error) {
+	s = strings.TrimSpace(s)
+	var argv []string
+	if strings.HasPrefix(s, "[") {
+		dec := json.NewDecoder(strings.NewReader(s))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&argv); err != nil || dec.More() {
+			return nil, fmt.Errorf("not a JSON array of strings: %q", s)
+		}
+	} else {
+		argv = strings.Fields(s)
+	}
+	if len(argv) == 0 || argv[0] == "" {
+		return nil, errors.New("no command")
+	}
+	return argv, nil
 }
 
 // benchModelName is what a bench record's model field says: the argv, with the

@@ -266,15 +266,17 @@ func checkLocation(r *Rec, loc, root string) string {
 	}
 	if r.Render {
 		if len(r.Symbols) == 0 {
-			return "the skeleton has no file for this record: needs a skeleton change (graft draft --skeleton)"
+			return "the skeleton has no file for this record: " + NeedsSkeleton + " (graft draft --skeleton)"
 		}
 		if !hasSymbol(r.Symbols, ident) {
-			return fmt.Sprintf("%q is not a stub or decl of this record's file in the skeleton: needs a skeleton change (graft draft --skeleton)", ident)
+			return fmt.Sprintf("%q is not a stub or decl of this record's file in the skeleton: %s (graft draft --skeleton)", ident, NeedsSkeleton)
 		}
 	}
-	if root != "" && r.File != "" && ident != "" {
+	// In render mode the skeleton is the authority (a stub new in this change is
+	// not in the tree yet); the file under root is checked only without one.
+	if !r.Render && root != "" && r.File != "" {
 		b, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(r.File)))
-		if err == nil && !strings.Contains(string(b), ident) {
+		if err == nil && !hasToken(string(b), ident) {
 			return fmt.Sprintf("identifier %q does not occur in %s", ident, r.File)
 		}
 	}
@@ -304,9 +306,13 @@ type Input struct {
 	Conventions string
 	Code        map[string]string // optional: file -> current source (--with-code)
 	Root        string            // optional: the code tree, for location checks
-	Retries     int               // times an unparseable answer goes back to the model
+	Retries     int               // times an unparseable answer, or one with UNANSWERED/DANGLING entries, goes back to the model
 	Strict      bool              // after the retries, an invalid proposal is an error (nothing written), not exit 4
 }
+
+// NeedsSkeleton is in the Detail of an answer only a skeleton change can fix;
+// Propose does not re-ask those.
+const NeedsSkeleton = "needs a skeleton change"
 
 // ErrNoProposal: no valid proposal within the retries.
 var ErrNoProposal = errors.New("crossref: no valid proposal")
@@ -321,7 +327,8 @@ func Propose(ctx context.Context, m model.Model, in Input) (Proposal, int, error
 	base := Prompt(in)
 	prompt := base
 	calls := 0
-	var last Proposal
+	var best Proposal
+	bestBad := -1 // non-ok entries of best; -1: no parseable answer yet
 	for attempt := 0; attempt <= in.Retries; attempt++ {
 		calls++
 		resp, err := m.Complete(ctx, prompt)
@@ -334,20 +341,31 @@ func Propose(ctx context.Context, m model.Model, in Input) (Proposal, int, error
 			continue
 		}
 		checked, ok := Validate(in.Stmts, in.Recs, answers, in.Root)
-		last = Proposal{Schema: SchemaVersion, Answers: checked}
 		if ok {
-			return last, calls, nil
+			return Proposal{Schema: SchemaVersion, Answers: checked}, calls, nil
 		}
 		var bad []string
+		nbad := 0
 		for _, a := range checked {
-			if a.Status != OK {
+			if a.Status == OK {
+				continue
+			}
+			nbad++
+			if !strings.Contains(a.Detail, NeedsSkeleton) { // the model cannot fix a missing skeleton stub
 				bad = append(bad, fmt.Sprintf("- %q: %s: %s", a.Text, a.Status, a.Detail))
 			}
 		}
+		// Keep the best attempt: a later, worse answer must not replace it.
+		if bestBad < 0 || nbad <= bestBad {
+			best, bestBad = Proposal{Schema: SchemaVersion, Answers: checked}, nbad
+		}
+		if len(bad) == 0 { // only entries that need a skeleton change: report them, do not re-ask
+			break
+		}
 		prompt = base + "\n## Feedback on your previous attempt\n\nThese entries were refused; fix exactly these and answer for every statement again:\n\n" + strings.Join(bad, "\n") + "\n\nAnswer again with one JSON object in a single ```json block.\n"
 	}
-	if len(last.Answers) > 0 && !in.Strict {
-		return last, calls, nil
+	if bestBad >= 0 && !in.Strict {
+		return best, calls, nil
 	}
 	return Proposal{}, calls, fmt.Errorf("%w within %d attempts", ErrNoProposal, in.Retries+1)
 }
@@ -534,20 +552,112 @@ func Warn(stmts []Stmt, answers []Answer, recs []Rec) []string {
 	return out
 }
 
-var reTop = regexp.MustCompile(`(?m)^(?:func\s+(?:\([^)]*\)\s*)?|type\s+|var\s+|const\s+)([A-Za-z_][A-Za-z0-9_]*)`)
+var (
+	reTopLine  = regexp.MustCompile(`^(?:func\s+(?:\([^)]*\)\s*)?|type\s+|var\s+|const\s+)([A-Za-z_][A-Za-z0-9_]*)`)
+	reGroup    = regexp.MustCompile(`^(?:var|const|type)\s*\(\s*$`)
+	reGroupLn  = regexp.MustCompile(`^\s+([A-Za-z_][A-Za-z0-9_]*(?:\s*,\s*[A-Za-z_][A-Za-z0-9_]*)*)`)
+	reGroupEnd = regexp.MustCompile(`^\)`)
+)
+
+// blank replaces comments, strings, raw strings and rune literals of a Go
+// source text with spaces, keeping the newlines, so a line scan does not see
+// names inside them.
+func blank(src string) string {
+	b := []byte(src)
+	for i := 0; i < len(b); {
+		end := -1
+		switch {
+		case b[i] == '/' && i+1 < len(b) && b[i+1] == '/':
+			end = i
+			for end < len(b) && b[end] != '\n' {
+				end++
+			}
+		case b[i] == '/' && i+1 < len(b) && b[i+1] == '*':
+			end = i + 2
+			for end < len(b) && !(b[end-1] == '*' && b[end] == '/' && end > i+2) {
+				end++
+			}
+			end++
+		case b[i] == '`':
+			end = i + 1
+			for end < len(b) && b[end] != '`' {
+				end++
+			}
+			end++
+		case b[i] == '"' || b[i] == '\'':
+			q := b[i]
+			end = i + 1
+			for end < len(b) && b[end] != q && b[end] != '\n' {
+				if b[end] == '\\' {
+					end++
+				}
+				end++
+			}
+			end++
+		default:
+			i++
+			continue
+		}
+		if end > len(b) {
+			end = len(b)
+		}
+		for j := i; j < end; j++ {
+			if b[j] != '\n' {
+				b[j] = ' '
+			}
+		}
+		i = end
+	}
+	return string(b)
+}
 
 // Idents lists the top-level function, method, type, var and const names of a
 // Go source text, by line pattern (graft does not parse target code here), in
-// order and without duplicates. It is a hint for the prompt; Validate never
-// relies on it.
+// order and without duplicates; grouped var/const/type blocks are included and
+// comments and strings are ignored. It is a hint for the prompt; Validate
+// never relies on it.
 func Idents(src string) []string {
 	var out []string
 	seen := map[string]bool{}
-	for _, m := range reTop.FindAllStringSubmatch(src, -1) {
-		if !seen[m[1]] {
-			seen[m[1]] = true
-			out = append(out, m[1])
+	add := func(n string) {
+		if n != "_" && !seen[n] {
+			seen[n] = true
+			out = append(out, n)
+		}
+	}
+	inGroup, typeGroup, depth := false, false, 0
+	for _, ln := range strings.Split(blank(src), "\n") {
+		switch {
+		case inGroup:
+			if depth == 0 && reGroupEnd.MatchString(ln) {
+				inGroup = false
+				break
+			}
+			if depth == 0 {
+				if m := reGroupLn.FindStringSubmatch(ln); m != nil {
+					for _, n := range strings.Split(m[1], ",") {
+						add(strings.TrimSpace(n))
+						if typeGroup {
+							break
+						}
+					}
+				}
+			}
+			depth += strings.Count(ln, "{") + strings.Count(ln, "(") + strings.Count(ln, "[") - strings.Count(ln, "}") - strings.Count(ln, ")") - strings.Count(ln, "]")
+		case reGroup.MatchString(ln):
+			inGroup, typeGroup, depth = true, strings.HasPrefix(ln, "type"), 0
+		default:
+			if m := reTopLine.FindStringSubmatch(ln); m != nil {
+				add(m[1])
+			}
 		}
 	}
 	return out
+}
+
+// hasToken reports whether ident occurs in src as a whole identifier, not as
+// part of a longer name ("Dep" is not in "Deposit").
+func hasToken(src, ident string) bool {
+	re, err := regexp.Compile(`(?:^|[^A-Za-z0-9_])` + regexp.QuoteMeta(ident) + `(?:$|[^A-Za-z0-9_])`)
+	return err == nil && re.MatchString(src)
 }

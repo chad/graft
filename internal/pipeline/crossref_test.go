@@ -637,3 +637,32 @@ func TestCrossrefNeverFixedWritesDanglingAndAcceptRefuses(t *testing.T) {
 		t.Fatal("accept took a proposal with a DANGLING entry")
 	}
 }
+
+type capture struct {
+	inner   *fakeXref
+	prompts []string
+}
+
+func (c *capture) Complete(ctx context.Context, p string) (string, error) {
+	c.prompts = append(c.prompts, p)
+	return c.inner.Complete(ctx, p)
+}
+
+// Plain mode with --root: the prompt lists the target file's identifiers
+// (grouped blocks included, comments skipped); render mode lists none of them.
+func TestCrossrefPromptListsTheTargetFilesIdentifiers(t *testing.T) {
+	repo, root := t.TempDir(), t.TempDir()
+	xAccept(t, repo, xSpec1, nil)
+	file := "beta.go"
+	src := "package x\n// func Hidden() {}\nfunc Count() {}\nvar (\n\tTotal = 1\n)\n"
+	if err := os.WriteFile(filepath.Join(root, file), []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m := &capture{inner: &fakeXref{rule: xRule, target: "Beta", byID: true}}
+	if _, _, _, _, err := Crossref(context.Background(), CrossrefInput{Repo: repo, Drafts: drafter.Drafts(xSpec2), Model: m, Root: root}); err != nil {
+		t.Fatal(err)
+	}
+	if len(m.prompts) == 0 || !strings.Contains(m.prompts[0], "(a location names one of these): Count, Total") || strings.Contains(m.prompts[0], "Hidden") {
+		t.Fatalf("prompt:\n%v", m.prompts)
+	}
+}

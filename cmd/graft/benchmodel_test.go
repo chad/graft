@@ -10,14 +10,14 @@ import (
 
 func TestBenchModelOverride(t *testing.T) {
 	cur := &modelCfg{Argv: []string{"claude", "-p"}, TimeoutSec: 90}
-	got := overrideModel(cur, "  claude  -p --model haiku ")
+	got, _ := overrideModel(cur, "  claude  -p --model haiku ")
 	if !reflect.DeepEqual(got.Argv, []string{"claude", "-p", "--model", "haiku"}) || got.TimeoutSec != 90 {
 		t.Fatalf("%+v", got)
 	}
 	if cur.Argv[0] != "claude" || len(cur.Argv) != 2 {
 		t.Fatal("the config's model was modified")
 	}
-	if g := overrideModel(nil, "m x"); len(g.Argv) != 2 || g.TimeoutSec != 0 {
+	if g, _ := overrideModel(nil, "m x"); len(g.Argv) != 2 || g.TimeoutSec != 0 {
 		t.Fatalf("%+v", g)
 	}
 }
@@ -29,9 +29,22 @@ func TestBenchModelNameRecordsTheOverride(t *testing.T) {
 	if err := os.WriteFile(fake, []byte("#!/bin/sh\necho 'fakemodel 9.9'\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	argv := overrideModel(&modelCfg{Argv: []string{"other"}}, fake+" --model haiku").Argv
+	m, _ := overrideModel(&modelCfg{Argv: []string{"other"}}, fake+" --model haiku")
+	argv := m.Argv
 	name := benchModelName(argv)
 	if !strings.HasPrefix(name, fake+" --model haiku") || !strings.HasSuffix(name, "[fakemodel 9.9]") || strings.Contains(name, "other") {
 		t.Fatal(name)
+	}
+}
+
+func TestBenchModelJSONArgv(t *testing.T) {
+	m, err := overrideModel(nil, `["claude","-p","--tools","","--model","haiku"]`)
+	if err != nil || !reflect.DeepEqual(m.Argv, []string{"claude", "-p", "--tools", "", "--model", "haiku"}) {
+		t.Fatalf("%+v %v", m, err)
+	}
+	for _, bad := range []string{`["a",1]`, `["a"] x`, `[]`, `[""]`, "  "} {
+		if _, err := overrideModel(nil, bad); err == nil {
+			t.Errorf("%q accepted", bad)
+		}
 	}
 }
