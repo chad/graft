@@ -1,0 +1,185 @@
+package crossref
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+var (
+	stmts = []Stmt{{Section: "Freezing", Hash: "h1", Type: "constraint", Text: "A frozen account refuses deposits.", Own: "rec-freeze"}}
+	recs  = []Rec{
+		{ID: "rec-freeze", Section: "Freezing", File: "freezing.go", Intent: "Freezing\n- [constraint] A frozen account refuses withdrawals."},
+		{ID: "rec-dep", Section: "Deposits and withdrawals", File: "deposits.go", Intent: "Deposits\n- [constraint] A deposit adds to the balance."},
+	}
+)
+
+func ans(v string, ts ...Target) []Answer {
+	return []Answer{{Section: "Freezing", Hash: "h1", Text: "A frozen account refuses deposits.", Verdict: v, Targets: ts}}
+}
+
+func good() Target {
+	return Target{Record: "rec-dep", Reason: "deposit code must check frozen", Location: "deposits.go: Deposit", Quote: "A deposit adds to the balance"}
+}
+
+func TestValidate(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		answers []Answer
+		want    string // status of the first answer
+		detail  string
+	}{
+		{"constrains ok", ans(Constrains, good()), OK, ""},
+		{"target by section heading", ans(Constrains, func() Target { g := good(); g.Record = "deposits and withdrawals"; return g }()), OK, ""},
+		{"local ok", ans(Local), OK, ""},
+		{"missing", nil, Unanswered, "no answer"},
+		{"unknown record", ans(Constrains, func() Target { g := good(); g.Record = "rec-nope"; return g }()), Dangling, "not a record"},
+		{"own record", ans(Constrains, func() Target { g := good(); g.Record = "rec-freeze"; return g }()), Dangling, "own record"},
+		{"location outside file", ans(Constrains, func() Target { g := good(); g.Location = "other.go: X"; return g }()), Dangling, "not the record's file"},
+		{"no location", ans(Constrains, func() Target { g := good(); g.Location = ""; return g }()), Dangling, "no location"},
+		{"quote not in record", ans(Constrains, func() Target { g := good(); g.Quote = "invented"; return g }()), Dangling, "does not occur"},
+		{"no reason", ans(Constrains, func() Target { g := good(); g.Reason = " "; return g }()), Dangling, "no reason"},
+		{"constrains without targets", ans(Constrains), Dangling, "no target"},
+		{"local with targets", ans(Local, good()), Dangling, "local with targets"},
+		{"bad verdict", ans("maybe"), Dangling, "unknown verdict"},
+		{"duplicate", append(ans(Local), ans(Local)...), Dangling, "2 answers"},
+		{"altered text", []Answer{{Hash: "h1", Text: "something else", Verdict: Local}}, Dangling, "not the spec's"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got, ok := Validate(stmts, recs, c.answers, "")
+			if got[0].Status != c.want || (c.want == OK) != ok {
+				t.Fatalf("status %s ok=%v (%s), want %s", got[0].Status, ok, got[0].Detail, c.want)
+			}
+			if !strings.Contains(got[0].Detail, c.detail) {
+				t.Fatalf("detail %q, want %q", got[0].Detail, c.detail)
+			}
+		})
+	}
+}
+
+func TestValidateStatusInFileNotTrusted(t *testing.T) {
+	a := ans(Constrains, func() Target { g := good(); g.Record = "rec-nope"; return g }())
+	a[0].Status = OK
+	if got, ok := Validate(stmts, recs, a, ""); ok || got[0].Status != Dangling {
+		t.Fatalf("a hand-written ok status was believed: %v %v", got, ok)
+	}
+}
+
+func TestValidateStaleAnswer(t *testing.T) {
+	a := append(ans(Local), Answer{Hash: "gone", Text: "x", Verdict: Local})
+	got, ok := Validate(stmts, recs, a, "")
+	if ok || got[len(got)-1].Status != Stale {
+		t.Fatalf("got %v ok=%v", got, ok)
+	}
+}
+
+func TestNewSectionTargetBySectionHeading(t *testing.T) {
+	r := append(append([]Rec(nil), recs...), Rec{Section: "Topics"})
+	a := ans(Constrains, Target{Record: "Topics", Reason: "r", Location: "topics.go: Set"})
+	if got, ok := Validate(stmts, r, a, ""); !ok {
+		t.Fatalf("a New section is a valid target: %v", got)
+	}
+}
+
+func TestLocationIdentifierCheckedAgainstRoot(t *testing.T) {
+	root := t.TempDir()
+	os.WriteFile(filepath.Join(root, "deposits.go"), []byte("package main\nfunc Other() {}\n"), 0o644)
+	if _, ok := Validate(stmts, recs, ans(Constrains, good()), root); ok {
+		t.Fatal("Deposit is not in deposits.go: must dangle")
+	}
+	os.WriteFile(filepath.Join(root, "deposits.go"), []byte("package main\nfunc Deposit() {}\n"), 0o644)
+	if _, ok := Validate(stmts, recs, ans(Constrains, good()), root); !ok {
+		t.Fatal("Deposit is in deposits.go")
+	}
+}
+
+func TestParse(t *testing.T) {
+	good := "text\n```json\n{\"statements\":[{\"id\":\"s1\",\"verdict\":\"local\"}]}\n```\n"
+	a, err := Parse(good, stmts)
+	if err != nil || len(a) != 1 || a[0].Hash != "h1" || a[0].Text != stmts[0].Text {
+		t.Fatalf("%v %v", a, err)
+	}
+	for name, bad := range map[string]string{
+		"unknown id":  "{\"statements\":[{\"id\":\"s9\",\"verdict\":\"local\"}]}",
+		"unknown key": "{\"statements\":[{\"id\":\"s1\",\"verdict\":\"local\",\"x\":1}]}",
+		"not json":    "I think it is local",
+		"trailing":    "{\"statements\":[]} {}",
+	} {
+		if _, err := Parse(bad, stmts); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}
+
+type script struct {
+	answers []string
+	prompts []string
+}
+
+func (s *script) Complete(_ context.Context, p string) (string, error) {
+	s.prompts = append(s.prompts, p)
+	a := s.answers[0]
+	if len(s.answers) > 1 {
+		s.answers = s.answers[1:]
+	}
+	return a, nil
+}
+
+func TestProposeRetriesOnlyUnparseable(t *testing.T) {
+	m := &script{answers: []string{"nonsense", "{\"statements\":[{\"id\":\"s1\",\"verdict\":\"local\"}]}"}}
+	p, calls, err := Propose(context.Background(), m, Input{Stmts: stmts, Recs: recs, Retries: 2})
+	if err != nil || calls != 2 || p.Answers[0].Status != OK {
+		t.Fatalf("%v calls=%d err=%v", p, calls, err)
+	}
+	if !strings.Contains(m.prompts[1], "refused") {
+		t.Fatal("the retry prompt does not say why")
+	}
+	// an invalid but parseable answer is returned for a human, not retried
+	m = &script{answers: []string{"{\"statements\":[]}"}}
+	p, calls, err = Propose(context.Background(), m, Input{Stmts: stmts, Recs: recs, Retries: 2})
+	if err != nil || calls != 1 || p.Answers[0].Status != Unanswered {
+		t.Fatalf("%v calls=%d err=%v", p, calls, err)
+	}
+	// ... unless strict
+	m = &script{answers: []string{"{\"statements\":[]}"}}
+	_, calls, err = Propose(context.Background(), m, Input{Stmts: stmts, Recs: recs, Retries: 1, Strict: true})
+	if calls != 2 || err != nil {
+		t.Fatalf("strict calls=%d err=%v", calls, err)
+	}
+	m = &script{answers: []string{"nonsense"}}
+	if _, _, err := Propose(context.Background(), m, Input{Stmts: stmts, Recs: recs, Retries: 1}); err == nil {
+		t.Fatal("no parseable answer must be an error")
+	}
+}
+
+func TestPromptHasEverythingTheModelNeeds(t *testing.T) {
+	p := Prompt(Input{Stmts: stmts, Recs: recs, Conventions: "CONV"})
+	for _, w := range []string{Marker, "CONV", "id s1", "A frozen account refuses deposits.", "record rec-dep", "file: deposits.go", "A deposit adds to the balance"} {
+		if !strings.Contains(p, w) {
+			t.Errorf("prompt lacks %q", w)
+		}
+	}
+}
+
+func TestWarnIsAdvisoryAndNeedsALocalVerdict(t *testing.T) {
+	rs := []Rec{
+		{ID: "t", Section: "Topics", Intent: "Topics\n- [constraint] TOPIC sets the topic."},
+		{ID: "c", Section: "Channels", Intent: "Channels\n- [constraint] JOIN answers 332 then 353."},
+	}
+	st := []Stmt{{Section: "Topics", Hash: "a", Text: "A joiner receives 332 before 353 and `JOIN` stays in Channels.", Own: "t"}}
+	local := []Answer{{Hash: "a", Verdict: Local, Status: OK}}
+	w := Warn(st, local, rs)
+	if len(w) < 2 || !strings.Contains(strings.Join(w, "\n"), "332") || !strings.Contains(strings.Join(w, "\n"), "Channels") {
+		t.Fatalf("warnings %v", w)
+	}
+	if got := Warn(st, []Answer{{Hash: "a", Verdict: Constrains, Status: OK}}, rs); len(got) != 0 {
+		t.Fatalf("a constrains verdict is not warned about: %v", got)
+	}
+	// own record's tokens do not count
+	only := []Stmt{{Section: "Topics", Hash: "a", Text: "TOPIC sets it.", Own: "t"}}
+	if got := Warn(only, local, rs); len(got) != 0 {
+		t.Fatalf("%v", got)
+	}
+}
