@@ -533,7 +533,7 @@ func (cfg Config) graftStep(ctx context.Context, repo, root, spec string, skel *
 	drafts := drafter.Drafts(spec)
 	if xcalls != nil {
 		prop, _, _, n, err := pipeline.Crossref(ctx, pipeline.CrossrefInput{
-			Repo: repo, Drafts: drafts, Model: cfg.Model, Conventions: cfg.Case.Conventions, Root: root,
+			Repo: repo, Drafts: drafts, Model: cfg.Model, Conventions: cfg.Case.Conventions, Root: root, Skeleton: skel,
 		})
 		*xcalls += n
 		if err != nil {
@@ -542,7 +542,7 @@ func (cfg Config) graftStep(ctx context.Context, repo, root, spec string, skel *
 			}
 			return infraPrefix + "crossref: " + err.Error()
 		}
-		opts.Crossref = &pipeline.CrossrefOptions{Proposal: &prop}
+		opts.Crossref = &pipeline.CrossrefOptions{Proposal: &prop, Skeleton: skel}
 	}
 	acc, err := pipeline.AcceptWith(repo, drafts, "graft bench", time.Now(), opts)
 	if err != nil {

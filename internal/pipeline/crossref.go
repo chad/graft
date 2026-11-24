@@ -12,6 +12,7 @@ import (
 	"github.com/chad/graft/internal/crossref"
 	"github.com/chad/graft/internal/drafter"
 	"github.com/chad/graft/internal/model"
+	"github.com/chad/graft/internal/recording"
 	"github.com/livecodelife/provenance/record"
 )
 
@@ -37,6 +38,8 @@ type CrossrefOptions struct {
 	Proposal *crossref.Proposal // an accepted proposal, or nil
 	Waive    bool               // --no-crossref: accept without any answer, loudly
 	Report   *CrossrefReport    // filled in when non-nil
+	// Skeleton is set in render mode: locations are checked against it.
+	Skeleton *recording.Skeleton
 }
 
 // CrossrefReport says what the acceptance did about cross-references; the CLI
@@ -56,7 +59,10 @@ func (r *CrossrefReport) Unchecked() int { return r.Waived }
 // CrossrefState computes what the cross-reference step is asked about: the
 // statements that are new or changed since the last accept (deterministic, no
 // model), and every record they could constrain. It reads, never writes.
-func CrossrefState(repo string, drafts []drafter.Draft) ([]crossref.Stmt, []crossref.Rec, error) {
+//
+// skel, when non-nil (render mode), gives each record the stubs and decls of
+// its skeleton file, which a cross-reference location must name.
+func CrossrefState(repo string, drafts []drafter.Draft, skel *recording.Skeleton) ([]crossref.Stmt, []crossref.Rec, error) {
 	idx, err := LoadIndex(repo)
 	if err != nil {
 		return nil, nil, err
@@ -71,7 +77,7 @@ func CrossrefState(repo string, drafts []drafter.Draft) ([]crossref.Stmt, []cros
 	if len(undecided) > 0 {
 		return nil, nil, fmt.Errorf("%w:\n  %s", ErrUndecided, strings.Join(undecided, "\n  "))
 	}
-	return crossrefState(&record.FilesStore{Root: repo}, idx, props)
+	return crossrefState(&record.FilesStore{Root: repo}, idx, props, skel)
 }
 
 func acceptedOf(idx *Index) []drafter.Accepted {
@@ -83,7 +89,7 @@ func acceptedOf(idx *Index) []drafter.Accepted {
 	return accepted
 }
 
-func crossrefState(fs *record.FilesStore, idx *Index, props []drafter.Proposal) ([]crossref.Stmt, []crossref.Rec, error) {
+func crossrefState(fs *record.FilesStore, idx *Index, props []drafter.Proposal, skel *recording.Skeleton) ([]crossref.Stmt, []crossref.Rec, error) {
 	if len(idx.Records) == 0 {
 		return nil, nil, nil // the first accept: no other record exists to constrain
 	}
@@ -107,9 +113,9 @@ func crossrefState(fs *record.FilesStore, idx *Index, props []drafter.Proposal) 
 			for _, im := range e.Imports {
 				rec.Imports = append(rec.Imports, im.Text+` (from "`+im.FromSection+`")`)
 			}
-			recs = append(recs, rec)
+			recs = append(recs, withSymbols(rec, skel))
 		} else {
-			recs = append(recs, crossref.Rec{Section: d.Section})
+			recs = append(recs, withSymbols(crossref.Rec{Section: d.Section}, skel))
 		}
 		for _, s := range d.Statements {
 			if !have[s.ClauseHash] {
@@ -131,7 +137,7 @@ func crossrefImports(fs *record.FilesStore, idx *Index, props []drafter.Proposal
 	if rep == nil {
 		rep = &CrossrefReport{}
 	}
-	stmts, recs, err := crossrefState(fs, idx, props)
+	stmts, recs, err := crossrefState(fs, idx, props, opts.Skeleton)
 	if err != nil {
 		return nil, err
 	}
@@ -254,13 +260,41 @@ type CrossrefInput struct {
 	WithCode    bool   // show each record's current file to the model
 	Retries     int
 	Strict      bool
+	Skeleton    *recording.Skeleton // render mode: a location must name a stub or decl of the target's skeleton file
+}
+
+// withSymbols marks rec as a render-mode record and lists the stubs and decls
+// of its skeleton file (matched by path, record id or section).
+func withSymbols(rec crossref.Rec, skel *recording.Skeleton) crossref.Rec {
+	if skel == nil {
+		return rec
+	}
+	rec.Render = true
+	for _, f := range skel.Files {
+		if !(rec.File != "" && f.Path == rec.File) && !(rec.ID != "" && f.Record == rec.ID) && !(f.Section != "" && f.Section == rec.Section) {
+			continue
+		}
+		add := func(name, recv string) {
+			rec.Symbols = append(rec.Symbols, name)
+			if recv = strings.TrimPrefix(recv, "*"); recv != "" {
+				rec.Symbols = append(rec.Symbols, recv+"."+name)
+			}
+		}
+		for _, d := range f.Decls {
+			add(d.Name, d.Receiver)
+		}
+		for _, st := range f.Stubs {
+			add(st.Name, st.ReceiverType)
+		}
+	}
+	return rec
 }
 
 // Crossref runs the step: it finds the changed statements, asks the model once
 // and returns the validated proposal, the statements and the records (for
 // warnings) and the number of model calls. With nothing changed it makes no call.
 func Crossref(ctx context.Context, in CrossrefInput) (crossref.Proposal, []crossref.Stmt, []crossref.Rec, int, error) {
-	stmts, recs, err := CrossrefState(in.Repo, in.Drafts)
+	stmts, recs, err := CrossrefState(in.Repo, in.Drafts, in.Skeleton)
 	if err != nil || len(stmts) == 0 {
 		return crossref.Proposal{Schema: crossref.SchemaVersion}, stmts, recs, 0, err
 	}

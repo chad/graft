@@ -15,6 +15,8 @@ import (
 	"github.com/chad/graft/internal/converge"
 	"github.com/chad/graft/internal/crossref"
 	"github.com/chad/graft/internal/evidence"
+	"github.com/chad/graft/internal/recording"
+	"github.com/chad/graft/internal/render"
 )
 
 // The dry path of `graft bench run --case examples/ledger-lite/case.json
@@ -276,5 +278,215 @@ func TestLedgerEvolveDanglingAnswerRefusesTheChange(t *testing.T) {
 	s := EvolveSample(context.Background(), c, bench.ArmGraft)
 	if s.Outcome != bench.Broke || !strings.Contains(s.Reason, "DANGLING") {
 		t.Fatalf("%+v", s)
+	}
+}
+
+// ---- M14: the same, in render mode (graft-render arm) ----
+
+// renderHookModel is the fake for the graft-render arm over the real skeletons.
+// Running's region holds the v2 reference (with the two credit checks behind
+// hooks that do nothing) and every stub of Running delegates to it; every
+// other region's init body does nothing, except that a regenerated Deposits or
+// Transfers region installs its hook (the frozen check) only when its prompt
+// carries the cross-referenced statement.
+type renderHookModel struct {
+	ref2   string
+	xref   func(prompt string) string
+	events []string // "xref", or the region path asked for, in order
+	// at the first region prompt after the cross-reference call:
+	sawImports, sawCreditable bool
+	armed                     bool
+	tmp                       string
+	regen                     map[string]bool
+}
+
+var (
+	reAskedRegion = regexp.MustCompile("complete contents of `([^`]+)`")
+	reDeclLine    = regexp.MustCompile(`(?m)^func (?:\([^)]*\) )?(\w+)\(([^)]*)\)(?: (.+))?$`)
+)
+
+func zeroOf(t string) string {
+	switch {
+	case t == "bool":
+		return "false"
+	case t == "string":
+		return `""`
+	case strings.HasPrefix(t, "int") || strings.HasPrefix(t, "uint") || strings.HasPrefix(t, "float"):
+		return "0"
+	default:
+		return "nil"
+	}
+}
+
+func (m *renderHookModel) Complete(_ context.Context, prompt string) (string, error) {
+	if strings.Contains(prompt, crossref.Marker) {
+		m.events = append(m.events, "xref")
+		m.armed = true
+		return m.xref(prompt), nil
+	}
+	g := reAskedRegion.FindStringSubmatch(prompt)
+	if g == nil {
+		return "", os.ErrInvalid
+	}
+	path := g[1]
+	m.events = append(m.events, path)
+	if m.armed { // first region prompt after the cross-reference call
+		m.armed = false
+		idx, _ := filepath.Glob(filepath.Join(m.tmp, "graft-evolve-*", "repo", ".graft", "accepted.json"))
+		for _, f := range idx {
+			if b, err := os.ReadFile(f); err == nil && strings.Contains(string(b), `"imports"`) {
+				m.sawImports = true
+			}
+		}
+		run, _ := filepath.Glob(filepath.Join(m.tmp, "graft-evolve-*", "app", "running.go"))
+		for _, f := range run {
+			if b, err := os.ReadFile(f); err == nil && strings.Contains(string(b), "Creditable") {
+				m.sawCreditable = true
+			}
+		}
+	}
+	decl := prompt[strings.Index(prompt, "## Declares"):]
+	decl = decl[strings.Index(decl, "```go\n")+6:]
+	decl = decl[:strings.Index(decl, "```")]
+	var b strings.Builder
+	if strings.HasPrefix(path, "running") {
+		src := strings.Replace(m.ref2, "l.creditable(a)", "depositHook(a)", 1)
+		src = strings.Replace(src, "l.creditable(b)", "transferHook(b)", 1)
+		src = regexp.MustCompile(`(?s)func main\(\) \{.*?\n\}\n`).ReplaceAllString(src, "")
+		src = strings.NewReplacer("\t\"flag\"\n", "", "\t\"log\"\n", "").Replace(src)
+		b.WriteString(src)
+		b.WriteString("\nvar depositHook = func(a *account) error { return nil }\nvar transferHook = func(b *account) error { return nil }\n")
+		b.WriteString("\nvar refLedger = &ledger{accounts: map[string]*account{}, transfers: map[string]*transfer{}, byKey: map[string]*transfer{}, holds: map[string]*hold{}}\n")
+	} else {
+		b.WriteString("package main\n")
+	}
+	for _, d := range reDeclLine.FindAllStringSubmatch(decl, -1) {
+		full := d[0]
+		body := ""
+		switch {
+		case strings.HasSuffix(d[1], "ServeHTTPBody"):
+			body = "refLedger.ServeHTTP(w, r)"
+		case strings.HasPrefix(path, "deposits") && m.carries(prompt):
+			body = "depositHook = func(a *account) error {\n\t\tif a.Frozen {\n\t\t\treturn errFrozen\n\t\t}\n\t\treturn nil\n\t}"
+			m.regen["deposits"] = true
+		case strings.HasPrefix(path, "transfers") && m.carries(prompt):
+			body = "transferHook = func(b *account) error {\n\t\tif b.Frozen {\n\t\t\treturn errFrozen\n\t\t}\n\t\treturn nil\n\t}"
+			m.regen["transfers"] = true
+		case d[3] != "":
+			rs := strings.Trim(d[3], "()")
+			var zs []string
+			for _, r := range strings.Split(rs, ",") {
+				zs = append(zs, zeroOf(strings.TrimSpace(r)))
+			}
+			body = "return " + strings.Join(zs, ", ")
+		}
+		b.WriteString("\n" + full + " {\n\t" + body + "\n}\n")
+	}
+	return "```go\n" + b.String() + "```\n", nil
+}
+
+func (m *renderHookModel) carries(prompt string) bool { return reFromFreezing.MatchString(prompt) }
+
+func renderLedger(t *testing.T, xref func(string) string) (Config, *renderHookModel) {
+	t.Helper()
+	bin, err := exec.LookPath("sedum")
+	gens := os.Getenv("SEDUM_GENERATORS")
+	if err != nil || gens == "" {
+		t.Skip("needs sedum >= 0.14.0 on PATH and SEDUM_GENERATORS")
+	}
+	sed, err := render.Open(context.Background(), bin)
+	if err != nil {
+		t.Skip("needs sedum >= 0.14.0: " + err.Error())
+	}
+	c, ref2 := ledgerCase(t, "")
+	load := func(rel string) *recording.Skeleton {
+		b, err := os.ReadFile(llDir + rel)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sk, err := recording.LoadSkeleton(b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return &sk
+	}
+	c.Case.Skeleton, c.Case.SkeletonV2 = load("skeleton.json"), load("skeleton-v2.json")
+	c.Sedum, c.Generators = sed, gens
+	c.Gates = []converge.Gate{converge.CommandGate{Label: "go build", Argv: []string{"go", "build", "./..."}, As: evidence.TestRun, Timeout: 2 * time.Minute}}
+	c.Policy = evidence.Policy{"low": {evidence.TestRun}}
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+	m := &renderHookModel{ref2: ref2, xref: xref, tmp: tmp, regen: map[string]bool{}}
+	c.Model = m
+	return c, m
+}
+
+// renderXref answers like correctXref but names the stub the skeleton has for
+// both targets: their init.
+func renderXref(prompt string) string {
+	return strings.ReplaceAll(correctXref(prompt), `.go: the route"`, `.go: init"`)
+}
+
+// The graft-render arm: with a correct answer the imports reach the Deposits
+// and Transfers regions and every -v2 check passes. The order that runs is: the
+// cross-reference call (before anything is written), the accept that writes the
+// imports into the records, the skeleton import and render (Running's new shape:
+// Creditable), and only then the regions, so no region is ever generated from a
+// stale record.
+func TestLedgerEvolveRenderArmReachesDepositsAndTransfersThroughCrossref(t *testing.T) {
+	c, m := renderLedger(t, renderXref)
+	s := EvolveSample(context.Background(), c, bench.ArmGraftRender)
+	if s.Outcome != bench.Works || s.Passed != s.Checks || s.Checks < 51 {
+		t.Fatalf("%+v events=%v regen=%v", s, m.events, m.regen)
+	}
+	if !m.regen["deposits"] || !m.regen["transfers"] {
+		t.Fatalf("the frozen statement did not reach the regions: %v", m.regen)
+	}
+	if s.CrossrefCalls == nil || *s.CrossrefCalls != 1 {
+		t.Fatalf("crossref calls %v", deref(s.CrossrefCalls))
+	}
+	// step 2 begins with the one cross-reference call, and nothing else was asked before it in step 2
+	x := -1
+	for i, e := range m.events {
+		if e == "xref" {
+			x = i
+		}
+	}
+	if x < 0 || x != 7 {
+		t.Fatalf("the cross-reference call should follow step 1's 7 regions: events=%v", m.events)
+	}
+	if !m.sawImports || !m.sawCreditable {
+		t.Fatalf("at the first region of the change the imports must be in the records (%v) and the new skeleton rendered (%v)", m.sawImports, m.sawCreditable)
+	}
+	got := map[string]bool{}
+	for _, e := range m.events[x+1:] {
+		got[strings.SplitN(e, "_synth", 2)[0]] = true
+	}
+	for _, want := range []string{"deposits_and_withdrawals", "transfers", "running", "freezing", "journal"} {
+		if !got[want] {
+			t.Errorf("the change did not regenerate %s: %v", want, m.events[x+1:])
+		}
+	}
+}
+
+// In render mode a location must name a stub or decl of the target's skeleton
+// file; one that does not needs a skeleton change, and the change is refused.
+func TestLedgerEvolveRenderArmRefusesALocationTheSkeletonLacks(t *testing.T) {
+	c, _ := renderLedger(t, func(p string) string {
+		return strings.ReplaceAll(correctXref(p), `.go: the route"`, `.go: Deposit"`)
+	})
+	s := EvolveSample(context.Background(), c, bench.ArmGraftRender)
+	if s.Outcome != bench.Broke || !strings.Contains(s.Reason, "DANGLING") || !strings.Contains(s.Reason, "needs a skeleton change (graft draft --skeleton)") {
+		t.Fatalf("%+v", s)
+	}
+}
+
+// Control: in render mode a "local" verdict leaves Deposits and Transfers alone
+// and the frozen rule is dropped, visible only in the oracle.
+func TestLedgerEvolveRenderArmWrongLocalVerdictFailsFrozenChecks(t *testing.T) {
+	c, m := renderLedger(t, localAnswer)
+	s := EvolveSample(context.Background(), c, bench.ArmGraftRender)
+	if s.Outcome != bench.Disagreed || !strings.Contains(s.Reason, "frozen_refuses_incoming") || m.regen["deposits"] || m.regen["transfers"] {
+		t.Fatalf("%+v regen=%v", s, m.regen)
 	}
 }

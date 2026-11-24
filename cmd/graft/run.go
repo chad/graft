@@ -137,7 +137,7 @@ func runCmd(args []string, stdout, stderr io.Writer) int {
 		for _, p := range drafter.Map(drafts, nil) {
 			fmt.Fprintf(stdout, "%s — %s\n", p.Draft.Section, p.Kind)
 		}
-		if stmts, _, err := pipeline.CrossrefState(*repo, drafts); err == nil && len(stmts) > 0 {
+		if stmts, _, err := pipeline.CrossrefState(*repo, drafts, nil); err == nil && len(stmts) > 0 {
 			fmt.Fprintf(stdout, "%d statement(s) are new or changed since the last accept: run graft crossref before --accept (or pass --no-crossref)\n", len(stmts))
 		}
 		fmt.Fprintln(stderr, "graft: nothing written; review the drafts above and re-run with --accept")
@@ -161,6 +161,7 @@ func runCmd(args []string, stdout, stderr io.Writer) int {
 			return 2
 		}
 		skel = &sk
+		opts.Crossref.Skeleton = skel // locations are checked against the skeleton
 		bin, err := exec.LookPath("sedum")
 		if err != nil {
 			fmt.Fprintln(stderr, "graft: --render needs sedum on PATH")

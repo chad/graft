@@ -19,6 +19,7 @@ import (
 	"github.com/chad/graft/internal/drafter"
 	"github.com/chad/graft/internal/model"
 	"github.com/chad/graft/internal/pipeline"
+	"github.com/chad/graft/internal/recording"
 )
 
 const crossrefUsage = `usage: graft crossref --config graft.json --spec SPEC.md --repo DIR --out crossref.json [flags]
@@ -37,8 +38,9 @@ Each answer carries a receipt: the statement quoted from the spec, the target
 record, the reason, the code location ("file: Identifier") that must change and
 a quote from the target's record. Receipts are validated for FORM, never for
 truth: the target must exist and not be the statement's own record, the location
-must be the target's file (and, with --root, name an identifier found in it), the
-quote must occur in the target's record. A wrong but well-formed answer passes;
+must be the target's file (and, with --root, name an identifier found in it; with
+--skeleton, name a stub or decl of that file in the skeleton, else DANGLING with
+"needs a skeleton change (graft draft --skeleton)"), the quote must occur in the target's record. A wrong but well-formed answer passes;
 every "local" verdict is therefore printed for you to check.
 
 After a spec change, graft run --accept refuses (exit 2) while a changed
@@ -68,6 +70,7 @@ func crossrefCmd(args []string, stdout, stderr io.Writer) int {
 	out := fs.String("out", "", "where to write the proposal (crossref.json)")
 	modelArg := fs.String("model", "", "model command, split on spaces (default: config skeleton_model, else opus)")
 	root := fs.String("root", "", "code tree: a location's identifier must occur in the target's file")
+	skelPath := fs.String("skeleton", "", "render mode: the skeleton JSON (as for graft run --render); a location must name a stub or decl of the target's file in it")
 	withCode := fs.Bool("with-code", false, "show each record's current file to the model (needs --root)")
 	retries := fs.Int("retries", 2, "times an unparseable answer goes back to the model (max 5)")
 	strict := fs.Bool("strict", false, "an invalid answer is a retry, not just flagged")
@@ -120,13 +123,27 @@ func crossrefCmd(args []string, stdout, stderr io.Writer) int {
 			timeout = time.Duration(cfg.SkeletonModel.TimeoutSec) * time.Second
 		}
 	}
+	var skel *recording.Skeleton
+	if *skelPath != "" {
+		sb, err := os.ReadFile(*skelPath)
+		if err != nil {
+			fmt.Fprintf(stderr, "graft: skeleton: %v\n", err)
+			return 2
+		}
+		sk, err := recording.LoadSkeleton(sb)
+		if err != nil {
+			fmt.Fprintf(stderr, "graft: skeleton %s: %v\n", *skelPath, err)
+			return 2
+		}
+		skel = &sk
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	drafts := drafter.Drafts(string(spec))
 	fmt.Fprintf(stdout, "model: %s\n", strings.Join(argv, " "))
 	prop, stmts, recs, calls, err := pipeline.Crossref(ctx, pipeline.CrossrefInput{
 		Repo: *repo, Drafts: drafts, Model: model.Command{Argv: argv, Timeout: timeout},
-		Conventions: string(conv), Root: *root, WithCode: *withCode, Retries: *retries, Strict: *strict,
+		Conventions: string(conv), Root: *root, WithCode: *withCode, Retries: *retries, Strict: *strict, Skeleton: skel,
 	})
 	fmt.Fprintf(stdout, "%d model call(s)\n", calls)
 	switch {

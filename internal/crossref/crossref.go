@@ -58,6 +58,12 @@ type Rec struct {
 	Intent      string
 	Constraints []string
 	Imports     []string // statements already copied into it from other sections
+	// Render is true in render mode (a skeleton exists): a location must then
+	// name a stub or decl of this record's file in the skeleton. Symbols are
+	// those names ("Name" and "Type.Name"); none means the skeleton has no file
+	// for the record.
+	Render  bool
+	Symbols []string
 }
 
 // Target is one record a statement constrains, with the receipt for the claim.
@@ -240,6 +246,14 @@ func checkLocation(r *Rec, loc, root string) string {
 	if r.File != "" && filepath.ToSlash(filepath.Clean(file)) != r.File {
 		return fmt.Sprintf("location file %q is not the record's file %q", file, r.File)
 	}
+	if r.Render {
+		if len(r.Symbols) == 0 {
+			return "the skeleton has no file for this record: needs a skeleton change (graft draft --skeleton)"
+		}
+		if !hasSymbol(r.Symbols, ident) {
+			return fmt.Sprintf("%q is not a stub or decl of this record's file in the skeleton: needs a skeleton change (graft draft --skeleton)", ident)
+		}
+	}
 	if root != "" && r.File != "" && ident != "" {
 		b, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(r.File)))
 		if err == nil && !strings.Contains(string(b), ident) {
@@ -247,6 +261,22 @@ func checkLocation(r *Rec, loc, root string) string {
 		}
 	}
 	return ""
+}
+
+// hasSymbol reports whether ident names one of symbols, ignoring a trailing
+// "()" and a receiver's star ("Ledger.Post", "(*Ledger).Post" and "Post" all name Post).
+func hasSymbol(symbols []string, ident string) bool {
+	ident = strings.TrimSuffix(strings.TrimSpace(ident), "()")
+	ident = strings.NewReplacer("(*", "", "(", "", ")", "", "*", "").Replace(ident)
+	if ident == "" {
+		return false
+	}
+	for _, s := range symbols {
+		if s == ident {
+			return true
+		}
+	}
+	return false
 }
 
 // Input is everything one proposal draws on.
@@ -397,6 +427,9 @@ func Prompt(in Input) string {
 		}
 		for _, c := range r.Imports {
 			fmt.Fprintf(&b, "imported: %s\n", c)
+		}
+		if r.Render {
+			fmt.Fprintf(&b, "stubs and decls of its skeleton file (a location must name one of these): %s\n", strings.Join(r.Symbols, ", "))
 		}
 		if src, ok := in.Code[r.File]; ok && r.File != "" {
 			fmt.Fprintf(&b, "current code of %s:\n```\n%s\n```\n", r.File, strings.TrimRight(src, "\n"))

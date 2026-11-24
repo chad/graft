@@ -183,3 +183,44 @@ func TestWarnIsAdvisoryAndNeedsALocalVerdict(t *testing.T) {
 		t.Fatalf("%v", got)
 	}
 }
+
+func TestRenderLocationMustBeAStubOrDeclOfTheTargetsSkeletonFile(t *testing.T) {
+	rs := []Rec{recs[0], recs[1]}
+	rs[1].Render, rs[1].Symbols = true, []string{"init", "Ledger", "Ledger.Post"}
+	for _, c := range []struct {
+		loc  string
+		want string
+	}{
+		{"deposits.go: init", OK},
+		{"deposits.go: Ledger.Post", OK},
+		{"deposits.go: (*Ledger).Post()", OK},
+		{"deposits.go: Deposit", Dangling}, // not in the skeleton: a skeleton change
+		{"deposits.go", Dangling},          // render mode needs the identifier
+	} {
+		g := good()
+		g.Location = c.loc
+		got, _ := Validate(stmts, rs, ans(Constrains, g), "")
+		if got[0].Status != c.want {
+			t.Errorf("%q: %s (%s), want %s", c.loc, got[0].Status, got[0].Detail, c.want)
+		}
+		if c.want == Dangling && !strings.Contains(got[0].Detail, "skeleton") {
+			t.Errorf("%q: detail %q must point at the skeleton", c.loc, got[0].Detail)
+		}
+	}
+	if d := func() string {
+		g := good()
+		g.Location = "deposits.go: Deposit"
+		got, _ := Validate(stmts, rs, ans(Constrains, g), "")
+		return got[0].Detail
+	}(); !strings.Contains(d, "needs a skeleton change (graft draft --skeleton)") {
+		t.Errorf("detail %q", d)
+	}
+	// a record with no skeleton file at all
+	rs[1].Symbols = nil
+	if got, _ := Validate(stmts, rs, ans(Constrains, good()), ""); got[0].Status != Dangling || !strings.Contains(got[0].Detail, "no file for this record") {
+		t.Errorf("%+v", got[0])
+	}
+	if p := Prompt(Input{Stmts: stmts, Recs: []Rec{{ID: "x", Section: "S", Render: true, Symbols: []string{"init"}}}}); !strings.Contains(p, "a location must name one of these): init") {
+		t.Error("the prompt must list the skeleton's names in render mode")
+	}
+}
