@@ -2,13 +2,19 @@ package harness
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/chad/graft/internal/bench"
+	"github.com/chad/graft/internal/converge"
+	"github.com/chad/graft/internal/crossref"
+	"github.com/chad/graft/internal/evidence"
 )
 
 // The dry path of `graft bench run --case examples/ledger-lite/case.json
@@ -119,5 +125,156 @@ func TestLedgerEvolveUnchangedProgramFailsOnlyV2Checks(t *testing.T) {
 	}
 	if strings.Contains(s.Reason, "deposit_adds") || strings.Contains(s.Reason, "transfer_moves_money") {
 		t.Fatalf("a v1 check fails on the unchanged v1 program: %s", s.Reason)
+	}
+}
+
+// ---- M14: the cross-reference step on the ledger-lite change (graft arm) ----
+
+// hookModel is a fake model for the graft arm over the real ledger-lite case.
+// Step 1 writes running.go as the v2 reference with the two credit checks (the
+// deposit route's and the transfer route's) behind package-level hooks that do
+// nothing; every other file is an empty package. A regenerated deposits or
+// transfers file installs its hook (the frozen check) only when its prompt
+// carries the cross-referenced frozen statement: i.e. only when the step reached it.
+// xref answers the cross-reference prompt.
+type hookModel struct {
+	ref2    string
+	xref    func(prompt string) string
+	regen   map[string]bool // section -> its file was asked for with the cross-reference in its prompt
+	prompts int
+}
+
+var (
+	reRecord  = regexp.MustCompile(`(?s)### record (\S+) — ([^\n]+)\nfile: (\S+)\nintent:\n[^\n]*\n- \[\w+\] ([^\n]+)`)
+	reStmtID  = regexp.MustCompile(`- id (s\d+), section "([^"]+)", \[\w+\]: ([^\n]+)`)
+	reSection = regexp.MustCompile(`## Your section: ([^\n]+)`)
+)
+
+func lastPart(s string) string {
+	if i := strings.LastIndex(s, " › "); i >= 0 {
+		return s[i+len(" › "):]
+	}
+	return s
+}
+
+var reFromFreezing = regexp.MustCompile(`cross-reference: stated in "[^"]*Freezing"`)
+
+const incomingFrozen = "refuse money coming in"
+
+// correctXref answers like a model that understood the change: the Freezing
+// statement about incoming money constrains Deposits and Transfers, the rest is local.
+func correctXref(prompt string) string {
+	recs := map[string][3]string{} // last part of the section title -> id, file, a quotable phrase of its intent
+	for _, m := range reRecord.FindAllStringSubmatch(prompt, -1) {
+		recs[lastPart(m[2])] = [3]string{m[1], m[3], m[4]}
+	}
+	var ents []string
+	for _, m := range reStmtID.FindAllStringSubmatch(prompt, -1) {
+		if !strings.Contains(m[3], incomingFrozen) {
+			ents = append(ents, `{"id":"`+m[1]+`","verdict":"local"}`)
+			continue
+		}
+		var ts []string
+		for _, sec := range []string{"Deposits and withdrawals", "Transfers"} {
+			r := recs[sec]
+			q, _ := json.Marshal(r[2])
+			ts = append(ts, `{"record":"`+r[0]+`","reason":"the credit side of this route must refuse a frozen account","location":"`+
+				r[1]+`: the route","quote":`+string(q)+`}`)
+		}
+		ents = append(ents, `{"id":"`+m[1]+`","verdict":"constrains","targets":[`+strings.Join(ts, ",")+`]}`)
+	}
+	return "```json\n{\"statements\":[" + strings.Join(ents, ",") + "]}\n```\n"
+}
+
+func (m *hookModel) Complete(_ context.Context, prompt string) (string, error) {
+	m.prompts++
+	if strings.Contains(prompt, crossref.Marker) {
+		return m.xref(prompt), nil
+	}
+	g := regexp.MustCompile("Write the complete file `([^`]+)`").FindStringSubmatch(prompt)
+	if g == nil {
+		return "", os.ErrInvalid
+	}
+	sec := ""
+	if s := reSection.FindStringSubmatch(prompt); s != nil {
+		sec = lastPart(s[1])
+	}
+	if g[1] == "running.go" {
+		src := strings.Replace(m.ref2, "l.creditable(a)", "depositHook(a)", 1)
+		src = strings.Replace(src, "l.creditable(b)", "transferHook(b)", 1)
+		src += "\nvar depositHook = func(a *account) error { return nil }\nvar transferHook = func(b *account) error { return nil }\n"
+		return "```go\n" + src + "```\n", nil
+	}
+	if reFromFreezing.MatchString(prompt) {
+		m.regen[sec] = true
+		switch sec {
+		case "Deposits and withdrawals":
+			return "```go\npackage main\n\nfunc init() {\n\tdepositHook = func(a *account) error {\n\t\tif a.Frozen {\n\t\t\treturn errFrozen\n\t\t}\n\t\treturn nil\n\t}\n}\n```\n", nil
+		case "Transfers":
+			return "```go\npackage main\n\nfunc init() {\n\ttransferHook = func(b *account) error {\n\t\tif b.Frozen {\n\t\t\treturn errFrozen\n\t\t}\n\t\treturn nil\n\t}\n}\n```\n", nil
+		}
+	}
+	return "```go\npackage main\n```\n", nil
+}
+
+func graftLedger(t *testing.T, xref func(string) string) (Config, *hookModel) {
+	t.Helper()
+	c, ref2 := ledgerCase(t, "")
+	hm := &hookModel{ref2: ref2, xref: xref, regen: map[string]bool{}}
+	c.Model = hm
+	c.Gates = []converge.Gate{converge.CommandGate{Label: "go build", Argv: []string{"go", "build", "./..."}, As: evidence.TestRun, Timeout: 2 * time.Minute}}
+	c.Policy = evidence.Policy{"low": {evidence.TestRun}}
+	return c, hm
+}
+
+// The yardstick: with a correct cross-reference answer the frozen rule reaches
+// the Deposits and Transfers regions, the change passes every -v2 check, and the
+// change-cost record shows the cross-reference call.
+func TestLedgerEvolveGraftArmReachesDepositsAndTransfersThroughCrossref(t *testing.T) {
+	c, hm := graftLedger(t, correctXref)
+	s := EvolveSample(context.Background(), c, bench.ArmGraft)
+	if s.Outcome != bench.Works || s.Passed != s.Checks || s.Checks < 51 {
+		t.Fatalf("%+v regen=%v", s, hm.regen)
+	}
+	if !hm.regen["Deposits and withdrawals"] || !hm.regen["Transfers"] {
+		t.Fatalf("the frozen statement did not reach the regions: %v", hm.regen)
+	}
+	if s.CrossrefCalls == nil || *s.CrossrefCalls != 1 || s.ChangeCalls == nil || *s.ChangeCalls < 5 {
+		t.Fatalf("crossref calls %v, change calls %v", deref(s.CrossrefCalls), deref(s.ChangeCalls))
+	}
+}
+
+// The limit, as a test: a well-formed but wrong "local" verdict is accepted
+// (that is what printing every local verdict is for) and the dropped rule shows
+// only in the oracle, exactly as before the step existed.
+func TestLedgerEvolveWrongLocalVerdictStaysSilentUntilTheOracle(t *testing.T) {
+	c, hm := graftLedger(t, localAnswer)
+	s := EvolveSample(context.Background(), c, bench.ArmGraft)
+	if s.Outcome != bench.Disagreed || !strings.Contains(s.Reason, "frozen_refuses_incoming") {
+		t.Fatalf("%+v", s)
+	}
+	if hm.regen["Deposits and withdrawals"] || hm.regen["Transfers"] {
+		t.Fatalf("nothing should have reached them: %v", hm.regen)
+	}
+}
+
+// A missing answer is loud: the accept refuses and nothing is generated.
+func TestLedgerEvolveMissingAnswerRefusesTheChange(t *testing.T) {
+	c, _ := graftLedger(t, func(string) string { return "```json\n{\"statements\":[]}\n```\n" })
+	s := EvolveSample(context.Background(), c, bench.ArmGraft)
+	if s.Outcome != bench.Broke || !strings.Contains(s.Reason, "UNANSWERED") {
+		t.Fatalf("%+v", s)
+	}
+}
+
+// A dangling claim (an unknown record) is refused as loudly.
+func TestLedgerEvolveDanglingAnswerRefusesTheChange(t *testing.T) {
+	c, _ := graftLedger(t, func(p string) string {
+		out := correctXref(p)
+		return strings.NewReplacer(`"record":"prov-`, `"record":"nope-prov-`).Replace(out)
+	})
+	s := EvolveSample(context.Background(), c, bench.ArmGraft)
+	if s.Outcome != bench.Broke || !strings.Contains(s.Reason, "DANGLING") {
+		t.Fatalf("%+v", s)
 	}
 }

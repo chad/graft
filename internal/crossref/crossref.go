@@ -195,6 +195,8 @@ func check(st Stmt, a Answer, recs []Rec, root string) (string, string) {
 		if len(a.Targets) == 0 {
 			return Dangling, "verdict constrains names no target"
 		}
+	case "":
+		return Unanswered, "no verdict for this changed statement"
 	default:
 		return Dangling, fmt.Sprintf("unknown verdict %q (want %q or %q)", a.Verdict, Local, Constrains)
 	}
