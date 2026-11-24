@@ -149,10 +149,10 @@ no tree.
 | code | meaning |
 |---|---|
 | 0 | proposal written; every changed statement answered and every answer valid (no changed statement: no model call, an empty proposal) |
-| 1 | no parseable proposal within the retries; nothing written |
+| 1 | no parseable proposal within the retries, or (`--strict`) a proposal still invalid after them; nothing written |
 | 2 | refused before asking the model (usage, config, drafts needing a human decision, `--out` exists) |
 | 3 | the model command or I/O failed |
-| 4 | proposal written, but some statements are UNANSWERED or carry a DANGLING claim (`--strict` makes that a retry). Advisory warnings never change the code |
+| 4 | proposal written, but some statements are UNANSWERED or carry a DANGLING claim after `--retries` re-asks (default 2): an UNANSWERED or DANGLING entry goes back to the model with its exact validation message ("Feedback on your previous attempt") before anything is written. Advisory warnings never change the code |
 
 ## 7. Evidence
 

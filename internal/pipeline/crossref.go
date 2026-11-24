@@ -394,6 +394,15 @@ func Crossref(ctx context.Context, in CrossrefInput) (crossref.Proposal, []cross
 	if err != nil || len(stmts) == 0 {
 		return crossref.Proposal{Schema: crossref.SchemaVersion}, stmts, recs, 0, err
 	}
+	if in.Skeleton == nil && in.Root != "" { // plain mode: offer the identifiers of each target's existing Go file
+		for i := range recs {
+			if strings.HasSuffix(recs[i].File, ".go") {
+				if b, err := readTreeFile(in.Root, recs[i].File); err == nil {
+					recs[i].Idents = crossref.Idents(b)
+				}
+			}
+		}
+	}
 	ci := crossref.Input{Stmts: stmts, Recs: recs, Conventions: in.Conventions, Root: in.Root, Retries: in.Retries, Strict: in.Strict}
 	if in.WithCode && in.Root != "" {
 		ci.Code = map[string]string{}
