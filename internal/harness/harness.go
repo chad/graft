@@ -28,6 +28,7 @@ import (
 
 	"github.com/chad/graft/internal/bench"
 	"github.com/chad/graft/internal/converge"
+	"github.com/chad/graft/internal/crossref"
 	"github.com/chad/graft/internal/drafter"
 	"github.com/chad/graft/internal/evidence"
 	"github.com/chad/graft/internal/lang"
@@ -173,7 +174,7 @@ func Sample(ctx context.Context, cfg Config, arm bench.Arm) bench.Sample {
 		if cfg.Case.Skeleton == nil {
 			return bench.Sample{Outcome: bench.Unreachable, Reason: "graft-render: the case has no skeleton"}
 		}
-		reason = cfg.graftStep(ctx, filepath.Join(dir, "repo"), root, cfg.Case.Spec, cfg.Case.Skeleton)
+		reason = cfg.graftStep(ctx, filepath.Join(dir, "repo"), root, cfg.Case.Spec, cfg.Case.Skeleton, nil)
 	case bench.ArmBaseline:
 		reason = cfg.oneCall(ctx, root, cfg.baselinePrompt())
 	case bench.ArmIntent:
@@ -246,7 +247,7 @@ func (cfg Config) displayName() string {
 }
 
 func (cfg Config) graftArm(ctx context.Context, dir, root string) string {
-	return cfg.graftStep(ctx, filepath.Join(dir, "repo"), root, cfg.Case.Spec, nil)
+	return cfg.graftStep(ctx, filepath.Join(dir, "repo"), root, cfg.Case.Spec, nil, nil)
 }
 
 func (cfg Config) baselinePrompt() string {
@@ -411,6 +412,7 @@ func EvolveSample(ctx context.Context, cfg Config, arm bench.Arm) bench.Sample {
 	c.Model = cm
 	var reason string
 	var preserved, changed, synthChanged *int
+	xcalls := 0          // model calls the cross-reference step took (graft arms), part of ChangeCalls
 	var pre bench.Sample // the step-1 tree scored with the unevolved oracle; zero if it could not be
 	switch arm {
 	case bench.ArmGraft, bench.ArmGraftRender:
@@ -422,7 +424,7 @@ func EvolveSample(ctx context.Context, cfg Config, arm bench.Arm) bench.Sample {
 				return bench.Sample{Outcome: bench.Unreachable, Reason: "graft-render: the case needs a skeleton for both steps"}
 			}
 		}
-		if reason = c.graftStep(ctx, repo, root, c.Case.Spec, skel1); reason != "" {
+		if reason = c.graftStep(ctx, repo, root, c.Case.Spec, skel1, nil); reason != "" {
 			break
 		}
 		before, err := snapshot(root, c.lang().Ext)
@@ -432,7 +434,7 @@ func EvolveSample(ctx context.Context, cfg Config, arm bench.Arm) bench.Sample {
 		}
 		pre = cfg.preScore(ctx, root, dir)
 		cm.calls = 0
-		if reason = c.graftStep(ctx, repo, root, c.Case.SpecV2, skel2); reason != "" {
+		if reason = c.graftStep(ctx, repo, root, c.Case.SpecV2, skel2, &xcalls); reason != "" {
 			break
 		}
 		after, _ := snapshot(root, c.lang().Ext)
@@ -464,18 +466,22 @@ func EvolveSample(ctx context.Context, cfg Config, arm bench.Arm) bench.Sample {
 		return bench.Sample{Outcome: bench.Unreachable, Reason: "evolve cases run the graft, graft-render and baseline arms"}
 	}
 	calls := cm.calls
+	var xc *int
+	if arm == bench.ArmGraft || arm == bench.ArmGraftRender {
+		xc = &xcalls
+	}
 	if reason != "" {
 		if strings.HasPrefix(reason, infraPrefix) {
-			return withPre(bench.Sample{Outcome: bench.Unreachable, Reason: strings.TrimPrefix(reason, infraPrefix), ChangeCalls: &calls}, pre)
+			return withPre(bench.Sample{Outcome: bench.Unreachable, Reason: strings.TrimPrefix(reason, infraPrefix), ChangeCalls: &calls, CrossrefCalls: xc}, pre)
 		}
-		return withPre(bench.Sample{Outcome: bench.Broke, Reason: reason, ChangeCalls: &calls, Preserved: preserved, DiffLines: changed}, pre)
+		return withPre(bench.Sample{Outcome: bench.Broke, Reason: reason, ChangeCalls: &calls, CrossrefCalls: xc, Preserved: preserved, DiffLines: changed}, pre)
 	}
 	bin := filepath.Join(dir, "server")
 	if reason := cfg.build(ctx, root, bin); reason != "" {
-		return withPre(bench.Sample{Outcome: bench.Broke, Reason: reason, ChangeCalls: &calls, Preserved: preserved, DiffLines: changed}, pre)
+		return withPre(bench.Sample{Outcome: bench.Broke, Reason: reason, ChangeCalls: &calls, CrossrefCalls: xc, Preserved: preserved, DiffLines: changed}, pre)
 	}
 	s := cfg.score(ctx, root, bin, cfg.Case.OracleArgs)
-	s.ChangeCalls, s.Preserved, s.DiffLines, s.SynthDiffLines = &calls, preserved, changed, synthChanged
+	s.ChangeCalls, s.CrossrefCalls, s.Preserved, s.DiffLines, s.SynthDiffLines = &calls, xc, preserved, changed, synthChanged
 	return withPre(s, pre)
 }
 
@@ -511,7 +517,12 @@ func withPre(s, pre bench.Sample) bench.Sample {
 
 // graftStep runs the pipeline once. A non-nil skeleton is the graft-render
 // arm: sedum renders the skeleton and the model converges only Body helpers.
-func (cfg Config) graftStep(ctx context.Context, repo, root, spec string, skel *recording.Skeleton) string {
+//
+// xcalls non-nil marks a change step (an evolve sample's second): the
+// cross-reference step runs first, with the arm's own model, and its proposal
+// is accepted as the human would (every entry valid, or the accept refuses and
+// the sample is Broke). The model calls it took are added to *xcalls.
+func (cfg Config) graftStep(ctx context.Context, repo, root, spec string, skel *recording.Skeleton, xcalls *int) string {
 	if skel != nil && (cfg.Sedum == nil || cfg.Generators == "") {
 		return infraPrefix + "graft-render needs sedum and its generators"
 	}
@@ -519,7 +530,21 @@ func (cfg Config) graftStep(ctx context.Context, repo, root, spec string, skel *
 	if skel == nil {
 		opts.Files, opts.Root = cfg.Files, root
 	}
-	acc, err := pipeline.AcceptWith(repo, drafter.Drafts(spec), "graft bench", time.Now(), opts)
+	drafts := drafter.Drafts(spec)
+	if xcalls != nil {
+		prop, _, _, n, err := pipeline.Crossref(ctx, pipeline.CrossrefInput{
+			Repo: repo, Drafts: drafts, Model: cfg.Model, Conventions: cfg.Case.Conventions, Root: root, Skeleton: skel, Accept: opts, Retries: 2,
+		})
+		*xcalls += n
+		if err != nil {
+			if errors.Is(err, crossref.ErrNoProposal) {
+				return err.Error() // the model gave nothing usable: the arm's result, not infrastructure
+			}
+			return infraPrefix + "crossref: " + err.Error()
+		}
+		opts.Crossref = &pipeline.CrossrefOptions{Proposal: &prop, Skeleton: skel, Root: root}
+	}
+	acc, err := pipeline.AcceptWith(repo, drafts, "graft bench", time.Now(), opts)
 	if err != nil {
 		return "accept: " + err.Error()
 	}

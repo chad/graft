@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"github.com/chad/graft/internal/crossref"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -22,7 +24,19 @@ const good = "package main\n\nimport \"fmt\"\n\nfunc main() { fmt.Println(\"hell
 // answer returns code for any prompt; per-file answers for the graft arm.
 type answer struct{ byFile map[string]string }
 
+// localAnswer answers a cross-reference prompt: every statement is local.
+func localAnswer(prompt string) string {
+	var ents []string
+	for _, m := range regexp.MustCompile(`- id (s\d+),`).FindAllStringSubmatch(prompt, -1) {
+		ents = append(ents, `{"id":"`+m[1]+`","verdict":"local"}`)
+	}
+	return "```json\n{\"statements\":[" + strings.Join(ents, ",") + "]}\n```\n"
+}
+
 func (a answer) Complete(_ context.Context, prompt string) (string, error) {
+	if strings.Contains(prompt, crossref.Marker) {
+		return localAnswer(prompt), nil
+	}
 	for f, code := range a.byFile {
 		if strings.Contains(prompt, "Write the complete file `"+f+"`") {
 			return "```go\n" + code + "```\n", nil
@@ -168,9 +182,12 @@ func TestEvolveSampleGraftPreservesAndCounts(t *testing.T) {
 	c := cfg(t, answer{map[string]string{"core.go": good, "extra.go": "package main\n\nfunc Twice(x int) int { return 2 * x }\n"}}, fakeOracle)
 	c.Case.SpecV2 = c.Case.Spec + "\n## Extra\n\n- The program must define a function Twice that returns twice its argument\n"
 	s := EvolveSample(context.Background(), c, bench.ArmGraft)
-	if s.Outcome != bench.Works || s.ChangeCalls == nil || *s.ChangeCalls != 1 || s.Preserved == nil || *s.Preserved != 1 ||
+	// the change is two calls: the cross-reference step (the new Extra section's
+	// statement is changed) and the region for Extra
+	if s.Outcome != bench.Works || s.ChangeCalls == nil || *s.ChangeCalls != 2 || s.CrossrefCalls == nil || *s.CrossrefCalls != 1 ||
+		s.Preserved == nil || *s.Preserved != 1 ||
 		s.DiffLines == nil || *s.DiffLines != 5 { // extra.go: 3 body lines + 2 marker lines
-		t.Fatalf("%+v calls=%v preserved=%v", s, deref(s.ChangeCalls), deref(s.Preserved))
+		t.Fatalf("%+v calls=%v xcalls=%v preserved=%v", s, deref(s.ChangeCalls), deref(s.CrossrefCalls), deref(s.Preserved))
 	}
 }
 
@@ -375,5 +392,34 @@ func TestEvolveSampleStepOneScoreIsTakenBeforeTheChange(t *testing.T) {
 	}
 	if s.PreUnscored {
 		t.Fatal("a scored step 1 is not unscored")
+	}
+}
+
+// retryModel answers the first cross-reference call with nonsense, then like answer.
+type retryModel struct {
+	answer
+	n *int
+}
+
+func (m retryModel) Complete(ctx context.Context, p string) (string, error) {
+	if strings.Contains(p, crossref.Marker) {
+		*m.n++
+		if *m.n == 1 {
+			return "I think these are all local", nil
+		}
+	}
+	return m.answer.Complete(ctx, p)
+}
+
+// The bench's cross-reference call retries an unparseable answer like the CLI
+// does (default 2), so one bad reply is not a Broke sample.
+func TestEvolveCrossrefRetriesLikeTheCLI(t *testing.T) {
+	c := cfg(t, answer{map[string]string{"core.go": good, "extra.go": "package main\n\nfunc Twice(x int) int { return 2 * x }\n"}}, fakeOracle)
+	c.Case.SpecV2 = c.Case.Spec + "\n## Extra\n\n- The program must define a function Twice that returns twice its argument\n"
+	n := 0
+	c.Model = retryModel{c.Model.(answer), &n}
+	s := EvolveSample(context.Background(), c, bench.ArmGraft)
+	if s.Outcome != bench.Works || s.CrossrefCalls == nil || *s.CrossrefCalls != 2 {
+		t.Fatalf("%+v xcalls=%v", s, deref(s.CrossrefCalls))
 	}
 }

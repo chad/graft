@@ -113,7 +113,7 @@ func changeCosts(recs []Record, excluded map[int]string) []string {
 		if _, ex := excluded[i]; ex {
 			continue
 		}
-		var calls, kept, bytes, synth, pre []string
+		var calls, xcalls, kept, bytes, synth, pre []string
 		for _, s := range r.Samples {
 			if s.PreChecks != nil && s.PrePassed != nil {
 				p := fmt.Sprintf("%d/%d", *s.PrePassed, *s.PreChecks)
@@ -133,6 +133,9 @@ func changeCosts(recs []Record, excluded map[int]string) []string {
 			if s.ChangeCalls != nil {
 				calls = append(calls, fmt.Sprint(*s.ChangeCalls))
 			}
+			if s.CrossrefCalls != nil {
+				xcalls = append(xcalls, fmt.Sprint(*s.CrossrefCalls))
+			}
 			if s.Preserved != nil {
 				kept = append(kept, fmt.Sprint(*s.Preserved))
 			}
@@ -141,6 +144,9 @@ func changeCosts(recs []Record, excluded map[int]string) []string {
 			continue
 		}
 		line := fmt.Sprintf("%s @%.12s: model calls for the change [%s]", r.Arm, r.Commit, strings.Join(calls, " "))
+		if len(xcalls) > 0 {
+			line += fmt.Sprintf(" of which the cross-reference step [%s]", strings.Join(xcalls, " "))
+		}
 		if r.Tools != "" {
 			line = fmt.Sprintf("%s (+ %s)", line, r.Tools)
 		}

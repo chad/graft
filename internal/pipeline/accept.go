@@ -29,6 +29,11 @@ type Entry struct {
 	DerivedFrom []string `json:"derived_from"`
 	Anchor      string   `json:"anchor"`
 	Order       int      `json:"order"` // position in the spec, for generation order
+	// Imports are statements copied in from other sections by an accepted
+	// cross-reference (SPEC §12). They are not DerivedFrom, so they never
+	// affect how a re-run maps a section onto this record; each follows its
+	// source clause and is dropped when the source is edited or removed.
+	Imports []Import `json:"imports,omitempty"`
 }
 
 // Index is .graft/accepted.json in the records repo.
@@ -111,6 +116,11 @@ type AcceptOptions struct {
 	// yet (a section never takes over a hand-written file) and its path must
 	// not pass through a symlink.
 	Root string
+	// Crossref, when non-nil, enforces the cross-reference rule (SPEC §12):
+	// every statement that is new or changed since the last accept needs an
+	// answer, or the acceptance is refused with ErrCrossref. Nil leaves the
+	// library behaviour as it was; `graft run --accept` always sets it.
+	Crossref *CrossrefOptions
 }
 
 // ErrBadFile: a section file that cannot be used.
@@ -336,14 +346,26 @@ func AcceptWith(repo string, drafts []drafter.Draft, author string, now time.Tim
 		return nil, err
 	}
 	fs := &record.FilesStore{Root: repo}
+	ids := make([]string, len(props)) // record ids, minted up front so an import can name a source that is new
+	for i, p := range props {
+		if p.Kind == drafter.New {
+			ids[i] = newID(now)
+		} else {
+			ids[i] = p.RecordID
+		}
+	}
+	imports, err := crossrefImports(fs, idx, props, ids, files, opts.Crossref)
+	if err != nil {
+		return nil, err
+	}
 	var out []Accepted
 	for i, p := range props {
 		d := p.Draft
-		id, created := p.RecordID, false
+		id, created := ids[i], false
 		var r *record.Record
 		var doc *record.Document
 		if p.Kind == drafter.New {
-			id, created = newID(now), true
+			created = true
 			r = &record.Record{Schema: 2, ID: id, Type: record.TypeImprint, Status: record.StatusOpen,
 				CreatedAt: now.UTC().Format("2006-01-02"), Author: author}
 		} else if r, doc, err = fs.Load(id); err != nil {
@@ -354,6 +376,18 @@ func AcceptWith(repo string, drafts []drafter.Draft, author string, now time.Tim
 			before, _ = r.ContentHash(fs.Specs())
 		}
 		file := files[i]
+		var prev []Import
+		if p.Kind == drafter.Revise {
+			prev = idx.Records[id].Imports
+		}
+		kept, dropped, added := mergeImports(prev, imports[i], props, ids)
+		if opts.Crossref != nil && opts.Crossref.Report != nil {
+			for _, im := range dropped {
+				opts.Crossref.Report.Dropped = append(opts.Crossref.Report.Dropped,
+					fmt.Sprintf("%q (from %s) in %s: its source was edited or removed", im.Text, im.FromSection, d.Section))
+			}
+		}
+		d.Statements = withImports(d.Statements, kept)
 		r.Title = d.Section
 		r.Intent, r.Constraints = intent(d)
 		r.AffectedScope = []string{file}
@@ -362,12 +396,15 @@ func AcceptWith(repo string, drafts []drafter.Draft, author string, now time.Tim
 			bump := record.Bump{Author: author, Now: now}
 			if !created {
 				bump.Reason = "spec revised"
+				if added || len(dropped) > 0 {
+					bump.Reason = "spec revised (cross-reference imports changed)"
+				}
 			}
 			if _, err := record.Commit(fs, r, doc, bump); err != nil {
 				return nil, fmt.Errorf("pipeline: commit %s: %w", id, err)
 			}
 		}
-		e := Entry{Section: d.Section, File: file, DerivedFrom: d.DerivedFrom, Anchor: d.Anchor, Order: i}
+		e := Entry{Section: d.Section, File: file, DerivedFrom: d.DerivedFrom, Anchor: d.Anchor, Order: i, Imports: kept}
 		idx.Records[id] = e
 		// Save after every record: a failure part-way leaves the index naming
 		// exactly the records that were written, so a re-run revises them
