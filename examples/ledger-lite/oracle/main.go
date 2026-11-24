@@ -776,9 +776,11 @@ func main() {
 	addr := flag.String("addr", "", "address of an already-running server")
 	only := flag.String("run", "", "run only checks whose name contains this")
 	list := flag.Bool("list", false, "list the checks (name, visible overlap) and exit")
+	v2 := flag.Bool("v2", false, "score the spec-v2 revision (frozen accounts refuse incoming money; journal entries carry balance)")
 	flag.Parse()
+	active := checkSet(*v2)
 	if *list {
-		for _, c := range checks {
+		for _, c := range active {
 			fmt.Printf("%-40s visible=%v\n", c.name, c.visible)
 		}
 		return
@@ -798,7 +800,7 @@ func main() {
 		os.Exit(2)
 	}
 	r := result{Failed: []string{}, Errors: map[string]string{}}
-	for _, c := range checks {
+	for _, c := range active {
 		if *only != "" && !strings.Contains(c.name, *only) {
 			continue
 		}

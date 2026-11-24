@@ -192,7 +192,7 @@ func Sample(ctx context.Context, cfg Config, arm bench.Arm) bench.Sample {
 	if reason := cfg.build(ctx, root, bin); reason != "" {
 		return bench.Sample{Outcome: bench.Broke, Reason: reason}
 	}
-	return cfg.score(ctx, root, bin)
+	return cfg.score(ctx, root, bin, cfg.Case.OracleArgs)
 }
 
 // lang is the target language (Go when unset).
@@ -298,8 +298,8 @@ type oracleResult struct {
 
 // score runs the oracle: exit 0/1 with JSON is a measurement; exit 2 means
 // the server never listened (broke); anything else is the harness's failure.
-func (cfg Config) score(ctx context.Context, root, bin string) bench.Sample {
-	argv := append(append([]string{}, cfg.OracleArgv...), cfg.Case.OracleArgs...)
+func (cfg Config) score(ctx context.Context, root, bin string, oracleArgs []string) bench.Sample {
+	argv := append(append([]string{}, cfg.OracleArgv...), oracleArgs...)
 	if l := cfg.lang(); len(l.Run) == 1 && l.Run[0] == "{out}" {
 		argv = append(argv, "-bin", bin) // a built binary (Go): as before
 	} else {
@@ -411,6 +411,7 @@ func EvolveSample(ctx context.Context, cfg Config, arm bench.Arm) bench.Sample {
 	c.Model = cm
 	var reason string
 	var preserved, changed, synthChanged *int
+	var pre bench.Sample // the step-1 tree scored with the unevolved oracle; zero if it could not be
 	switch arm {
 	case bench.ArmGraft, bench.ArmGraftRender:
 		repo := filepath.Join(dir, "repo")
@@ -429,6 +430,7 @@ func EvolveSample(ctx context.Context, cfg Config, arm bench.Arm) bench.Sample {
 			reason = err.Error()
 			break
 		}
+		pre = cfg.preScore(ctx, root, dir)
 		cm.calls = 0
 		if reason = c.graftStep(ctx, repo, root, c.Case.SpecV2, skel2); reason != "" {
 			break
@@ -451,6 +453,7 @@ func EvolveSample(ctx context.Context, cfg Config, arm bench.Arm) bench.Sample {
 			break
 		}
 		before, _ := snapshot(root, c.lang().Ext)
+		pre = cfg.preScore(ctx, root, dir)
 		cm.calls = 0
 		if reason = c.oneCall(ctx, root, c.evolvePrompt(before[c.mainFile()])); reason == "" {
 			after, _ := snapshot(root, c.lang().Ext)
@@ -463,16 +466,46 @@ func EvolveSample(ctx context.Context, cfg Config, arm bench.Arm) bench.Sample {
 	calls := cm.calls
 	if reason != "" {
 		if strings.HasPrefix(reason, infraPrefix) {
-			return bench.Sample{Outcome: bench.Unreachable, Reason: strings.TrimPrefix(reason, infraPrefix), ChangeCalls: &calls}
+			return withPre(bench.Sample{Outcome: bench.Unreachable, Reason: strings.TrimPrefix(reason, infraPrefix), ChangeCalls: &calls}, pre)
 		}
-		return bench.Sample{Outcome: bench.Broke, Reason: reason, ChangeCalls: &calls, Preserved: preserved, DiffLines: changed}
+		return withPre(bench.Sample{Outcome: bench.Broke, Reason: reason, ChangeCalls: &calls, Preserved: preserved, DiffLines: changed}, pre)
 	}
 	bin := filepath.Join(dir, "server")
 	if reason := cfg.build(ctx, root, bin); reason != "" {
-		return bench.Sample{Outcome: bench.Broke, Reason: reason, ChangeCalls: &calls, Preserved: preserved, DiffLines: changed}
+		return withPre(bench.Sample{Outcome: bench.Broke, Reason: reason, ChangeCalls: &calls, Preserved: preserved, DiffLines: changed}, pre)
 	}
-	s := cfg.score(ctx, root, bin)
+	s := cfg.score(ctx, root, bin, cfg.Case.OracleArgs)
 	s.ChangeCalls, s.Preserved, s.DiffLines, s.SynthDiffLines = &calls, preserved, changed, synthChanged
+	return withPre(s, pre)
+}
+
+// preScore builds the tree as it stands (the step-1 tree, before the change)
+// and scores it with the oracle run without the case's evolve arguments. It
+// is a measurement only: a tree that does not build or an oracle that gives no
+// reading returns the zero Sample, and the evolve sample records no pre-score.
+func (cfg Config) preScore(ctx context.Context, root, dir string) bench.Sample {
+	bin := filepath.Join(dir, "server-v1")
+	if cfg.build(ctx, root, bin) != "" {
+		return bench.Sample{}
+	}
+	s := cfg.score(ctx, root, bin, nil)
+	if s.Checks == 0 {
+		return bench.Sample{}
+	}
+	return s
+}
+
+// withPre records a step-1 score on an evolve sample.
+func withPre(s, pre bench.Sample) bench.Sample {
+	if pre.Checks == 0 {
+		s.PreUnscored = true
+		return s
+	}
+	c, p := pre.Checks, pre.Passed
+	s.PreChecks, s.PrePassed = &c, &p
+	if pre.Outcome == bench.Disagreed {
+		s.PreReason = pre.Reason
+	}
 	return s
 }
 

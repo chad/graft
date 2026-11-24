@@ -49,14 +49,20 @@ var mutants = []mutant{
 }
 
 func TestMutantsAreCaught(t *testing.T) {
+	runMutants(t, "../reference/main.go", checkSet(false), mutants)
+}
+
+// runMutants plants each mutant in a copy of the reference at ref and checks
+// that the named check, from set, fails on it.
+func runMutants(t *testing.T, ref string, set []check, ms []mutant) {
 	if testing.Short() {
 		t.Skip("short")
 	}
-	src, err := os.ReadFile("../reference/main.go")
+	src, err := os.ReadFile(ref)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, m := range mutants {
+	for _, m := range ms {
 		t.Run(m.name, func(t *testing.T) {
 			if strings.Count(string(src), m.from) != 1 {
 				t.Fatalf("mutation anchor must occur exactly once in the reference: %q", m.from)
@@ -71,9 +77,9 @@ func TestMutantsAreCaught(t *testing.T) {
 				t.Fatalf("mutant does not build: %v\n%s", err, out)
 			}
 			var target *check
-			for i := range checks {
-				if checks[i].name == m.mustFail {
-					target = &checks[i]
+			for i := range set {
+				if set[i].name == m.mustFail {
+					target = &set[i]
 				}
 			}
 			if target == nil {

@@ -117,6 +117,18 @@ type Sample struct {
 	// SynthDiffLines is the part of DiffLines in model-written *_synth.go
 	// files (graft-render only); the rest was rendered by sedum.
 	SynthDiffLines *int `json:"synth_diff_lines,omitempty"`
+	// PreChecks / PrePassed / PreReason: evolve cases only. The tree as it
+	// stood after step 1, before the change, scored with the oracle without
+	// the evolve arguments (the unevolved spec's checks). They tell a defect
+	// built at step 1 from one the change introduced. Optional: absent in
+	// records written before they existed, or when step 1 could not be scored.
+	PreChecks *int   `json:"pre_checks,omitempty"`
+	PrePassed *int   `json:"pre_passed,omitempty"`
+	PreReason string `json:"pre_reason,omitempty"`
+	// PreUnscored: the step-1 tree could not be built or scored, so there is
+	// no pre-score. It distinguishes that from a record written before
+	// pre-scores existed (neither field set).
+	PreUnscored bool `json:"pre_unscored,omitempty"`
 }
 
 // Attribution says which layer(s) one failed sample's failure came from.
