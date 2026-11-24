@@ -239,22 +239,33 @@ silently drop it, so the step below sits between the drafter diff and accept.
 - **Propose, never apply.** `graft crossref` writes `crossref.json`. Each answer
   is a receipt: the statement quoted from the spec, the target record (an id,
   or a section heading for a section that is new in the same change), a reason,
-  the code location (`file: Identifier`) that must change, and a quote from the
-  target's record. Receipts are validated for FORM: the quoted text is
-  re-derived from the spec, the target must exist and not be the statement's own
-  record, the location must be the target's file (with `--root`, the identifier
-  must occur in it), the quote must occur in the target's record. An answer that
-  fails is UNANSWERED or DANGLING and is never accepted.
+  the code location (`file: Identifier`, both parts required, no `..` segment)
+  that must change, and a quote from the target's record (its OWN statements,
+  never text imported into it). Receipts are validated for FORM: the quoted text
+  is re-derived from the spec, the target must exist and not be the statement's
+  own record, the location must be the target's file (with `--root`, the
+  identifier must occur in it, at accept too), and the quote must occur in the
+  target's record and may not be empty. A target that is a section new in the
+  same change has no record text yet, so its quote cannot be checked; its
+  location is checked against the file accept will place for it (the `files`
+  config included). In render mode the identifier must be a stub or decl of the
+  target's file in the skeleton, else "needs a skeleton change". Answers belong
+  to a statement by (section, clause hash): the same sentence in two sections is
+  two statements. An answer that fails is UNANSWERED or DANGLING and is never
+  accepted.
 - **Accept copies.** `graft run --accept --crossref crossref.json` copies each
   accepted statement into the target's draft, revising that record (new version,
   reason "spec revised (cross-reference imports changed)") so its region
-  regenerates. The link to the source (section, clause hash) lives in graft's
+  regenerates. The link to the source (source record id, clause hash) lives in graft's
   index (`.graft/accepted.json`, `imports`), never in `derived_from`, so it
   cannot change how a re-run maps a section onto a record, and provenance needs
   no change. An import follows its source: while the source clause stands the
   copy stays with no model call; when the source is edited or removed the copy
   is dropped, the owner is revised, and an edited statement is a new changed
-  statement that is asked about again. One live copy, never two.
+  statement that is asked about again. One live copy, never two. Renaming the
+  source section's heading keeps its imports (the link is the record id). An
+  import dropped for any reason but its source going makes the sentence a
+  changed statement again: it is asked, never lost.
 - **No silent success.** `graft run --accept` refuses (exit 2, before any record
   is written) while a new or changed statement has no valid answer, unless
   `--no-crossref` is given, which prints how many statements were accepted

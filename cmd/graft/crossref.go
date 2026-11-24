@@ -17,6 +17,7 @@ import (
 
 	"github.com/chad/graft/internal/crossref"
 	"github.com/chad/graft/internal/drafter"
+	"github.com/chad/graft/internal/lang"
 	"github.com/chad/graft/internal/model"
 	"github.com/chad/graft/internal/pipeline"
 	"github.com/chad/graft/internal/recording"
@@ -139,11 +140,20 @@ func crossrefCmd(args []string, stdout, stderr io.Writer) int {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	profile, err := lang.Resolve(cfg.Language)
+	if err != nil {
+		fmt.Fprintf(stderr, "graft: %v\n", err)
+		return 2
+	}
 	drafts := drafter.Drafts(string(spec))
+	acceptOpts := pipeline.AcceptOptions{Ext: profile.Ext, Files: cfg.Files}
+	if skel == nil {
+		acceptOpts.Root = *root // as graft run: plain mode never takes over an existing file
+	}
 	fmt.Fprintf(stdout, "model: %s\n", strings.Join(argv, " "))
 	prop, stmts, recs, calls, err := pipeline.Crossref(ctx, pipeline.CrossrefInput{
 		Repo: *repo, Drafts: drafts, Model: model.Command{Argv: argv, Timeout: timeout},
-		Conventions: string(conv), Root: *root, WithCode: *withCode, Retries: *retries, Strict: *strict, Skeleton: skel,
+		Conventions: string(conv), Root: *root, WithCode: *withCode, Retries: *retries, Strict: *strict, Skeleton: skel, Accept: acceptOpts,
 	})
 	fmt.Fprintf(stdout, "%d model call(s)\n", calls)
 	switch {

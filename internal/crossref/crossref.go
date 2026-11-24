@@ -143,16 +143,18 @@ func ownerOf(recs []Rec, st Stmt) *Rec {
 // location's identifier must occur in the target's file if that file exists.
 // Nothing the answers' own Status or Text fields say is trusted.
 func Validate(stmts []Stmt, recs []Rec, answers []Answer, root string) ([]Answer, bool) {
+	// An answer belongs to a statement by (section, clause hash): the same
+	// sentence in two sections is two statements, each with its own answer.
 	byHash := map[string][]Answer{}
 	for _, a := range answers {
-		byHash[a.Hash] = append(byHash[a.Hash], a)
+		byHash[key(a.Section, a.Hash)] = append(byHash[key(a.Section, a.Hash)], a)
 	}
 	var out []Answer
 	allOK := true
 	seen := map[string]bool{}
 	for _, st := range stmts {
-		seen[st.Hash] = true
-		as := byHash[st.Hash]
+		seen[key(st.Section, st.Hash)] = true
+		as := byHash[key(st.Section, st.Hash)]
 		switch {
 		case len(as) == 0:
 			out = append(out, Answer{Section: st.Section, Hash: st.Hash, Text: st.Text, Status: Unanswered, Detail: "no answer for this changed statement"})
@@ -180,7 +182,7 @@ func Validate(stmts []Stmt, recs []Rec, answers []Answer, root string) ([]Answer
 	}
 	var stale []Answer
 	for _, a := range answers {
-		if !seen[a.Hash] {
+		if !seen[key(a.Section, a.Hash)] {
 			a.Status, a.Detail = Stale, "not a changed statement of this spec (the spec moved since the proposal)"
 			stale = append(stale, a)
 			allOK = false
@@ -189,6 +191,8 @@ func Validate(stmts []Stmt, recs []Rec, answers []Answer, root string) ([]Answer
 	sort.SliceStable(stale, func(i, j int) bool { return stale[i].Hash < stale[j].Hash })
 	return append(out, stale...), allOK
 }
+
+func key(section, hash string) string { return section + "\x00" + hash }
 
 func check(st Stmt, a Answer, recs []Rec, root string) (string, string) {
 	switch a.Verdict {
@@ -238,12 +242,23 @@ func check(st Stmt, a Answer, recs []Rec, root string) (string, string) {
 }
 
 func checkLocation(r *Rec, loc, root string) string {
-	file, ident, _ := strings.Cut(loc, ":")
+	file, ident, found := strings.Cut(loc, ":")
 	file, ident = strings.TrimSpace(file), strings.TrimSpace(ident)
-	if file == "" {
-		return "no location (want \"file: Identifier\")"
+	if !found || file == "" || ident == "" {
+		return fmt.Sprintf("location %q is not of the form \"file: Identifier\"", loc)
 	}
-	if r.File != "" && filepath.ToSlash(filepath.Clean(file)) != r.File {
+	// Refuse a path that climbs or is absolute BEFORE it is cleaned: Clean would
+	// quietly resolve "a/../deposits.go" into the record's own file.
+	norm := strings.ReplaceAll(file, "\\", "/")
+	for _, seg := range strings.Split(norm, "/") {
+		if seg == ".." {
+			return fmt.Sprintf("location file %q has a .. segment", file)
+		}
+	}
+	if strings.HasPrefix(norm, "/") {
+		return fmt.Sprintf("location file %q is absolute", file)
+	}
+	if r.File != "" && filepath.ToSlash(filepath.Clean(norm)) != r.File {
 		return fmt.Sprintf("location file %q is not the record's file %q", file, r.File)
 	}
 	if r.Render {
@@ -476,11 +491,11 @@ func tokens(s string) map[string]bool {
 func Warn(stmts []Stmt, answers []Answer, recs []Rec) []string {
 	byHash := map[string]Answer{}
 	for _, a := range answers {
-		byHash[a.Hash] = a
+		byHash[key(a.Section, a.Hash)] = a
 	}
 	var out []string
 	for _, st := range stmts {
-		a, ok := byHash[st.Hash]
+		a, ok := byHash[key(st.Section, st.Hash)]
 		if !ok || a.Status != OK || a.Verdict != Local {
 			continue
 		}

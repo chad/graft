@@ -38,14 +38,14 @@ func TestValidate(t *testing.T) {
 		{"unknown record", ans(Constrains, func() Target { g := good(); g.Record = "rec-nope"; return g }()), Dangling, "not a record"},
 		{"own record", ans(Constrains, func() Target { g := good(); g.Record = "rec-freeze"; return g }()), Dangling, "own record"},
 		{"location outside file", ans(Constrains, func() Target { g := good(); g.Location = "other.go: X"; return g }()), Dangling, "not the record's file"},
-		{"no location", ans(Constrains, func() Target { g := good(); g.Location = ""; return g }()), Dangling, "no location"},
+		{"no location", ans(Constrains, func() Target { g := good(); g.Location = ""; return g }()), Dangling, "not of the form"},
 		{"quote not in record", ans(Constrains, func() Target { g := good(); g.Quote = "invented"; return g }()), Dangling, "does not occur"},
 		{"no reason", ans(Constrains, func() Target { g := good(); g.Reason = " "; return g }()), Dangling, "no reason"},
 		{"constrains without targets", ans(Constrains), Dangling, "no target"},
 		{"local with targets", ans(Local, good()), Dangling, "local with targets"},
 		{"bad verdict", ans("maybe"), Dangling, "unknown verdict"},
 		{"duplicate", append(ans(Local), ans(Local)...), Dangling, "2 answers"},
-		{"altered text", []Answer{{Hash: "h1", Text: "something else", Verdict: Local}}, Dangling, "not the spec's"},
+		{"altered text", []Answer{{Section: "Freezing", Hash: "h1", Text: "something else", Verdict: Local}}, Dangling, "not the spec's"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			got, ok := Validate(stmts, recs, c.answers, "")
@@ -68,7 +68,7 @@ func TestValidateStatusInFileNotTrusted(t *testing.T) {
 }
 
 func TestValidateStaleAnswer(t *testing.T) {
-	a := append(ans(Local), Answer{Hash: "gone", Text: "x", Verdict: Local})
+	a := append(ans(Local), Answer{Section: "Freezing", Hash: "gone", Text: "x", Verdict: Local})
 	got, ok := Validate(stmts, recs, a, "")
 	if ok || got[len(got)-1].Status != Stale {
 		t.Fatalf("got %v ok=%v", got, ok)
@@ -169,12 +169,12 @@ func TestWarnIsAdvisoryAndNeedsALocalVerdict(t *testing.T) {
 		{ID: "c", Section: "Channels", Intent: "Channels\n- [constraint] JOIN answers 332 then 353."},
 	}
 	st := []Stmt{{Section: "Topics", Hash: "a", Text: "A joiner receives 332 before 353 and `JOIN` stays in Channels.", Own: "t"}}
-	local := []Answer{{Hash: "a", Verdict: Local, Status: OK}}
+	local := []Answer{{Section: "Topics", Hash: "a", Verdict: Local, Status: OK}}
 	w := Warn(st, local, rs)
 	if len(w) < 2 || !strings.Contains(strings.Join(w, "\n"), "332") || !strings.Contains(strings.Join(w, "\n"), "Channels") {
 		t.Fatalf("warnings %v", w)
 	}
-	if got := Warn(st, []Answer{{Hash: "a", Verdict: Constrains, Status: OK}}, rs); len(got) != 0 {
+	if got := Warn(st, []Answer{{Section: "Topics", Hash: "a", Verdict: Constrains, Status: OK}}, rs); len(got) != 0 {
 		t.Fatalf("a constrains verdict is not warned about: %v", got)
 	}
 	// own record's tokens do not count
@@ -195,7 +195,6 @@ func TestRenderLocationMustBeAStubOrDeclOfTheTargetsSkeletonFile(t *testing.T) {
 		{"deposits.go: Ledger.Post", OK},
 		{"deposits.go: (*Ledger).Post()", OK},
 		{"deposits.go: Deposit", Dangling}, // not in the skeleton: a skeleton change
-		{"deposits.go", Dangling},          // render mode needs the identifier
 	} {
 		g := good()
 		g.Location = c.loc
@@ -222,5 +221,67 @@ func TestRenderLocationMustBeAStubOrDeclOfTheTargetsSkeletonFile(t *testing.T) {
 	}
 	if p := Prompt(Input{Stmts: stmts, Recs: []Rec{{ID: "x", Section: "S", Render: true, Symbols: []string{"init"}}}}); !strings.Contains(p, "a location must name one of these): init") {
 		t.Error("the prompt must list the skeleton's names in render mode")
+	}
+}
+
+func TestLocationMustBeFileColonIdentifierWithoutClimbing(t *testing.T) {
+	for _, c := range []struct {
+		loc, want, detail string
+	}{
+		{"deposits.go: Deposit", OK, ""},
+		{"deposits.go", Dangling, "not of the form"},
+		{"deposits.go:", Dangling, "not of the form"},
+		{": Deposit", Dangling, "not of the form"},
+		{"../deposits.go: Deposit", Dangling, ".. segment"},
+		{"x/../deposits.go: Deposit", Dangling, ".. segment"}, // Clean would have resolved it to the record's file
+		{"/deposits.go: Deposit", Dangling, "absolute"},
+		{"x\\..\\deposits.go: Deposit", Dangling, ".. segment"},
+		{"./deposits.go: Deposit", OK, ""},
+		{"other.go: Deposit", Dangling, "not the record's file"},
+	} {
+		g := good()
+		g.Location = c.loc
+		got, _ := Validate(stmts, recs, ans(Constrains, g), "")
+		if got[0].Status != c.want || !strings.Contains(got[0].Detail, c.detail) {
+			t.Errorf("%q: %s %q, want %s %q", c.loc, got[0].Status, got[0].Detail, c.want, c.detail)
+		}
+	}
+}
+
+func TestEmptyQuoteIsRefusedUnlessTheTargetIsNew(t *testing.T) {
+	g := good()
+	g.Quote = ""
+	if got, _ := Validate(stmts, recs, ans(Constrains, g), ""); got[0].Status != Dangling {
+		t.Fatalf("an existing record needs a quote: %+v", got[0])
+	}
+	rs := append(append([]Rec(nil), recs...), Rec{Section: "Topics", File: "topics.go"})
+	n := Target{Record: "Topics", Reason: "r", Location: "topics.go: Set"}
+	if got, _ := Validate(stmts, rs, ans(Constrains, n), ""); got[0].Status != OK {
+		t.Fatalf("a New target cannot be quote-checked: %+v", got[0])
+	}
+}
+
+func TestAnswersAreKeyedBySectionAndHash(t *testing.T) {
+	two := []Stmt{
+		{Section: "A", Hash: "h", Text: "Every reply must be logged", Own: "ra"},
+		{Section: "B", Hash: "h", Text: "Every reply must be logged", Own: "rb"},
+	}
+	rs := []Rec{{ID: "ra", Section: "A", File: "a.go"}, {ID: "rb", Section: "B", File: "b.go"}, {ID: "rc", Section: "C", File: "c.go", Intent: "C\n- [constraint] C logs"}}
+	as := []Answer{
+		{Section: "A", Hash: "h", Text: "Every reply must be logged", Verdict: Local},
+		{Section: "B", Hash: "h", Text: "Every reply must be logged", Verdict: Local},
+	}
+	got, ok := Validate(two, rs, as, "")
+	if !ok || len(got) != 2 {
+		t.Fatalf("%v %+v", ok, got)
+	}
+	// the same section answered twice is still a duplicate
+	if _, ok := Validate(two[:1], rs, append(as[:1:1], as[0]), ""); ok {
+		t.Fatal("two answers for one (section, hash) must not pass")
+	}
+	// an answer for the wrong section is stale, and its statement unanswered
+	got, ok = Validate(two[:1], rs, []Answer{{Section: "B", Hash: "h", Text: "x", Verdict: Local}}, "")
+	if ok || got[0].Status != Unanswered || got[1].Status != Stale {
+		t.Fatalf("%+v", got)
 	}
 }

@@ -116,7 +116,7 @@ func TestCrossrefProposesAcceptsAndSummarises(t *testing.T) {
 		t.Fatalf("%d %s %s", code, out, errb)
 	}
 	id, file := e.betaTarget(t)
-	model := e.cxModel(t, "x.sh", `{"statements":[{"id":"s1","verdict":"constrains","targets":[{"record":"`+id+`","reason":"the rule binds Beta's counting code","location":"`+file+`: count","quote":"Beta must count the events"}]}]}`)
+	model := e.cxModel(t, "x.sh", `{"statements":[{"id":"s1","verdict":"constrains","targets":[{"record":"`+id+`","reason":"the rule binds Beta's counting code","location":"`+file+`: main","quote":"Beta must count the events"}]}]}`)
 	out1 := filepath.Join(e.dir, "crossref.json")
 	args := []string{"crossref", "--config", e.cfg, "--spec", s2, "--repo", e.repo, "--out", out1, "--model", model}
 	code, out, errb := e.run(t, args...)

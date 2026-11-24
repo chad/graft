@@ -346,18 +346,26 @@ func AcceptWith(repo string, drafts []drafter.Draft, author string, now time.Tim
 		return nil, err
 	}
 	fs := &record.FilesStore{Root: repo}
-	imports, err := crossrefImports(fs, idx, props, opts.Crossref)
+	ids := make([]string, len(props)) // record ids, minted up front so an import can name a source that is new
+	for i, p := range props {
+		if p.Kind == drafter.New {
+			ids[i] = newID(now)
+		} else {
+			ids[i] = p.RecordID
+		}
+	}
+	imports, err := crossrefImports(fs, idx, props, ids, files, opts.Crossref)
 	if err != nil {
 		return nil, err
 	}
 	var out []Accepted
 	for i, p := range props {
 		d := p.Draft
-		id, created := p.RecordID, false
+		id, created := ids[i], false
 		var r *record.Record
 		var doc *record.Document
 		if p.Kind == drafter.New {
-			id, created = newID(now), true
+			created = true
 			r = &record.Record{Schema: 2, ID: id, Type: record.TypeImprint, Status: record.StatusOpen,
 				CreatedAt: now.UTC().Format("2006-01-02"), Author: author}
 		} else if r, doc, err = fs.Load(id); err != nil {
@@ -372,7 +380,7 @@ func AcceptWith(repo string, drafts []drafter.Draft, author string, now time.Tim
 		if p.Kind == drafter.Revise {
 			prev = idx.Records[id].Imports
 		}
-		kept, dropped, added := mergeImports(prev, imports[i], drafts)
+		kept, dropped, added := mergeImports(prev, imports[i], props, ids)
 		if opts.Crossref != nil && opts.Crossref.Report != nil {
 			for _, im := range dropped {
 				opts.Crossref.Report.Dropped = append(opts.Crossref.Report.Dropped,

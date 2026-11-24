@@ -181,7 +181,7 @@ func correctXref(prompt string) string {
 			r := recs[sec]
 			q, _ := json.Marshal(r[2])
 			ts = append(ts, `{"record":"`+r[0]+`","reason":"the credit side of this route must refuse a frozen account","location":"`+
-				r[1]+`: the route","quote":`+string(q)+`}`)
+				r[1]+`: main","quote":`+string(q)+`}`)
 		}
 		ents = append(ents, `{"id":"`+m[1]+`","verdict":"constrains","targets":[`+strings.Join(ts, ",")+`]}`)
 	}
@@ -424,7 +424,7 @@ func renderLedger(t *testing.T, xref func(string) string) (Config, *renderHookMo
 // renderXref answers like correctXref but names the stub the skeleton has for
 // both targets: their init.
 func renderXref(prompt string) string {
-	return strings.ReplaceAll(correctXref(prompt), `.go: the route"`, `.go: init"`)
+	return strings.ReplaceAll(correctXref(prompt), `.go: main"`, `.go: init"`)
 }
 
 // The graft-render arm: with a correct answer the imports reach the Deposits
@@ -473,7 +473,7 @@ func TestLedgerEvolveRenderArmReachesDepositsAndTransfersThroughCrossref(t *test
 // file; one that does not needs a skeleton change, and the change is refused.
 func TestLedgerEvolveRenderArmRefusesALocationTheSkeletonLacks(t *testing.T) {
 	c, _ := renderLedger(t, func(p string) string {
-		return strings.ReplaceAll(correctXref(p), `.go: the route"`, `.go: Deposit"`)
+		return strings.ReplaceAll(correctXref(p), `.go: main"`, `.go: Deposit"`)
 	})
 	s := EvolveSample(context.Background(), c, bench.ArmGraftRender)
 	if s.Outcome != bench.Broke || !strings.Contains(s.Reason, "DANGLING") || !strings.Contains(s.Reason, "needs a skeleton change (graft draft --skeleton)") {

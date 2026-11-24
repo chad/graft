@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -42,7 +43,7 @@ func (f *fakeXref) Complete(_ context.Context, prompt string) (string, error) {
 			ents = append(ents, `{"id":"`+m[1]+`","verdict":"local"}`)
 			continue
 		}
-		name, quote, file := f.target, "", "x.go"
+		name, quote, file := f.target, "", strings.ToLower(f.target)+".go" // a section that is new: its derived file
 		if r, ok := recs[f.target]; ok {
 			quote, file = r[1], r[2]
 			if f.byID {
@@ -383,4 +384,195 @@ func readExample(t *testing.T, rel string) string {
 		t.Fatal(err)
 	}
 	return string(b)
+}
+
+// ---- review fixes (#43) ----
+
+func gammaSpec(extra map[string]string) string {
+	// Alpha, Beta, Gamma; extra maps a section name to a line appended to it
+	sec := func(name, line string) string {
+		s := "## " + name + "\n\n- " + line + "\n"
+		if e := extra[name]; e != "" {
+			s += "- " + e + "\n"
+		}
+		return s + "\n"
+	}
+	return "# T\n\n" + sec("Alpha", "Alpha must record every event it sees") + sec("Beta", "Beta must count the events it is told about") + sec("Gamma", "Gamma must keep its own tally of events")
+}
+
+// The same sentence in two sections is two statements with two answers.
+func TestCrossrefIdenticalStatementsInTwoSectionsAreTwoAnswers(t *testing.T) {
+	repo := t.TempDir()
+	xAccept(t, repo, gammaSpec(nil), nil)
+	const dup = "Every reply must be logged"
+	spec := gammaSpec(map[string]string{"Alpha": dup, "Beta": dup})
+	prop := xProposal(t, repo, spec, &fakeXref{rule: dup, target: "Gamma", byID: true})
+	if len(prop.Answers) != 2 {
+		t.Fatalf("%d answers: %+v", len(prop.Answers), prop.Answers)
+	}
+	for _, a := range prop.Answers {
+		if a.Status != "ok" {
+			t.Fatalf("%+v", a)
+		}
+	}
+	rep := &CrossrefReport{}
+	if _, err := xAccept(t, repo, spec, &CrossrefOptions{Proposal: &prop, Report: rep}); err != nil {
+		t.Fatal(err)
+	}
+	_, e := xRecord(t, repo, "Gamma")
+	if len(e.Imports) != 2 || e.Imports[0].FromRecord == e.Imports[1].FromRecord {
+		t.Fatalf("one import per source section, not doubled: %+v", e.Imports)
+	}
+}
+
+// Renaming the source section keeps its imports: the source is a record id.
+func TestCrossrefImportSurvivesRenamingItsSourceSection(t *testing.T) {
+	repo := t.TempDir()
+	xAccept(t, repo, xSpec1, nil)
+	prop := xProposal(t, repo, xSpec2, &fakeXref{rule: xRule, target: "Beta", byID: true})
+	if _, err := xAccept(t, repo, xSpec2, &CrossrefOptions{Proposal: &prop}); err != nil {
+		t.Fatal(err)
+	}
+	betaID, _ := xRecord(t, repo, "Beta")
+	v := xVersion(t, repo, betaID)
+	renamed := strings.Replace(xSpec2, "## Alpha", "## Alpha events", 1)
+	rep := &CrossrefReport{}
+	if _, err := xAccept(t, repo, renamed, &CrossrefOptions{Report: rep}); err != nil {
+		t.Fatalf("a rename is not a change that needs answers: %v", err)
+	}
+	_, e := xRecord(t, repo, "Beta")
+	if len(e.Imports) != 1 || len(rep.Dropped) != 0 || rep.Changed != 0 {
+		t.Fatalf("%+v %+v", e.Imports, rep)
+	}
+	if e.Imports[0].FromSection != "T › Alpha events" {
+		t.Fatalf("the display heading follows the rename: %q", e.Imports[0].FromSection)
+	}
+	if !strings.Contains(xIntent(t, repo, "Beta"), xRule) {
+		t.Fatal("the rule left Beta's record")
+	}
+	_ = v
+}
+
+// An import dropped for any reason other than its source going is re-asked:
+// here the index's source record is corrupted, so the rule would silently leave
+// Beta; instead the statement counts as changed and accept refuses until answered.
+func TestCrossrefForcedDropIsReAskedNeverSilent(t *testing.T) {
+	repo := t.TempDir()
+	xAccept(t, repo, xSpec1, nil)
+	prop := xProposal(t, repo, xSpec2, &fakeXref{rule: xRule, target: "Beta", byID: true})
+	if _, err := xAccept(t, repo, xSpec2, &CrossrefOptions{Proposal: &prop}); err != nil {
+		t.Fatal(err)
+	}
+	betaID, _ := xRecord(t, repo, "Beta")
+	idx, _ := LoadIndex(repo)
+	e := idx.Records[betaID]
+	e.Imports[0].FromRecord = "prov-0000-gone"
+	idx.Records[betaID] = e
+	if err := idx.save(repo); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := xAccept(t, repo, xSpec2, &CrossrefOptions{}); !errors.Is(err, ErrCrossref) || !strings.Contains(err.Error(), xRule) {
+		t.Fatalf("the orphaned import's statement must be re-asked: %v", err)
+	}
+	prop2 := xProposal(t, repo, xSpec2, &fakeXref{rule: xRule, target: "Beta", byID: true})
+	rep := &CrossrefReport{}
+	if _, err := xAccept(t, repo, xSpec2, &CrossrefOptions{Proposal: &prop2, Report: rep}); err != nil {
+		t.Fatal(err)
+	}
+	_, e = xRecord(t, repo, "Beta")
+	alphaID, _ := xRecord(t, repo, "Alpha")
+	if len(e.Imports) != 1 || e.Imports[0].FromRecord != alphaID || len(rep.Dropped) != 1 {
+		t.Fatalf("%+v %+v", e.Imports, rep)
+	}
+}
+
+// A New target's location is checked against the file accept will place,
+// including when a "files" config moves it.
+func TestCrossrefNewSectionLocationFollowsTheFilesConfig(t *testing.T) {
+	repo := t.TempDir()
+	xAccept(t, repo, xSpec1, nil)
+	spec := xSpec1 + "\n## Gamma\n\n- Gamma must keep its own tally of events\n"
+	spec = strings.Replace(spec, "- Alpha must record every event it sees", "- Alpha must record every event it sees\n- "+xRule, 1)
+	opts := AcceptOptions{Ext: ".go", Files: map[string]string{"Gamma": "tally/tally.go"}}
+	_, recs, err := CrossrefState(repo, drafter.Drafts(spec), nil, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var g *struct{ File string }
+	for _, r := range recs {
+		if strings.HasSuffix(r.Section, "Gamma") {
+			g = &struct{ File string }{r.File}
+		}
+	}
+	if g == nil || g.File != "tally/tally.go" {
+		t.Fatalf("a New target's file is the placed one: %+v", g)
+	}
+	m := &fakeXref{rule: xRule, target: "Gamma"}
+	p, _, _, _, err := Crossref(context.Background(), CrossrefInput{Repo: repo, Drafts: drafter.Drafts(spec), Model: m, Accept: opts})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// fakeXref's location for a New target is "gamma.go: Count": not the placed file
+	bad := false
+	for _, a := range p.Answers {
+		bad = bad || (a.Status == "DANGLING" && strings.Contains(a.Detail, "tally/tally.go"))
+	}
+	if !bad {
+		t.Fatalf("x.go is not Gamma's placed file: %+v", p.Answers)
+	}
+	for i := range p.Answers {
+		for j := range p.Answers[i].Targets {
+			p.Answers[i].Targets[j].Location = "tally/tally.go: Count"
+		}
+	}
+	// accept re-validates against the same placement: refused without the config, accepted with it
+	if _, err := xAccept(t, repo, spec, &CrossrefOptions{Proposal: &p}); !errors.Is(err, ErrCrossref) {
+		t.Fatalf("without the files config the location is not Gamma's file: %v", err)
+	}
+	opts.Crossref = &CrossrefOptions{Proposal: &p}
+	if _, err := AcceptWith(repo, drafter.Drafts(spec), "test", time.Now(), opts); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// At accept the identifier is re-checked when the tree is available.
+func TestCrossrefAcceptRechecksTheIdentifierAgainstTheTree(t *testing.T) {
+	repo, root := t.TempDir(), t.TempDir()
+	xAccept(t, repo, xSpec1, nil)
+	prop := xProposal(t, repo, xSpec2, &fakeXref{rule: xRule, target: "Beta", byID: true}) // location "beta.go: Count", no root at proposal time
+	_, e := xRecord(t, repo, "Beta")
+	os.WriteFile(filepath.Join(root, e.File), []byte("package main\nfunc Other() {}\n"), 0o644)
+	if _, err := xAccept(t, repo, xSpec2, &CrossrefOptions{Proposal: &prop, Root: root}); !errors.Is(err, ErrCrossref) || !strings.Contains(err.Error(), "does not occur") {
+		t.Fatalf("%v", err)
+	}
+	os.WriteFile(filepath.Join(root, e.File), []byte("package main\nfunc Count() {}\n"), 0o644)
+	if _, err := xAccept(t, repo, xSpec2, &CrossrefOptions{Proposal: &prop, Root: root}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A quote must cite the target's OWN statements, never text imported into it.
+func TestCrossrefQuoteMustBeTheTargetsOwnText(t *testing.T) {
+	repo := t.TempDir()
+	xAccept(t, repo, xSpec1, nil)
+	prop := xProposal(t, repo, xSpec2, &fakeXref{rule: xRule, target: "Beta", byID: true})
+	if _, err := xAccept(t, repo, xSpec2, &CrossrefOptions{Proposal: &prop}); err != nil {
+		t.Fatal(err)
+	}
+	const rule2 = "Every event must also be timestamped"
+	spec3 := strings.Replace(xSpec2, "- "+xRule, "- "+xRule+"\n- "+rule2, 1)
+	p3 := xProposal(t, repo, spec3, &fakeXref{rule: rule2, target: "Beta", byID: true})
+	for _, a := range p3.Answers {
+		if a.Status != "ok" {
+			t.Fatalf("a quote of Beta's own statement passes: %+v", a)
+		}
+	}
+	for i := range p3.Answers {
+		for j := range p3.Answers[i].Targets {
+			p3.Answers[i].Targets[j].Quote = xRule // the text Beta imported from Alpha
+		}
+	}
+	if _, err := xAccept(t, repo, spec3, &CrossrefOptions{Proposal: &p3}); !errors.Is(err, ErrCrossref) || !strings.Contains(err.Error(), "quote") {
+		t.Fatalf("%v", err)
+	}
 }

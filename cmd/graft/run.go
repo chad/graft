@@ -127,7 +127,7 @@ func runCmd(args []string, stdout, stderr io.Writer) int {
 	}
 	xrep := &pipeline.CrossrefReport{}
 	opts := pipeline.AcceptOptions{Ext: profile.Ext, Files: cfg.Files,
-		Crossref: &pipeline.CrossrefOptions{Proposal: xprop, Waive: *noCrossref, Report: xrep}}
+		Crossref: &pipeline.CrossrefOptions{Proposal: xprop, Waive: *noCrossref, Report: xrep, Root: *root}}
 	// Bad keys and paths show on a dry run too, not only with --accept.
 	if err := opts.CheckConfigured(drafts); err != nil {
 		fmt.Fprintf(stderr, "graft: %v\n", err)
@@ -137,7 +137,7 @@ func runCmd(args []string, stdout, stderr io.Writer) int {
 		for _, p := range drafter.Map(drafts, nil) {
 			fmt.Fprintf(stdout, "%s — %s\n", p.Draft.Section, p.Kind)
 		}
-		if stmts, _, err := pipeline.CrossrefState(*repo, drafts, nil); err == nil && len(stmts) > 0 {
+		if stmts, _, err := pipeline.CrossrefState(*repo, drafts, nil, opts); err == nil && len(stmts) > 0 {
 			fmt.Fprintf(stdout, "%d statement(s) are new or changed since the last accept: run graft crossref before --accept (or pass --no-crossref)\n", len(stmts))
 		}
 		fmt.Fprintln(stderr, "graft: nothing written; review the drafts above and re-run with --accept")

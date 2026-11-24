@@ -394,3 +394,32 @@ func TestEvolveSampleStepOneScoreIsTakenBeforeTheChange(t *testing.T) {
 		t.Fatal("a scored step 1 is not unscored")
 	}
 }
+
+// retryModel answers the first cross-reference call with nonsense, then like answer.
+type retryModel struct {
+	answer
+	n *int
+}
+
+func (m retryModel) Complete(ctx context.Context, p string) (string, error) {
+	if strings.Contains(p, crossref.Marker) {
+		*m.n++
+		if *m.n == 1 {
+			return "I think these are all local", nil
+		}
+	}
+	return m.answer.Complete(ctx, p)
+}
+
+// The bench's cross-reference call retries an unparseable answer like the CLI
+// does (default 2), so one bad reply is not a Broke sample.
+func TestEvolveCrossrefRetriesLikeTheCLI(t *testing.T) {
+	c := cfg(t, answer{map[string]string{"core.go": good, "extra.go": "package main\n\nfunc Twice(x int) int { return 2 * x }\n"}}, fakeOracle)
+	c.Case.SpecV2 = c.Case.Spec + "\n## Extra\n\n- The program must define a function Twice that returns twice its argument\n"
+	n := 0
+	c.Model = retryModel{c.Model.(answer), &n}
+	s := EvolveSample(context.Background(), c, bench.ArmGraft)
+	if s.Outcome != bench.Works || s.CrossrefCalls == nil || *s.CrossrefCalls != 2 {
+		t.Fatalf("%+v xcalls=%v", s, deref(s.CrossrefCalls))
+	}
+}
