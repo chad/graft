@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"errors"
+	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -30,10 +31,10 @@ type fakeXref struct {
 
 func (f *fakeXref) Complete(_ context.Context, prompt string) (string, error) {
 	f.calls++
-	recs := map[string][2]string{} // last part of section -> id, first intent phrase
-	for _, m := range regexp.MustCompile(`(?s)### record (\S+) — ([^\n]+)\n(?:file: [^\n]+\n)?intent:\n[^\n]*\n- \[\w+\] ([^\n]+)`).FindAllStringSubmatch(prompt, -1) {
+	recs := map[string][3]string{} // last part of section -> id, first intent phrase, file
+	for _, m := range regexp.MustCompile(`(?s)### record (\S+) — ([^\n]+)\n(?:file: ([^\n]+)\n)?intent:\n[^\n]*\n- \[\w+\] ([^\n]+)`).FindAllStringSubmatch(prompt, -1) {
 		sec := m[2][strings.LastIndex(m[2], " › ")+1:]
-		recs[strings.TrimSpace(strings.TrimPrefix(sec, "›"))] = [2]string{m[1], m[3]}
+		recs[strings.TrimSpace(strings.TrimPrefix(sec, "›"))] = [3]string{m[1], m[4], m[3]}
 	}
 	var ents []string
 	for _, m := range regexp.MustCompile(`- id (s\d+), section "[^"]+", \[\w+\]: ([^\n]+)`).FindAllStringSubmatch(prompt, -1) {
@@ -41,15 +42,15 @@ func (f *fakeXref) Complete(_ context.Context, prompt string) (string, error) {
 			ents = append(ents, `{"id":"`+m[1]+`","verdict":"local"}`)
 			continue
 		}
-		name, quote := f.target, ""
+		name, quote, file := f.target, "", "x.go"
 		if r, ok := recs[f.target]; ok {
-			quote = r[1]
+			quote, file = r[1], r[2]
 			if f.byID {
 				name = r[0]
 			}
 		}
 		q := strings.ReplaceAll(quote, `"`, `\"`)
-		ents = append(ents, `{"id":"`+m[1]+`","verdict":"constrains","targets":[{"record":"`+name+`","reason":"the rule binds its code","location":"beta.go: Count","quote":"`+q+`"}]}`)
+		ents = append(ents, `{"id":"`+m[1]+`","verdict":"constrains","targets":[{"record":"`+name+`","reason":"the rule binds its code","location":"`+file+`: Count","quote":"`+q+`"}]}`)
 	}
 	return "```json\n{\"statements\":[" + strings.Join(ents, ",") + "]}\n```\n", nil
 }
@@ -321,4 +322,65 @@ func TestCrossrefMakesNoModelCallWhenNothingChanged(t *testing.T) {
 	if err != nil || calls != 0 || m.calls != 0 || len(stmts) != 0 || len(p.Answers) != 0 {
 		t.Fatalf("%v %d %v", err, calls, stmts)
 	}
+}
+
+// The freeq-lite #14 probe as a second case: a Topics statement about what a
+// joiner receives never names JOIN, which Channels owns.
+func TestCrossrefFreeqLiteJoinProbeReachesChannels(t *testing.T) {
+	v1 := readExample(t, "freeq-lite/spec/freeq-lite.md")
+	const probe = "A joiner of a channel that has a topic receives `:freeq-lite 332 <nick> <channel> :<topic>` before the 353 line"
+	v2 := v1 + "\n## Topics\n\n- `TOPIC <channel> :<text>` must set the channel's topic\n- " + probe + "\n"
+	repo := t.TempDir()
+	if _, err := xAccept(t, repo, v1, nil); err != nil {
+		t.Fatal(err)
+	}
+	chID, _ := xRecord(t, repo, "Channels")
+	v := xVersion(t, repo, chID)
+
+	// nothing answered: the change is refused, the dropped rule can no longer report success
+	if _, err := xAccept(t, repo, v2, &CrossrefOptions{}); !errors.Is(err, ErrCrossref) || !strings.Contains(err.Error(), "332") {
+		t.Fatalf("%v", err)
+	}
+
+	// a model that says "local" is accepted, printed, and warned about without a model
+	local := &fakeXref{rule: "no such statement"}
+	pl, stmts, recs, _, err := Crossref(context.Background(), CrossrefInput{Repo: repo, Drafts: drafter.Drafts(v2), Model: local})
+	if err != nil {
+		t.Fatal(err)
+	}
+	warns := crossref.Warn(stmts, pl.Answers, recs)
+	if !strings.Contains(strings.Join(warns, "\n"), "Channels") {
+		t.Fatalf("the model-free warning should point the human at Channels: %v", warns)
+	}
+
+	// a model that understood: constrains Channels
+	prop := xProposal(t, repo, v2, &fakeXref{rule: probe, target: "Channels", byID: true})
+	rep := &CrossrefReport{}
+	acc, err := xAccept(t, repo, v2, &CrossrefOptions{Proposal: &prop, Report: rep})
+	if err != nil {
+		t.Fatalf("%v\n%+v", err, prop.Answers)
+	}
+	if xVersion(t, repo, chID) != v+1 || !strings.Contains(xIntent(t, repo, "Channels"), "332") {
+		t.Fatal("Channels must be revised with the probe statement")
+	}
+	for _, a := range acc {
+		if a.ID == chID {
+			ok := false
+			for _, s := range a.Draft.Statements {
+				ok = ok || strings.Contains(s.Text, "332")
+			}
+			if !ok {
+				t.Fatal("Channels' region would be regenerated without the statement")
+			}
+		}
+	}
+}
+
+func readExample(t *testing.T, rel string) string {
+	t.Helper()
+	b, err := os.ReadFile("../../examples/" + rel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
 }
