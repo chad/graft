@@ -121,6 +121,8 @@ func changeCosts(recs []Record, excluded map[int]string) []string {
 					p += " (" + s.PreReason + ")"
 				}
 				pre = append(pre, p)
+			} else if s.PreUnscored {
+				pre = append(pre, "unscored") // step 1 could not be built or scored; not an old record
 			}
 			if s.SynthDiffLines != nil {
 				synth = append(synth, fmt.Sprint(*s.SynthDiffLines))

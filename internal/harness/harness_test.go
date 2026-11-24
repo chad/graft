@@ -356,3 +356,24 @@ func TestEvolveSampleRecordsStepOneScore(t *testing.T) {
 		}
 	}
 }
+
+// treeOracle scores 2/2 unless the built tree holds extra.go (written by the
+// change step), then 1/2: its answer depends on WHEN the tree is scored.
+const treeOracle = `for a in "$@"; do bin="$a"; done; "$bin" >/dev/null; if [ -f "$(dirname "$bin")/app/extra.go" ]; then echo '{"checks":2,"passed":1,"failed":["x"]}'; exit 1; fi; echo '{"checks":2,"passed":2,"failed":[]}'`
+
+// The step-1 score is taken BEFORE the change: scoring after step 2 would see
+// extra.go and read 1/2. Pins the timing for the graft arm.
+func TestEvolveSampleStepOneScoreIsTakenBeforeTheChange(t *testing.T) {
+	c := cfg(t, answer{map[string]string{"main.go": good, "core.go": good, "extra.go": "package main\n\nfunc Twice(x int) int { return 2 * x }\n"}}, treeOracle)
+	c.Case.SpecV2 = c.Case.Spec + "\n## Extra\n\n- The program must define a function Twice that returns twice its argument\n"
+	s := EvolveSample(context.Background(), c, bench.ArmGraft)
+	if s.Passed != 1 || s.Checks != 2 {
+		t.Fatalf("the final tree holds extra.go and must score 1/2: %+v", s)
+	}
+	if s.PreChecks == nil || *s.PreChecks != 2 || s.PrePassed == nil || *s.PrePassed != 2 {
+		t.Fatalf("step-1 tree scored %v/%v, want 2/2 (taken before the change)", deref(s.PrePassed), deref(s.PreChecks))
+	}
+	if s.PreUnscored {
+		t.Fatal("a scored step 1 is not unscored")
+	}
+}

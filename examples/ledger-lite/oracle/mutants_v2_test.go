@@ -23,6 +23,7 @@ var v2Mutants = []mutant{
 	{"balance_is_available", "Delta: delta, Balance: a.Balance, Kind: kind})", "Delta: delta, Balance: a.Balance - a.Held, Kind: kind})", "journal_balance_is_balance_not_available"},
 	{"balance_before_change", "\ta.Balance += delta\n\tl.journal = append(l.journal, entry{Seq: len(l.journal) + 1, Account: a.ID, Delta: delta, Balance: a.Balance, Kind: kind})", "\tl.journal = append(l.journal, entry{Seq: len(l.journal) + 1, Account: a.ID, Delta: delta, Balance: a.Balance, Kind: kind})\n\ta.Balance += delta", "journal_balance_chain"},
 	{"receiver_entry_has_sender_balance", "\tl.post(b, n, \"transfer\")", "\tl.post(b, n, \"transfer\")\n\tl.journal[len(l.journal)-1].Balance = a.Balance", "journal_balance_chain"},
+	{"balance_omitted_when_zero", "\tBalance int64  `json:\"balance\"`\n\tKind", "\tBalance int64  `json:\"balance,omitempty\"`\n\tKind", "journal_balance_zero"},
 	{"account_journal_drops_balance", "\t\t\tout = map[string]any{\"entries\": nonNil(es)}", "\t\t\tslim := []map[string]any{}\n\t\t\tfor _, e := range es {\n\t\t\t\tslim = append(slim, map[string]any{\"seq\": e.Seq, \"account\": e.Account, \"delta\": e.Delta, \"kind\": e.Kind})\n\t\t\t}\n\t\t\tout = map[string]any{\"entries\": slim}", "account_journal_carries_balance"},
 }
 

@@ -498,6 +498,7 @@ func (cfg Config) preScore(ctx context.Context, root, dir string) bench.Sample {
 // withPre records a step-1 score on an evolve sample.
 func withPre(s, pre bench.Sample) bench.Sample {
 	if pre.Checks == 0 {
+		s.PreUnscored = true
 		return s
 	}
 	c, p := pre.Checks, pre.Passed

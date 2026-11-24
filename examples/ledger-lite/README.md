@@ -77,9 +77,9 @@ So with graft, neither the core (where `Balance` goes in `Post`) nor the deposit
 | file | what |
 |---|---|
 | `spec-v2/ledger-lite.md` | the changed spec (two bullets differ) |
-| `oracle -v2` (`oracle/v2.go`) | 50 checks: the 41 v1 checks that still hold, `frozen_refuses_incoming` (replaces `frozen_still_receives`), and 8 new ones. All 9 are held out: the smoke suite reads an entry's account, delta and kind only, and never sends money to a frozen account, so none of them is tagged `visible`. Without `-v2` the oracle is the 42-check v1 suite, unchanged |
+| `oracle -v2` (`oracle/v2.go`) | 51 checks: the 41 v1 checks that still hold, `frozen_refuses_incoming` (replaces `frozen_still_receives`), and 9 new ones. All 10 are held out: the smoke suite reads an entry's account, delta and kind only, and never sends money to a frozen account, so none of them is tagged `visible`. Without `-v2` the oracle is the 42-check v1 suite, unchanged |
 | `reference-v2/` | a hand-written v2 server that `-v2` scores 100%; `reference/` stays v1 (42/42 without `-v2`). The diff between them (about 12 lines) is the change |
-| `oracle/mutants_v2_test.go` | 14 v2 mutants, each failing a named `-v2` check, and the v1 mutants rerun on `reference-v2` under `-v2` |
+| `oracle/mutants_v2_test.go` | 15 v2 mutants, each failing a named `-v2` check, and the v1 mutants rerun on `reference-v2` under `-v2` |
 | `skeleton-v2.json` | the render arm's skeleton for the change: `Entry.Balance`, `Post`'s contract updated, and a new `Creditable` stub (credits are gated the way `Debitable` gates debits) |
 | `case.json` | the default case (`evolve` points at `spec-v2`, `-v2`, `skeleton-v2.json`) |
 | `case-nocredit.json`, `skeleton-v2-nocredit.json` | the control, recorded as `ledger-lite-nocredit-evolve`: the same change, but the skeleton gets only `Entry.Balance` and `Post`'s contract, not `Creditable`, so the render arm is not told where the credit gate lives |

@@ -164,6 +164,19 @@ var v2Checks = []check{
 			failf("account journal %+v, want %+v", got, want)
 		}
 	}},
+	{"journal_balance_zero", false, func(s *srv) {
+		s.open("a")
+		s.open("b")
+		s.deposit("a", 50)
+		s.want(200, "POST", "/accounts/a/withdraw", amt(20))
+		s.want(201, "POST", "/transfers", `{"from":"a","to":"b","amount":30}`)
+		// every entry must carry "balance", including 0: an entry that leaves the
+		// field out when the balance is zero (omitempty) is missing a value.
+		got := s.journalBal("/journal")
+		if len(got) != 4 || got[3].Account != "b" || got[2].Account != "a" || got[2].Balance != 0 {
+			failf("after draining a to exactly 0 the transfer's entry for a must carry balance 0: %+v", got)
+		}
+	}},
 	{"journal_balance_chain", false, func(s *srv) {
 		for _, id := range []string{"a", "b"} {
 			s.open(id)

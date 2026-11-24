@@ -125,6 +125,10 @@ type Sample struct {
 	PreChecks *int   `json:"pre_checks,omitempty"`
 	PrePassed *int   `json:"pre_passed,omitempty"`
 	PreReason string `json:"pre_reason,omitempty"`
+	// PreUnscored: the step-1 tree could not be built or scored, so there is
+	// no pre-score. It distinguishes that from a record written before
+	// pre-scores existed (neither field set).
+	PreUnscored bool `json:"pre_unscored,omitempty"`
 }
 
 // Attribution says which layer(s) one failed sample's failure came from.

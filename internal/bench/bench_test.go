@@ -468,3 +468,21 @@ func TestReportShowsStepOneScore(t *testing.T) {
 		t.Fatal(b.String())
 	}
 }
+
+func TestReportKeepsUnscoredStepOneAligned(t *testing.T) {
+	r := rec(ArmGraft, "c1", Coarse, five(Works)...)
+	one, k, n := 1, 38, 38
+	for i := 0; i < 3; i++ {
+		r.Samples[i].ChangeCalls = &one
+	}
+	r.Samples[0].PreChecks, r.Samples[0].PrePassed = &n, &k
+	r.Samples[1].PreUnscored = true // step 1 did not build
+	r.Samples[2].PreChecks, r.Samples[2].PrePassed = &n, &k
+	var b bytes.Buffer
+	if err := Report(&b, "todo", []Record{r}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(b.String(), "before the change [38/38 unscored 38/38]") {
+		t.Fatal(b.String())
+	}
+}
