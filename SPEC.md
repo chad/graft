@@ -266,6 +266,12 @@ silently drop it, so the step below sits between the drafter diff and accept.
   source section's heading keeps its imports (the link is the record id). An
   import dropped for any reason but its source going makes the sentence a
   changed statement again: it is asked, never lost.
+- **Order in render mode.** One change step runs: the cross-reference call, then
+  accept (which writes the imports into the records), then the skeleton import
+  and render, then the regions. The cross-reference is therefore BEFORE the
+  skeleton import; the reverse is equivalent, since no region is generated
+  between the two record writes, so the order is not observable in the output.
+  No region is ever generated from a stale record.
 - **No silent success.** `graft run --accept` refuses (exit 2, before any record
   is written) while a new or changed statement has no valid answer, unless
   `--no-crossref` is given, which prints how many statements were accepted
