@@ -6,5 +6,12 @@
   "conventions": "conventions.md",
   "config": "graft.json",
   "oracle": "oracle",
-  "skeleton": "skeleton.json"
+  "skeleton": "skeleton.json",
+  "evolve": {
+    "spec": "spec-v2/ledger-lite.md",
+    "oracle_args": [
+      "-v2"
+    ],
+    "skeleton": "skeleton-v2.json"
+  }
 }

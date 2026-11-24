@@ -1,0 +1,17 @@
+{
+  "name": "ledger-lite-nocredit",
+  "spec": "spec/ledger-lite.md",
+  "intent": "Write a small in-memory ledger HTTP service in Go: accounts, deposits and withdrawals, transfers with idempotency keys, holds that can be captured or released, a journal of every balance change, and frozen accounts.",
+  "contract": "It is a single Go program, standard library only. It is started as `<binary> -addr <host:port>` and must serve HTTP on that address. Bodies are JSON; amounts are integer cents.",
+  "conventions": "conventions.md",
+  "config": "graft.json",
+  "oracle": "oracle",
+  "skeleton": "skeleton.json",
+  "evolve": {
+    "spec": "spec-v2/ledger-lite.md",
+    "oracle_args": [
+      "-v2"
+    ],
+    "skeleton": "skeleton-v2-nocredit.json"
+  }
+}

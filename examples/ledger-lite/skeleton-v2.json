@@ -1,0 +1,291 @@
+{
+ "files": [
+  {
+   "path": "running.go",
+   "section": "ledger-lite › Running",
+   "imports": [
+    "flag",
+    "log",
+    "net/http",
+    "sync"
+   ],
+   "decls": [
+    {
+     "kind": "type",
+     "name": "Account",
+     "code": "type Account struct {\n\tID      string\n\tBalance int64\n\tHeld    int64\n\tFrozen  bool\n}"
+    },
+    {
+     "kind": "type",
+     "name": "Transfer",
+     "code": "type Transfer struct {\n\tID     string `json:\"id\"`\n\tFrom   string `json:\"from\"`\n\tTo     string `json:\"to\"`\n\tAmount int64  `json:\"amount\"`\n\tKey    string `json:\"-\"`\n}"
+    },
+    {
+     "kind": "type",
+     "name": "Hold",
+     "code": "type Hold struct {\n\tID      string `json:\"id\"`\n\tAccount string `json:\"account\"`\n\tAmount  int64  `json:\"amount\"`\n}"
+    },
+    {
+     "kind": "type",
+     "name": "Entry",
+     "code": "type Entry struct {\n\tSeq     int    `json:\"seq\"`\n\tAccount string `json:\"account\"`\n\tDelta   int64  `json:\"delta\"`\n\tBalance int64  `json:\"balance\"`\n\tKind    string `json:\"kind\"`\n}"
+    },
+    {
+     "kind": "type",
+     "name": "Route",
+     "code": "type Route struct {\n\tMethod  string\n\tPattern string\n\tHandle  func(l *Ledger, w http.ResponseWriter, r *http.Request, params []string)\n}"
+    },
+    {
+     "kind": "type",
+     "name": "Ledger",
+     "code": "type Ledger struct {\n\tmu           sync.Mutex\n\taccounts     map[string]*Account\n\ttransfers    map[string]*Transfer\n\tkeys         map[string]*Transfer\n\tholds        map[string]*Hold\n\tjournal      []Entry\n\tnextTransfer int\n\tnextHold     int\n}"
+    },
+    {
+     "kind": "var",
+     "name": "routes",
+     "code": "var routes []Route"
+    },
+    {
+     "kind": "func",
+     "name": "main",
+     "code": "func main() {\n\taddr := flag.String(\"addr\", \":8080\", \"listen address\")\n\tflag.Parse()\n\tl := &Ledger{\n\t\taccounts:  map[string]*Account{},\n\t\ttransfers: map[string]*Transfer{},\n\t\tkeys:      map[string]*Transfer{},\n\t\tholds:     map[string]*Hold{},\n\t}\n\tlog.Fatal(http.ListenAndServe(*addr, l))\n}"
+    }
+   ],
+   "stubs": [
+    {
+     "name": "ServeHTTP",
+     "receiver_name": "l",
+     "receiver_type": "*Ledger",
+     "params": [
+      {
+       "name": "w",
+       "type": "http.ResponseWriter"
+      },
+      {
+       "name": "r",
+       "type": "*http.Request"
+      }
+     ],
+     "doc": "ServeHTTP routes a request: it finds the Route whose Method equals r.Method and whose Pattern matches the path segment by segment ({} matches one non-empty segment), collects the {} segments as params, and calls Handle with l.mu held for the whole call. Any method or path no Route matches gets 404 \"not found\" (never 405)."
+    },
+    {
+     "name": "WriteJSON",
+     "params": [
+      {
+       "name": "w",
+       "type": "http.ResponseWriter"
+      },
+      {
+       "name": "status",
+       "type": "int"
+      },
+      {
+       "name": "v",
+       "type": "any"
+      }
+     ],
+     "doc": "WriteJSON sets Content-Type: application/json, writes status, and encodes v as JSON.",
+     "receiver_name": "l",
+     "receiver_type": "*Ledger"
+    },
+    {
+     "name": "WriteError",
+     "params": [
+      {
+       "name": "w",
+       "type": "http.ResponseWriter"
+      },
+      {
+       "name": "status",
+       "type": "int"
+      },
+      {
+       "name": "msg",
+       "type": "string"
+      }
+     ],
+     "doc": "WriteError answers status with the body {\"error\": msg}, through WriteJSON.",
+     "receiver_name": "l",
+     "receiver_type": "*Ledger"
+    },
+    {
+     "name": "Decode",
+     "params": [
+      {
+       "name": "w",
+       "type": "http.ResponseWriter"
+      },
+      {
+       "name": "r",
+       "type": "*http.Request"
+      },
+      {
+       "name": "v",
+       "type": "any"
+      }
+     ],
+     "results": [
+      "bool"
+     ],
+     "doc": "Decode reads r's body as JSON into v. On invalid JSON it writes 400 \"invalid json\" and returns false.",
+     "receiver_name": "l",
+     "receiver_type": "*Ledger"
+    },
+    {
+     "name": "Amount",
+     "params": [
+      {
+       "name": "v",
+       "type": "any"
+      }
+     ],
+     "results": [
+      "int64",
+      "bool"
+     ],
+     "doc": "Amount validates a decoded JSON value (from a map[string]any) as an amount: the spec's rule is an integer from 1 to 100000000.",
+     "receiver_name": "l",
+     "receiver_type": "*Ledger"
+    },
+    {
+     "name": "Account",
+     "receiver_name": "l",
+     "receiver_type": "*Ledger",
+     "params": [
+      {
+       "name": "w",
+       "type": "http.ResponseWriter"
+      },
+      {
+       "name": "id",
+       "type": "string"
+      }
+     ],
+     "results": [
+      "*Account"
+     ],
+     "doc": "Account returns the account with this id; if there is none it writes 404 \"no such account\" and returns nil."
+    },
+    {
+     "name": "View",
+     "receiver_name": "a",
+     "receiver_type": "*Account",
+     "results": [
+      "map[string]any"
+     ],
+     "doc": "View is the account view the spec defines: id, balance, held, available (balance - held) and frozen."
+    },
+    {
+     "name": "Post",
+     "receiver_name": "l",
+     "receiver_type": "*Ledger",
+     "params": [
+      {
+       "name": "a",
+       "type": "*Account"
+      },
+      {
+       "name": "delta",
+       "type": "int64"
+      },
+      {
+       "name": "kind",
+       "type": "string"
+      }
+     ],
+     "doc": "Post is the only way any file changes a balance: it adds delta to a.Balance and appends one journal Entry (seq counting from 1 across the server, a.ID, delta, the balance a.Balance has right after the change, kind). kind is deposit, withdraw, transfer or capture."
+    },
+    {
+     "name": "Debitable",
+     "receiver_name": "l",
+     "receiver_type": "*Ledger",
+     "params": [
+      {
+       "name": "a",
+       "type": "*Account"
+      },
+      {
+       "name": "n",
+       "type": "int64"
+      }
+     ],
+     "results": [
+      "int",
+      "string"
+     ],
+     "doc": "Debitable applies every rule for taking or reserving n from a (withdrawals, outgoing transfers, new holds): a frozen account gives 423 \"account frozen\"; n above the available amount (balance - held) gives 409 \"insufficient funds\"; otherwise it returns 0, \"\". It changes nothing."
+    },
+    {
+     "name": "Creditable",
+     "receiver_name": "l",
+     "receiver_type": "*Ledger",
+     "params": [
+      {
+       "name": "a",
+       "type": "*Account"
+      }
+     ],
+     "results": [
+      "int",
+      "string"
+     ],
+     "doc": "Creditable applies every rule for putting money into a (deposits, incoming transfers): a frozen account gives 423 \"account frozen\"; otherwise it returns 0, \"\". It changes nothing."
+    }
+   ]
+  },
+  {
+   "path": "accounts.go",
+   "section": "ledger-lite › Accounts",
+   "stubs": [
+    {
+     "name": "init"
+    }
+   ]
+  },
+  {
+   "path": "deposits_and_withdrawals.go",
+   "section": "ledger-lite › Deposits and withdrawals",
+   "stubs": [
+    {
+     "name": "init"
+    }
+   ]
+  },
+  {
+   "path": "transfers.go",
+   "section": "ledger-lite › Transfers",
+   "stubs": [
+    {
+     "name": "init"
+    }
+   ]
+  },
+  {
+   "path": "holds.go",
+   "section": "ledger-lite › Holds",
+   "stubs": [
+    {
+     "name": "init"
+    }
+   ]
+  },
+  {
+   "path": "journal.go",
+   "section": "ledger-lite › Journal",
+   "stubs": [
+    {
+     "name": "init"
+    }
+   ]
+  },
+  {
+   "path": "freezing.go",
+   "section": "ledger-lite › Freezing",
+   "stubs": [
+    {
+     "name": "init"
+    }
+   ]
+  }
+ ]
+}
