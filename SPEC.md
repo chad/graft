@@ -86,6 +86,20 @@ happens only in a convergence-layer region, owned and marked like any other.**
   fails is regenerated. A region whose own `gen_hash` moved (its owner's shape
   or intent changed) is regenerated as before.
 
+### `graft run` exit codes
+
+| code | meaning |
+|---|---|
+| 0 | every region applied; the summary line says how the changed statements were cross-referenced |
+| 1 | a region did not converge within its attempts (later regions not tried) |
+| 2 | refused before generating and before any record is written: usage, config, drafts needing a human decision, `--accept` not given, **or changed statements with no valid cross-reference answer** (§8) |
+| 3 | failed during generation (model command, gate or I/O error) |
+
+The exit 2 for un-cross-referenced statements is new in M14 (0.2.0): after a spec
+change `graft run --accept` needs `--crossref crossref.json` (from `graft
+crossref`), or `--no-crossref`, which accepts unchecked and says so on stdout.
+The first accept has no other record to constrain and needs neither.
+
 ### `graft converge` exit codes
 
 | code | meaning |
@@ -126,6 +140,19 @@ flagged UNOWNED (`--strict` makes that a retry, dangling claims included). A sec
 | 2 | refused before asking the model (usage, config, profile without `decl_check`, `--out` exists) |
 | 3 | the model command, sedum, I/O or a tool (the decl checker or the build gate could not run) failed; never retried |
 | 4 | proposal written, but some statements are UNOWNED or carry a DANGLING claim (a claim naming a stub or decl not in the proposal) |
+
+### `graft crossref` exit codes
+
+The cross-reference step (§8). It writes only `--out` and touches no record and
+no tree.
+
+| code | meaning |
+|---|---|
+| 0 | proposal written; every changed statement answered and every answer valid (no changed statement: no model call, an empty proposal) |
+| 1 | no parseable proposal within the retries; nothing written |
+| 2 | refused before asking the model (usage, config, drafts needing a human decision, `--out` exists) |
+| 3 | the model command or I/O failed |
+| 4 | proposal written, but some statements are UNANSWERED or carry a DANGLING claim (`--strict` makes that a retry). Advisory warnings never change the code |
 
 ## 7. Evidence
 
@@ -195,6 +222,58 @@ Two directions, one rule:
   key) and emits *revisions*; anything it cannot match confidently becomes a
   "new or split?" question for a human.
 
+### Cross-references (M14)
+
+A statement in one section can bind code another section's record owns without
+naming it (a frozen-account rule stated in Freezing that Deposits and Transfers
+must enforce). Regenerating only the records whose own statements changed would
+silently drop it, so the step below sits between the drafter diff and accept.
+
+- **What is asked.** The statements that are new or changed since the last
+  accept are found without a model (clause hash not in the record's
+  `derived_from`; every statement of a new section). ONE model call per spec
+  change decides, for each, `local` or `constrains` named records. It sees the
+  changed statements, every record's title, intent, constraints, file and
+  imports, and the conventions (`--with-code` adds the candidate files'
+  current source; off by default). With nothing changed it makes no call.
+- **Propose, never apply.** `graft crossref` writes `crossref.json`. Each answer
+  is a receipt: the statement quoted from the spec, the target record (an id,
+  or a section heading for a section that is new in the same change), a reason,
+  the code location (`file: Identifier`) that must change, and a quote from the
+  target's record. Receipts are validated for FORM: the quoted text is
+  re-derived from the spec, the target must exist and not be the statement's own
+  record, the location must be the target's file (with `--root`, the identifier
+  must occur in it), the quote must occur in the target's record. An answer that
+  fails is UNANSWERED or DANGLING and is never accepted.
+- **Accept copies.** `graft run --accept --crossref crossref.json` copies each
+  accepted statement into the target's draft, revising that record (new version,
+  reason "spec revised (cross-reference imports changed)") so its region
+  regenerates. The link to the source (section, clause hash) lives in graft's
+  index (`.graft/accepted.json`, `imports`), never in `derived_from`, so it
+  cannot change how a re-run maps a section onto a record, and provenance needs
+  no change. An import follows its source: while the source clause stands the
+  copy stays with no model call; when the source is edited or removed the copy
+  is dropped, the owner is revised, and an edited statement is a new changed
+  statement that is asked about again. One live copy, never two.
+- **No silent success.** `graft run --accept` refuses (exit 2, before any record
+  is written) while a new or changed statement has no valid answer, unless
+  `--no-crossref` is given, which prints how many statements were accepted
+  unchecked. Every run prints each import, each `local` verdict, each dropped
+  import and a summary line (`cross-references: M accepted into K record(s), J
+  judged local, U unchecked, D dropped`).
+- **A model-free advisory.** `graft crossref` also prints, for a `local` verdict
+  whose statement names a command, status code or identifier another record's
+  text uses, a warning naming that record. It never changes an answer or an exit
+  code, and token matching alone is not enough (the #14 probe never names
+  `JOIN`).
+- **Known limits.** (1) A well-formed but WRONG `local` verdict is accepted and
+  the rule is dropped silently: validation checks form, not truth. Every `local`
+  verdict is printed so a human can check it; behavioural evals (§6) are what
+  catch it otherwise. (2) A statement that contradicts the target's own
+  statements is not detected: both stay in the record. (3) A shape the new rule
+  needs (a new field, a new stub) is a skeleton change, proposed separately by
+  `graft draft --skeleton`.
+
 ## 9. Catalog-gap loop
 
 - The literal fraction per generator package is a first-class metric.
@@ -223,6 +302,7 @@ Two directions, one rule:
 | M11a | The skeleton as record content: shape in the owning imprint (provenance `gen_hash`), skeleton hash in evidence, re-verify on `skeleton_hash` | livecodelife's agent |
 | M11b | `graft draft --skeleton`: a model proposes a shape, validated (logic-free decls, render, build) with a coverage report; a human accepts through the import | livecodelife's agent |
 | M12 | `graft signoff`: a human sign-off as evidence, pinned to gen_hash, body, spec and skeleton hash | livecodelife's agent |
+| M14 | `graft crossref`: a propose-never-apply cross-reference step; `graft run --accept` refuses a spec change whose changed statements were not cross-referenced | livecodelife's agent |
 
 ## 12. Open questions
 
@@ -234,20 +314,14 @@ Two directions, one rule:
 - One log or two: a journal of operations over provenance's content snapshots?
 - Where a record's risk tier lives: provenance records have none, so
   `graft converge --tier` is caller-supplied today.
-- Cross-region requirements: a new statement in one section can concern a
-  command another section owns. The drafter should flag it so the owning
-  record is revised, rather than letting the change be dropped or absorbed
-  into the new region (freeq-lite probe, #14). Token matching is not enough:
-  the probe statement ("when a user joins…") never names `JOIN`, while
-  Registration's 451 rule names four commands it rightly constrains. Candidate
-  design: a propose-never-apply cross-reference step that asks, per new or
-  revised statement, which existing record's behaviour it constrains; it
-  returns an answer with a receipt, and accepting it copies the statement into
-  the owner's draft, which revises that record and regenerates its region.
-  **Today a dropped rule still reports success** ("8/8 applied", exit 0).
-  freeq-lite's dead-function gate catches the form seen in the probe (a helper
-  written for another file to call, never called), but a rule dropped with no
-  code at all still passes every gate.
+- Cross-region requirements: built in M14 (§8, "Cross-references"). Still open:
+  a wrong `local` verdict is a silent drop, which only per-record behavioural
+  evals (§6) catch; a statement that contradicts its target's own statements is
+  not detected; and whether a drafter could take over the question (the
+  step asks a model per spec change) is untried. The freeq-lite probe (#14) is a
+  test with a scripted model, not a measurement: how often a real model answers
+  it correctly is unmeasured (the bench harness's graft arms run the step in
+  evolve cases so a real run can measure it).
 - Authenticating `graft signoff --by` (a signature over the entry, for example
   by a freeq DID key, as an optional field that leaves the pin unchanged).
 - Anchoring the evidence head outside the log (signed by the owner's DID, or

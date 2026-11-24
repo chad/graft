@@ -33,6 +33,17 @@ passes it. A shape (skeleton) edit re-verifies every region with no model call,
 and only the regions that fail (a region whose own shape moved, or whose body no
 longer passes the gates) regenerate.
 
+**Changing a spec: cross-references.** A statement in one section can bind code
+another section owns without naming it. After the first accept, `graft run
+--accept` therefore refuses (exit 2, nothing written) while a new or changed
+statement has not been cross-referenced. `graft crossref --config graft.json
+--spec SPEC.md --repo records --out crossref.json` asks a model once which
+other records each changed statement constrains, validates the answers, and
+proposes without applying; review it, then `graft run --accept --crossref
+crossref.json ...` copies the accepted statements into the owning records so
+their regions regenerate. `--no-crossref` accepts unchecked and says so. Every
+`local` verdict is printed: a wrong one still drops the rule silently (SPEC §8).
+
 `graft draft --skeleton --config graft.json --spec SPEC.md --out proposal.json`
 asks a model (`skeleton_model` in the config, default opus) to propose the
 skeleton. It never applies it: it validates the proposal (drafted decls are

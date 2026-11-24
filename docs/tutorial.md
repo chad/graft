@@ -240,6 +240,8 @@ linkshort › Stats (stats.go): up to date, re-verified under the current gates
 
 There were **zero model calls**. Every region is current for its record, so graft just re-runs your gates against it. If you had tightened `check.sh`, a region that no longer passed would be regenerated.
 
+> **Since graft 0.2.0, changing the spec has one more step.** After the first run, `graft run --accept` refuses (exit 2, nothing written) when a statement is new or edited and nobody has cross-referenced it: a rule written in one section may have to be enforced by another section's code, and graft will not guess silently. Section 9b shows the step. For the edits in sections 8 and 9 you can also pass `--no-crossref` to `graft run`, which accepts the changed statements unchecked and prints that it did. The runs below were made before this step existed.
+
 ## 8. Evolve the spec: add a feature
 
 Append a section to `spec.md`:
@@ -304,6 +306,22 @@ linkshort › Deleting links (deleting_links.go): up to date, re-verified under 
 ```
 
 The **Creating links** record went to version 2, with the reason "spec revised", and only `creating_links.go` changed. Both versions of the record are kept under `records/provenance/.versions/`.
+
+## 9b. A rule that lands in another section
+
+Suppose you add to **Stats** the line "Every redirect must be counted before the response is sent". The code for that lives in **Redirecting**, and the sentence never names it. If graft regenerated only Stats, the rule would be dropped and graft would still report success. So it asks first:
+
+```
+graft crossref --config graft.json --spec spec.md --repo records --root app --out crossref.json
+```
+
+One model call decides, for each new or changed statement, whether it is `local` to its section or `constrains` other records, and writes `crossref.json` without touching a record or the tree. Each answer names the target record, the reason, the file and function that must change and a quote from the target. Read it, delete or fix entries you disagree with, then accept it:
+
+```
+graft run --config graft.json --spec spec.md --repo records --root app --accept --crossref crossref.json
+```
+
+The statement is copied into the target's record (a new version), that record's region regenerates, and the run prints each cross-reference it accepted, every statement judged `local` (check these: a wrong `local` is the one thing validation cannot see) and a summary line. If you later edit or delete the source sentence, the copy goes with it.
 
 ## 10. Hand edits are protected
 
